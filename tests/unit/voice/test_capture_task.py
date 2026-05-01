@@ -2158,6 +2158,153 @@ class TestUnderrunStormT629:
         assert task._stream_callback_frames == 10_000  # noqa: SLF001
 
 
+class TestRingFrameLoadStormT627:
+    """T6.27 — 10K+ frame load through the capture ring buffer.
+
+    Phase 6 / T6.27 stresses the bounded ring buffer under sustained
+    frame load. Production scenario: a long-lived voice session
+    (hours of always-listening) accumulates millions of frames
+    through the ring at 16 kHz × 16 ms blocks (~62 frames/sec). The
+    storm test compresses that load: 10 000 frames written
+    sequentially, each at the typical 512-sample window the
+    pipeline normalizes to.
+
+    Pinned invariants:
+      (a) :attr:`_ring_buffer.nbytes` is bounded by the allocated
+          capacity — no growth proportional to frames written;
+      (b) :attr:`_ring_state` epoch component never advances
+          spontaneously — only :meth:`_allocate_ring_buffer` bumps it;
+      (c) the samples-written counter wraps at
+          :data:`_RING_SAMPLES_MASK` per the v1.3 packed-state
+          contract — a 10K storm at 512 samples/frame writes 5.12M
+          samples, which is several orders of magnitude below the
+          mask, so the counter advances cleanly without wrap;
+      (d) :meth:`tap_recent_frames` after the storm returns at
+          most :attr:`_ring_capacity` samples, never more.
+    """
+
+    _STORM_FRAMES = 10_000  # noqa: PLR2004 — mission spec § Phase 6 / T6.27
+    _FRAME_SAMPLES = 512  # standard pipeline-shaped frame
+
+    def _fresh_task(self) -> AudioCaptureTask:
+        """Construct a bare AudioCaptureTask with the packing fields set."""
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._ring_buffer = None  # noqa: SLF001
+        task._ring_capacity = 0  # noqa: SLF001
+        task._ring_write_index = 0  # noqa: SLF001
+        task._ring_state = 0  # noqa: SLF001
+        task._tuning = None  # noqa: SLF001
+        return task
+
+    def test_storm_does_not_grow_ring_buffer_memory(self) -> None:
+        """Pin (a): nbytes is bounded by capacity regardless of writes."""
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        task = self._fresh_task()
+        task._allocate_ring_buffer(VoiceTuningConfig())  # noqa: SLF001
+        baseline_nbytes = task._ring_buffer.nbytes  # noqa: SLF001
+        baseline_cap = task._ring_capacity  # noqa: SLF001
+
+        frame = np.zeros(self._FRAME_SAMPLES, dtype=np.int16)
+        for _ in range(self._STORM_FRAMES):
+            task._ring_write(frame)  # noqa: SLF001
+
+        # Memory is bounded — same buffer object, same nbytes, same cap.
+        assert task._ring_buffer.nbytes == baseline_nbytes  # noqa: SLF001
+        assert task._ring_capacity == baseline_cap  # noqa: SLF001
+
+    def test_storm_does_not_advance_epoch(self) -> None:
+        """Pin (b): epoch only advances on :meth:`_allocate_ring_buffer`."""
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        task = self._fresh_task()
+        task._allocate_ring_buffer(VoiceTuningConfig())  # noqa: SLF001
+        epoch_before, _ = task.samples_written_mark()
+
+        frame = np.zeros(self._FRAME_SAMPLES, dtype=np.int16)
+        for _ in range(self._STORM_FRAMES):
+            task._ring_write(frame)  # noqa: SLF001
+
+        epoch_after, _ = task.samples_written_mark()
+        assert epoch_after == epoch_before, (
+            f"epoch advanced spontaneously: {epoch_before} → {epoch_after} "
+            "— only _allocate_ring_buffer should bump it"
+        )
+
+    def test_storm_samples_counter_advances_without_wrap(self) -> None:
+        """Pin (c): 5.12M samples sit well under :data:`_RING_SAMPLES_MASK`.
+
+        The packed state's samples component has a wide mask (low 32+
+        bits per the v1.3 contract). 10K frames × 512 samples = 5.12M;
+        the storm's samples-counter advances exactly to that value
+        without wrapping. If a future change narrowed the mask below
+        ~23 bits (8.4M cap), this test would catch the silent overflow.
+        """
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        task = self._fresh_task()
+        task._allocate_ring_buffer(VoiceTuningConfig())  # noqa: SLF001
+
+        frame = np.zeros(self._FRAME_SAMPLES, dtype=np.int16)
+        for _ in range(self._STORM_FRAMES):
+            task._ring_write(frame)  # noqa: SLF001
+
+        _, samples = task.samples_written_mark()
+        assert samples == self._STORM_FRAMES * self._FRAME_SAMPLES, (
+            f"expected {self._STORM_FRAMES * self._FRAME_SAMPLES} samples, "
+            f"got {samples} — samples mask may have been narrowed"
+        )
+
+    @pytest.mark.asyncio()
+    async def test_tap_after_storm_returns_at_most_capacity(self) -> None:
+        """Pin (d): tap_recent_frames is upper-bounded by ring capacity.
+
+        After a 10K-frame storm, the ring has wrapped many times. A
+        tap with a duration much larger than the buffer's holding
+        time must return at most ``_ring_capacity`` samples — never
+        the cumulative count.
+        """
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        task = self._fresh_task()
+        task._allocate_ring_buffer(VoiceTuningConfig())  # noqa: SLF001
+        cap = task._ring_capacity  # noqa: SLF001
+
+        frame = np.zeros(self._FRAME_SAMPLES, dtype=np.int16)
+        for _ in range(self._STORM_FRAMES):
+            task._ring_write(frame)  # noqa: SLF001
+
+        # Request 10× the buffer's holding window; tap clamps to cap.
+        snapshot = await task.tap_recent_frames(duration_s=1000.0)
+        assert snapshot.size <= cap
+        # And after a storm exceeding capacity, the tap is exactly cap-sized.
+        cumulative_samples = self._STORM_FRAMES * self._FRAME_SAMPLES
+        if cumulative_samples >= cap:
+            assert snapshot.size == cap
+
+    def test_storm_does_not_raise(self) -> None:
+        """Pin: the synchronous write path is exception-free under storm."""
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        task = self._fresh_task()
+        task._allocate_ring_buffer(VoiceTuningConfig())  # noqa: SLF001
+
+        frame = np.zeros(self._FRAME_SAMPLES, dtype=np.int16)
+        for _ in range(self._STORM_FRAMES):
+            # Any raise here surfaces directly.
+            task._ring_write(frame)  # noqa: SLF001
+
+
 class TestMixinMroResolution:
     """Pin CLAUDE.md anti-pattern #32 — mixin method-via-MRO stub trap.
 
