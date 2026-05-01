@@ -432,6 +432,41 @@ class PluginsConfig(BaseModel):
         }
 
 
+class MindRetentionConfig(BaseModel):
+    """Per-mind retention override — Phase 8 / T8.21 step 6.
+
+    Each field is ``None`` by default = "use the global default from
+    :class:`~sovyx.engine.config.RetentionTuningConfig`". Setting any
+    field to a non-None integer overrides the global default for that
+    surface on this specific mind.
+
+    Use case: a "personal-assistant" mind with 90-day episode retention
+    while a "compliance-bot" mind keeps 365 days. The brain pool is
+    per-mind so the two policies coexist cleanly.
+
+    See ``OPERATOR-DEBT-MASTER-2026-05-01.md`` D9 for the design
+    decision pinning per-mind override semantics.
+    """
+
+    episodes_days: int | None = Field(default=None, ge=0, le=3650)
+    """Override episodes retention. None = inherit global default."""
+
+    conversations_days: int | None = Field(default=None, ge=0, le=3650)
+    """Override conversations + conversation_turns retention."""
+
+    daily_stats_days: int | None = Field(default=None, ge=0, le=3650)
+    """Override daily_stats retention."""
+
+    consolidation_log_days: int | None = Field(default=None, ge=0, le=3650)
+    """Override consolidation_log retention."""
+
+    consent_ledger_days: int | None = Field(default=None, ge=0, le=3650)
+    """Override consent ledger retention. Setting to a positive value
+    on a mind with active GDPR-Art-30 obligations may breach the audit
+    trail requirement; the operator is responsible for the legal-basis
+    chain."""
+
+
 class MindConfig(BaseModel):
     """Complete Mind configuration. Loaded from mind.yaml.
 
@@ -537,6 +572,7 @@ class MindConfig(BaseModel):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
+    retention: MindRetentionConfig = Field(default_factory=lambda: MindRetentionConfig())
 
     @model_validator(mode="after")
     def set_default_id(self) -> MindConfig:

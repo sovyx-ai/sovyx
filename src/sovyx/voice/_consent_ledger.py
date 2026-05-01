@@ -97,6 +97,10 @@ class ConsentAction(StrEnum):
             audit trail survives the deletion (the tombstone is the
             ONLY record of that user remaining; everything else is
             purged).
+        RETENTION_PURGE: Time-based retention policy fired and pruned
+            old records. Distinguished from DELETE so an external
+            auditor can tell "operator invoked Forget" from "scheduled
+            policy ran". Phase 8 / T8.21 step 6.
     """
 
     WAKE = "wake"
@@ -105,6 +109,7 @@ class ConsentAction(StrEnum):
     STORE = "store"
     SHARE = "share"
     DELETE = "delete"
+    RETENTION_PURGE = "retention_purge"
 
 
 @dataclass(frozen=True, slots=True)

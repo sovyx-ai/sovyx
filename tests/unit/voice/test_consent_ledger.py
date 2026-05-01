@@ -44,7 +44,18 @@ class TestConsentAction:
         names = {a.value for a in ConsentAction}
         # Mission-mandated taxonomy. Adding members is OK; removing is
         # a breaking schema change for downstream auditors.
-        assert names == {"wake", "listen", "transcribe", "store", "share", "delete"}
+        # ``retention_purge`` added in Phase 8 / T8.21 step 6 to
+        # distinguish operator-invoked DELETE from scheduled-policy
+        # purges.
+        assert names == {
+            "wake",
+            "listen",
+            "transcribe",
+            "store",
+            "share",
+            "delete",
+            "retention_purge",
+        }
 
 
 # ── ConsentRecord serialisation ─────────────────────────────────────

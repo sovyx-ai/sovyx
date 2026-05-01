@@ -147,6 +147,66 @@ class BrainTuningConfig(BaseSettings):
     model_download_cooldown_seconds: int = 900  # 15 minutes
 
 
+class RetentionTuningConfig(BaseSettings):
+    """Per-mind retention defaults — Phase 8 / T8.21 step 6.
+
+    Time-based retention horizons for per-mind data surfaces. Operators
+    set these globally; :class:`MindConfig.retention` allows per-mind
+    overrides (None on a field falls back to the global default here).
+
+    Defaults align with existing project precedents:
+
+    * 30-day default for episodes / conversations matches
+      ``LoggingConfig.retention_days`` and FTS ``_DEFAULT_RETENTION_DAYS``.
+    * 0 (infinite) for the consent ledger satisfies GDPR Art. 30
+      "records of processing activities" — the audit trail must
+      survive the relationship with the data subject. Operators can
+      reduce manually if internal compliance permits.
+    * 365 days for ``daily_stats`` reflects the metric's role as
+      historical cost/usage tracking (no PII).
+    * 90 days for ``consolidation_log`` matches typical
+      diagnostic-window expectations for DREAM-cycle telemetry.
+    * Concepts + relations are NOT subject to time-based retention
+      — they're already aged via importance-based decay
+      (``MindConfig.brain.forgetting_enabled`` + ``decay_rate``).
+      Two policies on the same surface would cause double-deletion.
+
+    See :class:`SafetyTuningConfig` for the ``BaseSettings`` rationale.
+    See ``OPERATOR-DEBT-MASTER-2026-05-01.md`` D9/D18 for the design
+    decisions ratifying these defaults.
+
+    Reference: GDPR Art. 5(1)(e) "storage limitation" + LGPD Art. 16
+    + ``docs/compliance.md`` + ``docs/modules/voice-privacy.md``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="SOVYX_TUNING__RETENTION__",
+        extra="ignore",
+    )
+
+    episodes_days: int = Field(default=30, ge=0, le=3650)
+    """Episodic memory (conversation exchanges with emotional context).
+    0 = disabled / infinite. Upper bound 10 years."""
+
+    conversations_days: int = Field(default=30, ge=0, le=3650)
+    """Raw conversation transcripts (conversations + conversation_turns).
+    0 = disabled / infinite."""
+
+    daily_stats_days: int = Field(default=365, ge=0, le=3650)
+    """Per-day cost/usage rollup. No PII; longer default reflects
+    operator interest in historical trend analysis."""
+
+    consolidation_log_days: int = Field(default=90, ge=0, le=3650)
+    """DREAM-cycle diagnostic records. Quarterly horizon matches
+    typical incident-investigation windows."""
+
+    consent_ledger_days: int = Field(default=0, ge=0, le=3650)
+    """Voice consent ledger (GDPR Art. 30 records of processing).
+    Default 0 = infinite — audit trail must outlive the data subject
+    relationship. Operator may reduce when internal compliance
+    permits."""
+
+
 class VoiceTuningConfig(BaseSettings):
     """Tunable thresholds for the voice pipeline + STT/TTS engines.
 
@@ -2204,6 +2264,7 @@ class TuningConfig(BaseModel):
     brain: BrainTuningConfig = Field(default_factory=BrainTuningConfig)
     voice: VoiceTuningConfig = Field(default_factory=VoiceTuningConfig)
     llm: LLMTuningConfig = Field(default_factory=LLMTuningConfig)
+    retention: RetentionTuningConfig = Field(default_factory=RetentionTuningConfig)
 
 
 class SecurityConfig(BaseModel):
@@ -2272,6 +2333,41 @@ class SocketConfig(BaseModel):
         return self
 
 
+class ComplianceConfig(BaseModel):
+    """Compliance regime configuration — Phase 8 / T8.21 step 6.
+
+    Sovyx targets GDPR + LGPD as the primary compliance baseline (see
+    ``docs/compliance.md``). Additional regimes (CCPA/CPRA, BIPA,
+    HIPAA) ship behind opt-in flags so operators declare deployment
+    intent explicitly.
+
+    See ``OPERATOR-DEBT-MASTER-2026-05-01.md`` D9 for the design
+    decision pinning HIPAA mode as forward-compat-only at v0.28.0.
+    """
+
+    hipaa_mode: bool = False
+    """HIPAA opt-in flag. **Forward-compat only as of v0.28.0** —
+    setting this to True does NOT yet alter retention defaults or
+    audit-chain shape. Reserved as a stable schema field so
+    operators can declare healthcare-deployment intent without
+    waiting for the active feature.
+
+    Future minor cycles will wire its effects when a healthcare
+    deployment makes it load-bearing:
+
+    * Retention defaults flip to HIPAA minimums (typically 6 years
+      for protected-health-information records vs. the GDPR
+      "storage-limitation" maximums Sovyx ships today).
+    * ConsentLedger gains tamper-evident HMAC chain (mirrors the
+      existing ``HashChainHandler`` pattern from the audit log).
+    * Encryption-at-rest becomes mandatory when this flag is True.
+
+    BIPA + CCPA/CPRA effects are operator-side policy; Sovyx already
+    ships the technical controls (consent ledger + right-to-erasure
+    + portability export) without further flags.
+    """
+
+
 class EngineConfig(BaseSettings):
     """Global Sovyx daemon configuration.
 
@@ -2303,6 +2399,7 @@ class EngineConfig(BaseSettings):
     tuning: TuningConfig = Field(default_factory=TuningConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    compliance: ComplianceConfig = Field(default_factory=ComplianceConfig)
 
     @model_validator(mode="after")
     def resolve_log_file(self) -> EngineConfig:
