@@ -286,8 +286,17 @@ async def _play_audio(chunk: AudioChunk) -> None:
     """
     try:
         import sounddevice as sd
-    except ImportError:
-        # Headless / test environment — simulate playback duration
+    except (ImportError, OSError):
+        # Headless / test environment — simulate playback duration.
+        # OSError covers the "PortAudio library not found" case on
+        # Linux + macOS CI runners where the Python ``sounddevice``
+        # module imports cleanly but its native PortAudio C library
+        # backing ``_libname_lookup`` is absent (sounddevice raises
+        # ``OSError`` from its module init in that case). Without this
+        # branch, a headless integration test that drives
+        # ``play_immediate`` triggers an uncaught OSError and fails
+        # with no meaningful path forward — same operator-grade
+        # contract as the ``ImportError`` branch.
         if chunk.duration_ms > 0:
             await asyncio.sleep(chunk.duration_ms / 1000)
         return

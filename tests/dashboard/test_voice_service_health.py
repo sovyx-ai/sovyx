@@ -77,6 +77,11 @@ def _seed_combo_store(
         exclusive=False,
         auto_convert=False,
         frames_per_buffer=480,
+        # Cross-platform CI portability — Combo.__post_init__ validates
+        # host_api against ALLOWED_HOST_APIS_BY_PLATFORM for the current
+        # host OS unless platform_key is set. Linux + macOS CI runners
+        # reject WASAPI without this override.
+        platform_key="win32",
     )
     probe = ProbeResult(
         diagnosis=diagnosis,

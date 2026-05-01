@@ -204,17 +204,35 @@ class TestLifecycle:
 
 
 class _StateSequence:
-    """Programmable state-query stand-in returning queued values per call."""
+    """Programmable state-query stand-in returning queued values per call.
+
+    Post-exhaustion behaviour: returns the LAST queued value (stable
+    repeat). Pre-fix the helper returned the literal string "RUNNING"
+    after the sequence drained, which made
+    ``test_running_to_stopped_emits_down`` flaky on slower CI cells:
+    ``_drive_polls`` waits until ``query.calls >= expected_calls`` and
+    then awaits ``monitor.stop()``, but the monitor loop can issue ONE
+    extra poll between those points. With the legacy "RUNNING" fallback
+    a second event fires (STOPPED→RUNNING transition emits UP), and
+    the test asserts ``len(capture.events) == 1`` fails with 2 ==
+    1. Repeating the LAST queued state keeps post-exhaustion polls
+    transition-free regardless of the host OS scheduler.
+    """
 
     def __init__(self, sequence: list[str | None]) -> None:
         self._sequence = list(sequence)
+        # Pre-seed the repeat-on-exhaustion value to "RUNNING" so an
+        # empty sequence still has a deterministic baseline (matches
+        # the legacy default for tests that pass [] to the helper).
+        self._last: str | None = "RUNNING"
         self.calls = 0
 
     def __call__(self) -> str | None:
         self.calls += 1
         if not self._sequence:
-            return "RUNNING"  # default stable state past the queue
-        return self._sequence.pop(0)
+            return self._last
+        self._last = self._sequence.pop(0)
+        return self._last
 
 
 class _EventCapture:

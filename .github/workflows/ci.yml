@@ -104,6 +104,28 @@ jobs:
             python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
+      # Install the PortAudio C library on Linux + macOS runners. The
+      # voice-extra ``sounddevice`` Python package imports cleanly
+      # without it, but its module init looks up libportaudio2 at
+      # load time and raises ``OSError: PortAudio library not found``
+      # when the C lib is absent. Production code in
+      # ``voice/pipeline/_output_queue.py::_play_audio`` catches that
+      # OSError as the headless-test fallback, but tests that exercise
+      # device enumeration / probe paths invoke sounddevice through
+      # paths that don't share that guard. Install the system C lib
+      # so every voice-related code path on Linux + macOS CI behaves
+      # the same as on Windows runners (where the wheel bundles
+      # PortAudio).
+      - name: Install PortAudio (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libportaudio2
+      - name: Install PortAudio (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install portaudio
       - uses: ./.github/actions/setup-sovyx-python
         with:
           python-version: ${{ matrix.python-version }}

@@ -66,6 +66,26 @@ from sovyx.voice.health.probe._warm import (
     _diagnose_warm,
 )
 
+# Cross-platform CI portability: ``Combo.__post_init__`` validates
+# ``host_api`` against ``ALLOWED_HOST_APIS_BY_PLATFORM`` for the current
+# host OS unless ``platform_key`` is explicitly set. Tests that
+# construct a ``Combo`` with WASAPI must declare ``platform_key="win32"``
+# (otherwise Linux + macOS CI runners reject WASAPI as not allowed on
+# their platform). The helper below derives the correct platform_key
+# from the host_api so individual tests don't need to repeat the
+# mapping. The CLAUDE.md anti-pattern #20 corollary applies — when a
+# test fixture spans Combo, the fixture must work on every CI host OS.
+_HOST_API_TO_PLATFORM = {
+    "WASAPI": "win32",
+    "Windows WASAPI": "win32",
+    "ALSA": "linux",
+    "PulseAudio": "linux",
+    "PipeWire": "linux",
+    "JACK": "linux",
+    "CoreAudio": "darwin",
+    "Core Audio": "darwin",
+}
+
 
 def _combo(
     *,
@@ -76,7 +96,10 @@ def _combo(
     exclusive: bool = False,
     auto_convert: bool = False,
     frames_per_buffer: int = 480,
+    platform_key: str | None = None,
 ) -> Combo:
+    if platform_key is None:
+        platform_key = _HOST_API_TO_PLATFORM.get(host_api, "win32")
     return Combo(
         host_api=host_api,
         sample_rate=sample_rate,
@@ -85,6 +108,7 @@ def _combo(
         exclusive=exclusive,
         auto_convert=auto_convert,
         frames_per_buffer=frames_per_buffer,
+        platform_key=platform_key,
     )
 
 
