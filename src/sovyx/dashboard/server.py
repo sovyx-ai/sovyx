@@ -469,6 +469,9 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
         logs as logs_routes,
     )
     from sovyx.dashboard.routes import (
+        mind as mind_routes,
+    )
+    from sovyx.dashboard.routes import (
         observability as observability_routes,
     )
     from sovyx.dashboard.routes import (
@@ -524,6 +527,7 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.include_router(activity_routes.router)
     app.include_router(logs_routes.router)
     app.include_router(logs_routes.ws_router)
+    app.include_router(mind_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(data_routes.router)
     app.include_router(emotions_routes.router)
