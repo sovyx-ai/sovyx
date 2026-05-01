@@ -303,7 +303,21 @@ async def _play_audio(chunk: AudioChunk) -> None:
 
     from sovyx.voice._stream_opener import blocking_write_play
 
-    await asyncio.to_thread(blocking_write_play, sd, chunk.audio, chunk.sample_rate)
+    try:
+        await asyncio.to_thread(blocking_write_play, sd, chunk.audio, chunk.sample_rate)
+    except sd.PortAudioError:
+        # Headless server / CI runner with no audio device — sounddevice
+        # imports + libportaudio2 loads cleanly, but ``query_devices(-1)``
+        # raises ``sounddevice.PortAudioError`` because there's no
+        # default output device available. Same operator-grade
+        # contract as the ImportError / OSError branches above:
+        # simulate playback duration so the orchestrator's state
+        # machine progresses normally in the absence of real audio
+        # hardware. This makes integration tests + headless container
+        # deployments work without requiring per-test mocking of
+        # ``_play_audio``.
+        if chunk.duration_ms > 0:
+            await asyncio.sleep(chunk.duration_ms / 1000)
 
 
 # ---------------------------------------------------------------------------

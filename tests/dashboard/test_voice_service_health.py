@@ -4,6 +4,16 @@ The aggregated readiness endpoint serves Prometheus-style monitoring:
 a tight, stable, low-cost contract that NEVER 5xx — failure modes
 degrade gracefully via the ``reason`` field. Tests cover:
 
+Cross-platform CI portability note: ``ComboStore.load()`` validates
+each entry's ``host_api`` against the current runtime platform's
+``ALLOWED_HOST_APIS_BY_PLATFORM`` and drops any entry whose
+``host_api`` isn't in the current platform's allow-list (production
+behaviour — protects against stale entries from a different OS,
+e.g. a laptop that ran Windows and is now booted Linux). The test
+helper ``_seed_combo_store`` therefore picks a runtime-appropriate
+``host_api`` so the seeded entry survives ``load()`` on every
+runner OS (Linux: ALSA, macOS: CoreAudio, Windows: WASAPI).
+
 * Auth — missing Bearer token → 401 (FastAPI dependency).
 * Engine not running — no app.state.registry → ``engine_not_running``.
 * Pipeline not registered — registry exists but no VoicePipeline →
@@ -23,6 +33,7 @@ degrade gracefully via the ``reason`` field. Tests cover:
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -44,6 +55,19 @@ from sovyx.voice.pipeline._config import VoicePipelineConfig
 from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
 _TOKEN = "test-token-fixo"
+
+
+# Pick a host_api that's allowed on the current runtime platform so
+# ComboStore.load()'s host_api allow-list validation accepts the
+# seeded entry. ``ALLOWED_HOST_APIS_BY_PLATFORM`` already gates this
+# (see :func:`_allowed_host_apis_for` in
+# ``sovyx.voice.health.contract._combo``); we mirror its first
+# entry per platform here so the seed always picks a valid value.
+_RUNTIME_HOST_API = {
+    "win32": "WASAPI",
+    "linux": "ALSA",
+    "darwin": "CoreAudio",
+}.get(sys.platform, "WASAPI")
 
 
 def _make_pipeline() -> VoicePipeline:
@@ -70,18 +94,21 @@ def _seed_combo_store(
     store = ComboStore(store_path)
     store.load()
     combo = Combo(
-        host_api="WASAPI",
+        host_api=_RUNTIME_HOST_API,
         sample_rate=48000,
         channels=1,
         sample_format="int16",
         exclusive=False,
         auto_convert=False,
         frames_per_buffer=480,
-        # Cross-platform CI portability — Combo.__post_init__ validates
-        # host_api against ALLOWED_HOST_APIS_BY_PLATFORM for the current
-        # host OS unless platform_key is set. Linux + macOS CI runners
-        # reject WASAPI without this override.
-        platform_key="win32",
+        # platform_key intentionally omitted — Combo.__post_init__
+        # picks up the current runtime platform via sys.platform, and
+        # ``_RUNTIME_HOST_API`` already maps to a host_api allowed on
+        # that platform. Hard-coding ``platform_key="win32"`` here
+        # would let Combo construction succeed but break later when
+        # ComboStore.load() drops the entry as host_api-not-allowed
+        # under R5 (the entry's host_api is validated against the
+        # actual runtime platform, not the stored platform_key).
     )
     probe = ProbeResult(
         diagnosis=diagnosis,
