@@ -18,6 +18,7 @@ from sovyx.cli.commands.doctor import doctor_app
 from sovyx.cli.commands.kb import kb_app
 from sovyx.cli.commands.logs import logs_app
 from sovyx.cli.commands.plugin import plugin_app
+from sovyx.cli.commands.voice import voice_app
 from sovyx.cli.rpc_client import DaemonClient
 from sovyx.dashboard.server import TOKEN_FILE
 
@@ -38,6 +39,7 @@ app.add_typer(doctor_app)
 app.add_typer(plugin_app, name="plugin")
 app.add_typer(audit_app)
 app.add_typer(kb_app, name="kb")
+app.add_typer(voice_app)
 
 
 def _get_client() -> DaemonClient:

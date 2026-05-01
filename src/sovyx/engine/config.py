@@ -1808,6 +1808,58 @@ class VoiceTuningConfig(BaseSettings):
       :data:`audio_enhancement_active` from the
       :mod:`sovyx.voice.health._macos` HAL plug-in report."""
 
+    # ── Phase 7 / T7.31-T7.40 — voice compliance / privacy ─────────────
+    # Sovyx does NOT persist raw audio by default — the capture path
+    # is mic → frames → STT → discard. The knobs below are forward-
+    # compatible foundations for FUTURE persistence features (e.g.,
+    # an opt-in conversation-recording mode for accessibility / replay).
+    # See ``docs/voice/privacy.md`` for the full privacy story including
+    # GDPR / CCPA / BIPA / HIPAA alignment.
+
+    voice_audio_retention_days: int = 0
+    """Phase 7 / T7.32 + T7.37 — how many days raw audio recordings live.
+
+    ``0`` (default) is the no-persistence sentinel: Sovyx never writes
+    captured audio to disk. The capture path is mic → frames → STT →
+    discard; the only voice-related state on disk is the
+    :class:`~sovyx.voice._consent_ledger.ConsentLedger` which records
+    privacy-relevant EVENTS (wake / listen / transcribe / store /
+    share / delete) — not the audio itself.
+
+    Setting to a positive value reserves the knob for FUTURE features
+    that opt-in to persistence (accessibility transcription replay,
+    operator-side debugging recordings). When such a feature lands,
+    ``T7.33`` auto-purge will consult this value to drop audio older
+    than the threshold.
+
+    GDPR Art. 5(1)(e) "storage limitation" + LGPD Art. 16 default-
+    aligned: ``0`` means "we don't keep what we don't need."
+    """
+
+    voice_biometric_processing_enabled: bool = False
+    """Phase 7 / T7.34 + T7.35 — opt-in voiceprint / speaker-ID derivation.
+
+    Voice biometrics (voiceprint, speaker-ID) are SPECIAL CATEGORY
+    biometric data under GDPR Art. 9(1) — explicit opt-in is required
+    even on local-only flows. Default ``False`` ensures Sovyx never
+    derives biometric features from captured audio without an
+    affirmative operator decision. When True, downstream
+    speaker-identification features (Phase 8 multi-mind voice ID
+    per master mission) become available; until then this is a
+    forward-compatible declaration of intent.
+
+    The ConsentLedger logs a ``ConsentAction.SHARE`` record whenever
+    biometric processing is engaged so the audit trail captures
+    the consent boundary alongside the wake/listen/transcribe
+    events.
+
+    BIPA (Illinois Biometric Information Privacy Act) compliance:
+    when this flag flips True, operators MUST capture explicit
+    written consent from each enrolled speaker via their own
+    onboarding flow — Sovyx provides the technical control + audit
+    trail; the legal-basis chain is the operator's responsibility.
+    """
+
     cascade_host_api_alignment_enabled: bool = False
     """Cascade ↔ runtime host-API alignment (cross-platform).
 

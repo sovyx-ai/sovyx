@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
@@ -242,6 +242,88 @@ async def _compose_service_health(request: Request) -> ServiceHealthResponse:
         last_diagnosis=last_diagnosis,
         watchdog_state=None,
         user_remediation=diagnosis_user_remediation(last_diagnosis),
+    )
+
+
+# ── Phase 7 / T7.39 — Right-to-erasure endpoint ────────────────────────
+
+
+class ForgetVoiceDataRequest(BaseModel):
+    """Body for ``POST /api/voice/forget`` — wipes one user's voice data."""
+
+    user_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description=(
+            "Stable opaque identifier for the user (caller hashes / "
+            "pseudonymises before passing). Empty string is rejected — "
+            "would match every empty-id record."
+        ),
+    )
+
+
+class ForgetVoiceDataResponse(BaseModel):
+    """Response for ``POST /api/voice/forget``."""
+
+    purged_count: int = Field(
+        ...,
+        description="Number of ConsentLedger records purged. ≥ 0; idempotent.",
+    )
+    user_id: str = Field(
+        ...,
+        description="Echo of the request's user_id for confirmation.",
+    )
+
+
+@router.post("/forget", response_model=ForgetVoiceDataResponse)
+async def post_voice_forget(
+    request: Request,
+    body: ForgetVoiceDataRequest,
+) -> ForgetVoiceDataResponse:
+    """Right-to-erasure for voice data — wipes one user's ConsentLedger.
+
+    Phase 7 / T7.39 — companion to the ``sovyx voice forget`` CLI.
+    Either path produces identical effects; the ledger's atomic
+    JSONL writes guarantee no race between the two.
+
+    GDPR Art. 17 (Right to Erasure) + LGPD Art. 18 VI. Purges every
+    record matching ``user_id`` from the active ledger segment plus
+    every rotated segment, then writes a tombstone DELETE record so
+    the audit trail survives the deletion.
+
+    Returns the number of records purged for client-side confirmation.
+    Idempotent — running twice on the same user is safe; the second
+    call finds no records to purge but still writes a fresh tombstone.
+
+    Authentication: requires the dashboard's standard
+    ``Authorization: Bearer ...`` header (via the router's
+    ``verify_token`` dependency). Voice data deletion is a
+    privileged operation that no anonymous caller should be able
+    to perform.
+    """
+    # Resolve the canonical ledger path the same way the CLI does
+    # — via EngineConfig.data_dir — so both surfaces operate on the
+    # same file. Falls back to the home-dir default if no engine
+    # config is registered (pre-init / dashboard-only deployments).
+    data_dir = _resolve_data_dir_for_health(request)
+    ledger_path = data_dir / "voice" / "consent.jsonl"
+
+    from sovyx.voice._consent_ledger import ConsentLedger  # noqa: PLC0415
+
+    ledger = ConsentLedger(path=ledger_path)
+    purged_count = await asyncio.to_thread(ledger.forget, user_id=body.user_id)
+    logger.info(
+        "voice.consent_ledger.forget_via_dashboard",
+        **{
+            "voice.user_id_hash_prefix": body.user_id[:8],
+            "voice.purged_count": purged_count,
+            "voice.ledger_path": str(ledger_path),
+        },
+    )
+    return ForgetVoiceDataResponse(
+        purged_count=purged_count,
+        user_id=body.user_id,
     )
 
 
