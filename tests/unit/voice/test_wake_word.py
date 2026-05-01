@@ -615,9 +615,20 @@ class TestEdgeCases:
         assert event.state == WakeWordState.IDLE
 
     @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
-    @given(score=st.floats(min_value=0.5, max_value=1.0, exclude_max=True))
+    @given(score=st.floats(min_value=0.5, max_value=0.99, exclude_max=True))
     def test_above_threshold_always_triggers_stage1(self, score: float) -> None:
-        """Any score >= stage1_threshold triggers STAGE1."""
+        """Any score >= stage1_threshold but < high-confidence triggers STAGE1.
+
+        T7.4 added a fast-path branch that bypasses STAGE1_TRIGGERED
+        when ``score >= stage1_high_confidence_threshold`` (default
+        1.0 = disabled). Hypothesis can generate values arbitrarily
+        close to 1.0 that match the >= 1.0 comparison via float
+        rounding, which would now correctly engage the fast path
+        instead of the 2-stage path. Bound the search to < 0.99 so
+        the property test continues to pin the 2-stage branch
+        invariant; the fast-path branch has its own dedicated tests
+        in ``TestFastPathT74``.
+        """
         config = WakeWordConfig(
             stage1_threshold=0.5,
             stage2_threshold=0.5,
@@ -823,6 +834,116 @@ class TestLatencyProfileT71:
         mock_record.assert_called_once()
         # Duration is non-negative (real time elapsed across the 3 frames).
         assert mock_record.call_args.kwargs["duration_ms"] >= 0.0
+
+    def test_fast_path_t74_engages_on_high_score(self) -> None:
+        """T7.4 fast-path: score >= stage1_high_confidence_threshold.
+
+        With the threshold set to 0.8 and an incoming score of 0.9,
+        the detector skips stage-2 entirely and confirms on the
+        first frame. End-to-end latency is essentially the single
+        ONNX inference.
+        """
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.7,
+            stage1_high_confidence_threshold=0.8,
+            stage2_window_seconds=5 * 1280 / 16000,
+        )
+        detector = _make_detector([0.9], config=config, verifier=_verified_false)
+        event = detector.process_frame(_frame())
+        # Fast-path fired despite a verifier that would have rejected.
+        assert event.detected
+        # State machine went straight to COOLDOWN, bypassing
+        # STAGE1_TRIGGERED + the STT verifier.
+        assert event.state == WakeWordState.COOLDOWN
+
+    def test_fast_path_t74_records_engaged_counter(self) -> None:
+        """Fast-path increments ``record_wake_word_fast_path_engaged``."""
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.7,
+            stage1_high_confidence_threshold=0.8,
+            stage2_window_seconds=5 * 1280 / 16000,
+        )
+        detector = _make_detector([0.92], config=config, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_fast_path_engaged",
+        ) as mock_record:
+            detector.process_frame(_frame())
+        mock_record.assert_called_once()
+        # Score is forwarded for bucketing.
+        assert mock_record.call_args.kwargs["score"] == pytest.approx(0.92, abs=1e-5)
+
+    def test_fast_path_t74_disabled_by_default(self) -> None:
+        """Default ``stage1_high_confidence_threshold=1.0`` keeps 2-stage path.
+
+        Operators must explicitly opt-in via WakeWordConfig
+        construction; the default behaviour is unchanged from pre-T7.4.
+        """
+        # Default config — stage1_high_confidence_threshold=1.0 is disabled.
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=5 * 1280 / 16000,
+        )
+        # Score of 0.99 is high but below the disabled 1.0 sentinel.
+        detector = _make_detector([0.99], config=config, verifier=_verified_true)
+        event = detector.process_frame(_frame())
+        # Falls into legacy 2-stage path → STAGE1_TRIGGERED.
+        assert event.state == WakeWordState.STAGE1_TRIGGERED
+
+    def test_fast_path_t74_validation_rejects_at_or_below_stage1(self) -> None:
+        """``stage1_high_confidence_threshold <= stage1_threshold`` rejected.
+
+        Setting the fast-path threshold at-or-below stage1 would
+        defeat the high-confidence contract (every stage-1 trigger
+        would take the fast path). Validation enforces strict
+        ordering at WakeWordDetector construction time (the dataclass
+        itself is frozen but validation lives in
+        ``_validate_config`` called from ``__init__``).
+        """
+        bad_config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.7,
+            stage1_high_confidence_threshold=0.5,  # equal to stage1
+        )
+        with pytest.raises(ValueError, match="stage1_high_confidence_threshold"):
+            _make_detector([0.5], config=bad_config)
+
+    def test_fast_path_t74_validation_rejects_above_one(self) -> None:
+        """``stage1_high_confidence_threshold > 1.0`` rejected.
+
+        OpenWakeWord scores live in [0, 1]; a threshold above 1.0
+        would be unreachable and confusing. Validation enforces the
+        upper bound at detector construction.
+        """
+        bad_config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.7,
+            stage1_high_confidence_threshold=1.5,
+        )
+        with pytest.raises(ValueError, match="stage1_high_confidence_threshold"):
+            _make_detector([0.5], config=bad_config)
+
+    def test_fast_path_t74_does_not_fire_below_threshold(self) -> None:
+        """Score below high-confidence threshold takes 2-stage path."""
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.7,
+            stage1_high_confidence_threshold=0.9,
+            stage2_window_seconds=5 * 1280 / 16000,
+        )
+        # Score 0.8 is above stage1 + stage2 thresholds but below the
+        # 0.9 high-confidence cutoff → 2-stage path.
+        detector = _make_detector([0.8], config=config, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_fast_path_engaged",
+        ) as mock_record:
+            event = detector.process_frame(_frame())
+        # 2-stage entry — stage-1 triggered, awaiting collection window.
+        assert event.state == WakeWordState.STAGE1_TRIGGERED
+        # No fast-path counter increment.
+        mock_record.assert_not_called()
 
     def test_structured_log_carries_breakdown_on_confirm(
         self,

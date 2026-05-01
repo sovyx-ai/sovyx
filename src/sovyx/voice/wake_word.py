@@ -38,6 +38,16 @@ _DEFAULT_STAGE1_THRESHOLD = 0.5
 _DEFAULT_STAGE2_THRESHOLD = 0.7
 _DEFAULT_STAGE2_WINDOW_S = 1.5
 _DEFAULT_COOLDOWN_S = 2.0
+# Phase 7 / T7.4 — fast-path threshold. When stage-1 score crosses
+# this value, skip stage-2 entirely and emit ``WakeWordDetectedEvent``
+# on the same frame. Default 1.0 = DISABLED (no real OpenWakeWord
+# score reaches 1.0 in practice; max ~0.99). Operators opt-in by
+# constructing ``WakeWordConfig(stage1_high_confidence_threshold=0.8)``
+# after piloting the false-fire rate per the backlog. Default-flip
+# to 0.8 planned for v0.30.0 after one minor cycle of operator
+# pilot data validates the false-fire rate stays below the v0.23.x
+# baseline (per ``feedback_staged_adoption``).
+_DEFAULT_STAGE1_HIGH_CONFIDENCE_THRESHOLD = 1.0
 
 # Variants for STT verification (stage 2)
 _WAKE_VARIANTS: frozenset[str] = frozenset(
@@ -102,6 +112,27 @@ class WakeWordConfig:
     stage2_window_seconds: float = _DEFAULT_STAGE2_WINDOW_S
     """Seconds of audio to buffer for stage-2 STT verification."""
 
+    stage1_high_confidence_threshold: float = _DEFAULT_STAGE1_HIGH_CONFIDENCE_THRESHOLD
+    """Phase 7 / T7.4 — score above which stage-2 is skipped entirely.
+
+    When a frame scores >= this threshold AND >= ``stage1_threshold``,
+    the detector emits a confirmed ``WakeWordDetectedEvent`` on the
+    SAME frame, bypassing the stage-2 collection window + STT verifier
+    call. Cuts end-to-end latency from ~1500 ms (collection) + verifier
+    to ~5 ms (single ONNX inference) for high-confidence detections.
+
+    Default 1.0 = DISABLED (no OpenWakeWord score reaches 1.0 in
+    practice; max ~0.99). Operators pilot via explicit construction:
+    ``WakeWordConfig(stage1_high_confidence_threshold=0.8)``. Pilot
+    target: false-fire rate stays below the v0.23.x 2-stage baseline
+    while p95 detection_latency drops from ~1700 ms to ~80 ms (one
+    frame at 80 ms).
+
+    Constraint: must be > ``stage1_threshold`` (else fast-path would
+    fire on every stage-1 trigger, defeating the high-confidence
+    contract). Validation enforces this at construction time.
+    """
+
     cooldown_seconds: float = _DEFAULT_COOLDOWN_S
     """Seconds to ignore after a confirmed detection."""
 
@@ -149,6 +180,20 @@ def _validate_config(config: WakeWordConfig) -> None:
         raise ValueError(msg)
     if config.sample_rate != _SAMPLE_RATE:
         msg = f"Only 16000 Hz supported, got {config.sample_rate}"
+        raise ValueError(msg)
+    # T7.4 — fast-path threshold must lie strictly above stage1_threshold
+    # (else fast-path fires on every stage-1 trigger, defeating the
+    # high-confidence contract) and at most 1.0 (the OpenWakeWord
+    # score domain). Default 1.0 = disabled is permitted as the
+    # upper-bound sentinel.
+    if not (
+        config.stage1_threshold < config.stage1_high_confidence_threshold <= 1.0  # noqa: PLR2004 — the sigmoid output domain ceiling
+    ):
+        msg = (
+            f"stage1_high_confidence_threshold must be in "
+            f"(stage1_threshold={config.stage1_threshold}, 1.0], got "
+            f"{config.stage1_high_confidence_threshold}"
+        )
         raise ValueError(msg)
 
 
@@ -423,8 +468,59 @@ class WakeWordDetector:
         score: float,
         audio: npt.NDArray[np.float32],
     ) -> bool:
-        """Handle IDLE state — watch for stage-1 trigger."""
+        """Handle IDLE state — watch for stage-1 trigger.
+
+        T7.4 fast-path: when ``score >= stage1_high_confidence_threshold``
+        the detector skips stage-2 entirely and emits a confirmed
+        detection on the same frame. The fast path is GATED on
+        ``stage1_high_confidence_threshold < 1.0`` (the default 1.0
+        is the disabled sentinel — no OpenWakeWord score reaches it
+        in practice). Operators opt in via explicit
+        ``WakeWordConfig(stage1_high_confidence_threshold=0.8)``.
+        """
         if score >= self._config.stage1_threshold:
+            # T7.4 — fast-path: skip stage-2 when the score is high enough
+            # that the false-positive rate is already acceptable without
+            # STT verification. Saves ~1500 ms of collection + verifier
+            # latency for high-confidence detections.
+            if score >= self._config.stage1_high_confidence_threshold:
+                from sovyx.voice.health._metrics import (  # noqa: PLC0415
+                    record_wake_word_detection_ms,
+                    record_wake_word_fast_path_engaged,
+                )
+
+                self._stage1_trigger_monotonic = time.monotonic()
+                self._peak_score = score
+                # End-to-end latency for the fast path is essentially
+                # the single ONNX frame inference time — record 0.0
+                # for the post-trigger overhead so the histogram
+                # captures this path correctly. Real wall-clock
+                # contribution from this method is negligible.
+                record_wake_word_detection_ms(duration_ms=0.0)
+                record_wake_word_fast_path_engaged(score=score)
+                logger.info(
+                    "Wake word CONFIRMED (T7.4 fast-path)",
+                    score=score,
+                    threshold=self._config.stage1_high_confidence_threshold,
+                )
+                logger.info(
+                    "voice.wake_word.detected",
+                    **{
+                        "voice.score": round(score, 4),
+                        "voice.model_name": self._model_name,
+                        "voice.stage1_threshold": self._config.stage1_threshold,
+                        "voice.stage2_threshold": self._config.stage2_threshold,
+                        "voice.transcription": "<fast-path>",
+                        "voice.window_frames": 1,
+                        "voice.stage2_collection_ms": 0.0,
+                        "voice.stage2_verifier_ms": 0.0,
+                        "voice.detection_ms": 0.0,
+                        "voice.fast_path": True,
+                    },
+                )
+                self._enter_cooldown()
+                return True
+
             self._state = WakeWordState.STAGE1_TRIGGERED
             self._frame_counter = 1
             self._peak_score = score

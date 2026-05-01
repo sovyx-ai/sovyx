@@ -604,6 +604,25 @@ class MetricsRegistry:
             "overhead. The v0.30.0 GA promotion gate target is p95 "
             "≤ 500 ms (Alexa/Google/Siri parity).",
         )
+        # Phase 7 / T7.4 — fast-path engagement counter. Increments
+        # every time a wake-word detection skips stage-2 because the
+        # stage-1 score crossed ``stage1_high_confidence_threshold``.
+        # Operator pilot signal: rate of (fast_path / total
+        # detections) measures how often the fast-path triggers. A
+        # rate too low means the threshold is too aggressive (most
+        # real wakes still go through stage-2); too high means the
+        # threshold is too lenient and the fast-path is firing on
+        # speech that should have been STT-verified. The default-
+        # flip target is "fast-path engages on ~70-90% of true
+        # positives without elevating the false-fire rate above
+        # the v0.23.x baseline".
+        self.voice_wake_word_fast_path_engaged = self._counter(
+            "sovyx.voice.wake_word.fast_path_engaged",
+            "Increments per detection that took the T7.4 fast path "
+            "(stage-1 score >= stage1_high_confidence_threshold). "
+            "Pair with voice_wake_word_detected_total for the engage "
+            "rate.",
+        )
         self.voice_opener_attempts = self._counter(
             "sovyx.voice.opener.attempts",
             "Per-attempt outcomes of open_input_stream pyramid (labels: "

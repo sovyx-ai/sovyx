@@ -629,6 +629,44 @@ def record_wake_word_detection_ms(*, duration_ms: float) -> None:
     get_metrics().voice_wake_word_detection_latency.record(duration_ms)
 
 
+def record_wake_word_fast_path_engaged(*, score: float) -> None:
+    """Increment the T7.4 fast-path engagement counter.
+
+    Fires every time a wake-word detection skips stage-2 because the
+    stage-1 score crossed ``stage1_high_confidence_threshold``.
+    Pair with the standard wake-word detection total for the engage
+    rate; pilot target per operator backlog is ~70-90% engage rate
+    without elevating the false-fire rate.
+
+    Args:
+        score: The stage-1 ONNX score that triggered the fast path.
+            Recorded as an attribute (bucketed via OTel Views in
+            production) so dashboards can render the distribution.
+    """
+    get_metrics().voice_wake_word_fast_path_engaged.add(
+        1,
+        attributes={"score_bucket": _bucket_score(score)},
+    )
+
+
+def _bucket_score(score: float) -> str:
+    """Bucket a wake-word score into operator-readable bands.
+
+    Cardinality-bounded — 5 fixed buckets — so the counter doesn't
+    blow the OTel cardinality budget regardless of how many wakes
+    fire.
+    """
+    if score >= 0.95:  # noqa: PLR2004
+        return "0.95-1.00"
+    if score >= 0.90:  # noqa: PLR2004
+        return "0.90-0.95"
+    if score >= 0.85:  # noqa: PLR2004
+        return "0.85-0.90"
+    if score >= 0.80:  # noqa: PLR2004
+        return "0.80-0.85"
+    return "<0.80"
+
+
 # ── Voice Windows Paranoid Mission record helpers ──────────────────────
 
 
@@ -1224,6 +1262,7 @@ __all__ = [
     "record_time_to_first_utterance",
     "record_vad_quiet_signal_gated",
     "record_wake_word_detection_ms",
+    "record_wake_word_fast_path_engaged",
     "record_wake_word_stage1_inference_ms",
     "record_wake_word_stage2_collection_ms",
     "record_wake_word_stage2_verifier_ms",
