@@ -945,6 +945,89 @@ class TestLatencyProfileT71:
         # No fast-path counter increment.
         mock_record.assert_not_called()
 
+    # T7.6 — confidence histogram per CONFIRMED detection
+
+    def test_confidence_t76_recorded_on_two_stage_confirm(self) -> None:
+        """``record_wake_word_confidence`` fires on 2-stage confirm.
+
+        2-stage path records the peak score across the collection
+        window, labeled ``detection_path=two_stage``.
+        """
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.6,
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector = _make_detector([0.78], config=config, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_confidence",
+        ) as mock_record:
+            event = detector.process_frame(_frame())
+        assert event.detected
+        mock_record.assert_called_once()
+        kwargs = mock_record.call_args.kwargs
+        assert kwargs["detection_path"] == "two_stage"
+        assert kwargs["score"] == pytest.approx(0.78, abs=1e-5)
+
+    def test_confidence_t76_recorded_on_fast_path_confirm(self) -> None:
+        """``record_wake_word_confidence`` fires on fast-path confirm.
+
+        Fast-path records the trigger-frame score, labeled
+        ``detection_path=fast_path``.
+        """
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.7,
+            stage1_high_confidence_threshold=0.8,
+            stage2_window_seconds=5 * 1280 / 16000,
+        )
+        detector = _make_detector([0.95], config=config, verifier=_verified_false)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_confidence",
+        ) as mock_record:
+            event = detector.process_frame(_frame())
+        assert event.detected
+        mock_record.assert_called_once()
+        kwargs = mock_record.call_args.kwargs
+        assert kwargs["detection_path"] == "fast_path"
+        assert kwargs["score"] == pytest.approx(0.95, abs=1e-5)
+
+    def test_confidence_t76_does_not_fire_on_rejection(self) -> None:
+        """Rejected detections do NOT emit the confidence histogram.
+
+        The histogram is gated on confirmation — both verifier-rejected
+        and threshold-rejected paths skip the record call.
+        """
+        # Path 1: verifier rejects.
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector_rej = _make_detector([0.9], config=config, verifier=_verified_false)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_confidence",
+        ) as mock_record:
+            detector_rej.process_frame(_frame())
+        mock_record.assert_not_called()
+
+        # Path 2: peak below stage2 threshold.
+        config_high = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.9,
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector_below = _make_detector(
+            [0.6],
+            config=config_high,
+            verifier=_verified_true,
+        )
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_confidence",
+        ) as mock_record:
+            detector_below.process_frame(_frame())
+        mock_record.assert_not_called()
+
     def test_structured_log_carries_breakdown_on_confirm(
         self,
         caplog: pytest.LogCaptureFixture,

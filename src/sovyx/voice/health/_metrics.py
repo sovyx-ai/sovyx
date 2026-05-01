@@ -629,6 +629,33 @@ def record_wake_word_detection_ms(*, duration_ms: float) -> None:
     get_metrics().voice_wake_word_detection_latency.record(duration_ms)
 
 
+def record_wake_word_confidence(
+    *,
+    score: float,
+    detection_path: str,
+) -> None:
+    """Record the ONNX score at confirmed-detection time.
+
+    Phase 7 / T7.6 — histogram captures the distribution of scores
+    at which detections actually fire (distinct from the per-frame
+    ``voice.wake_word.score`` log event which fires for EVERY frame).
+    Dashboards render this distribution to surface the bimodal
+    signature: a strong peak > 0.8 indicates T7.4 fast-path will
+    be effective at the operator's pilot threshold.
+
+    Args:
+        score: The score at confirmation. For 2-stage, this is the
+            peak across the collection window; for fast-path it's
+            the trigger-frame score.
+        detection_path: ``"two_stage"`` (legacy STT verifier path) or
+            ``"fast_path"`` (T7.4 high-confidence skip).
+    """
+    get_metrics().voice_wake_word_confidence.record(
+        score,
+        attributes={"detection_path": detection_path},
+    )
+
+
 def record_wake_word_fast_path_engaged(*, score: float) -> None:
     """Increment the T7.4 fast-path engagement counter.
 
@@ -1261,6 +1288,7 @@ __all__ = [
     "record_tier2_host_api_rotate_outcome",
     "record_time_to_first_utterance",
     "record_vad_quiet_signal_gated",
+    "record_wake_word_confidence",
     "record_wake_word_detection_ms",
     "record_wake_word_fast_path_engaged",
     "record_wake_word_stage1_inference_ms",

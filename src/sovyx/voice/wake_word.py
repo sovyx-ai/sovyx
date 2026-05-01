@@ -485,6 +485,7 @@ class WakeWordDetector:
             # latency for high-confidence detections.
             if score >= self._config.stage1_high_confidence_threshold:
                 from sovyx.voice.health._metrics import (  # noqa: PLC0415
+                    record_wake_word_confidence,
                     record_wake_word_detection_ms,
                     record_wake_word_fast_path_engaged,
                 )
@@ -498,6 +499,10 @@ class WakeWordDetector:
                 # contribution from this method is negligible.
                 record_wake_word_detection_ms(duration_ms=0.0)
                 record_wake_word_fast_path_engaged(score=score)
+                record_wake_word_confidence(
+                    score=score,
+                    detection_path="fast_path",
+                )
                 logger.info(
                     "Wake word CONFIRMED (T7.4 fast-path)",
                     score=score,
@@ -565,6 +570,7 @@ class WakeWordDetector:
         import numpy as np  # noqa: F811
 
         from sovyx.voice.health._metrics import (  # noqa: PLC0415 — keep voice metrics off non-voice daemon import path
+            record_wake_word_confidence,
             record_wake_word_detection_ms,
             record_wake_word_stage2_collection_ms,
             record_wake_word_stage2_verifier_ms,
@@ -603,6 +609,10 @@ class WakeWordDetector:
                     outcome="confirmed",
                 )
                 record_wake_word_detection_ms(duration_ms=detection_ms)
+                record_wake_word_confidence(
+                    score=self._peak_score,
+                    detection_path="two_stage",
+                )
                 logger.info(
                     "Wake word CONFIRMED (2-stage)",
                     peak_score=self._peak_score,

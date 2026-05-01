@@ -604,6 +604,28 @@ class MetricsRegistry:
             "overhead. The v0.30.0 GA promotion gate target is p95 "
             "≤ 500 ms (Alexa/Google/Siri parity).",
         )
+        # Phase 7 / T7.6 — confidence histogram per CONFIRMED detection.
+        # Distinct from the per-frame ``voice.wake_word.score`` log
+        # event (which fires every 80 ms for every frame regardless
+        # of detection): this histogram records ONLY the score that
+        # actually triggered a confirmed detection, in either the
+        # 2-stage (peak_score) or fast-path (instant score) branch.
+        # The dashboard's "confidence distribution" widget renders
+        # this histogram to show operators where their wake-word
+        # detections cluster on the score axis. A bimodal
+        # distribution with a strong peak above 0.8 is the signal
+        # that T7.4 fast-path will be effective at the operator's
+        # threshold pilot.
+        self.voice_wake_word_confidence = self._histogram(
+            "sovyx.voice.wake_word.confidence",
+            "Wake-word ONNX score (0.0-1.0) at the moment of "
+            "confirmed detection. 2-stage path records the peak "
+            "score across the collection window; T7.4 fast-path "
+            "records the trigger-frame score. Labels: detection_path="
+            "two_stage|fast_path so the dashboard can split the two "
+            "distributions.",
+            unit="1",
+        )
         # Phase 7 / T7.4 — fast-path engagement counter. Increments
         # every time a wake-word detection skips stage-2 because the
         # stage-1 score crossed ``stage1_high_confidence_threshold``.
