@@ -125,25 +125,38 @@ class ConsentRecord:
             (raw transcript text, real names, exact timestamps with
             session-correlation potential). Validated by
             :func:`_assert_no_obvious_pii_in_context`.
+        mind_id: Optional structural mind boundary (Phase 8 / T8.21).
+            ``None`` for legacy records (predate per-mind isolation)
+            and for records that genuinely span minds (e.g. a global
+            wake-word event recorded before any mind is selected).
+            When present, ``history`` / ``forget`` filters AND-combine
+            it with ``user_id`` so the ledger is the per-mind GDPR /
+            LGPD audit boundary.
     """
 
     timestamp_utc: str
     user_id: str
     action: ConsentAction
     context: Mapping[str, Any]
+    mind_id: str | None = None
 
     def to_jsonl_line(self) -> str:
-        """Serialise to a single JSONL line (no trailing newline)."""
-        return json.dumps(
-            {
-                "timestamp_utc": self.timestamp_utc,
-                "user_id": self.user_id,
-                "action": self.action.value,
-                "context": dict(self.context),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        """Serialise to a single JSONL line (no trailing newline).
+
+        ``mind_id`` is omitted from the JSON payload when ``None`` so
+        legacy records remain byte-identical and a future ``jq`` query
+        like ``select(.mind_id == null)`` keeps working without
+        explicit-null fixups.
+        """
+        payload: dict[str, Any] = {
+            "timestamp_utc": self.timestamp_utc,
+            "user_id": self.user_id,
+            "action": self.action.value,
+            "context": dict(self.context),
+        }
+        if self.mind_id is not None:
+            payload["mind_id"] = self.mind_id
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 _OBVIOUS_PII_KEYS: frozenset[str] = frozenset(
@@ -227,6 +240,7 @@ class ConsentLedger:
         user_id: str,
         action: ConsentAction,
         context: Mapping[str, Any] | None = None,
+        mind_id: str | None = None,
     ) -> ConsentRecord:
         """Append one record + fsync. Returns the persisted record.
 
@@ -235,6 +249,16 @@ class ConsentLedger:
         → release locks → maybe-rotate. The fsync is durability
         critical for legal compliance (a record that loses to a
         crash is a missing audit entry).
+
+        Args:
+            user_id: Hashed / pseudonymised user identifier.
+            action: One of :class:`ConsentAction`.
+            context: Optional caller metadata (no PII; validated).
+            mind_id: Optional per-mind audit boundary (Phase 8 /
+                T8.21). When ``None`` the record predates / spans
+                minds; when set, the value flows verbatim into the
+                JSONL line so :meth:`history` / :meth:`forget` can
+                AND-filter on it.
 
         Raises:
             ValueError: ``context`` contains an obviously-PII key
@@ -250,6 +274,7 @@ class ConsentLedger:
             user_id=user_id,
             action=action,
             context=ctx,
+            mind_id=mind_id,
         )
         line = record.to_jsonl_line() + "\n"
         with self._lock:
@@ -258,62 +283,134 @@ class ConsentLedger:
             self._maybe_rotate()
         return record
 
-    def history(self, user_id: str) -> list[ConsentRecord]:
-        """Return every record for ``user_id`` across all segments.
+    def history(
+        self,
+        user_id: str | None = None,
+        *,
+        mind_id: str | None = None,
+    ) -> list[ConsentRecord]:
+        """Return every record matching the given filters (chronological).
+
+        Filters AND-combine. At least one of ``user_id`` / ``mind_id``
+        MUST be supplied — an unfiltered dump is rejected so a
+        misconfigured caller can't accidentally exfiltrate the entire
+        ledger via a wildcard query.
+
+        Args:
+            user_id: When set, match records with this exact user_id.
+                When ``None``, match every user.
+            mind_id: When set (Phase 8 / T8.21), match records with
+                this exact mind_id. When ``None``, match every mind
+                (including legacy records that predate the field).
 
         Walks the active segment + every rotated segment matching
-        ``<basename>.*.jsonl`` (so a years-old archived segment is
+        ``<basename>.*.jsonl`` so a years-old archived segment is
         still discoverable for the GDPR Article 15 right-of-access
-        call). Records are returned in chronological order across
+        call. Records are returned in chronological order across
         segments — rotated segments precede the active one (the
         rotated segment's timestamp suffix is monotonically
         increasing, so glob + sort by name approximates timestamp
         order without parsing).
 
-        Empty list when the ledger doesn't exist yet (first call
-        on a fresh data_dir) or the user has no records.
+        Returns:
+            List of matching records, possibly empty.
+
+        Raises:
+            ValueError: Both ``user_id`` and ``mind_id`` are ``None``
+                — at least one filter is required.
         """
+        if user_id is None and mind_id is None:
+            msg = (
+                "ConsentLedger.history requires at least one of "
+                "user_id or mind_id; an unfiltered dump is not "
+                "supported (would defeat per-user / per-mind audit "
+                "isolation)"
+            )
+            raise ValueError(msg)
         records: list[ConsentRecord] = []
         with self._lock:
             for segment in self._iter_segments():
-                records.extend(self._read_segment_filtered(segment, user_id=user_id))
+                records.extend(
+                    self._read_segment_filtered(
+                        segment,
+                        user_id=user_id,
+                        mind_id=mind_id,
+                    ),
+                )
         return records
 
-    def forget(self, user_id: str) -> int:
-        """GDPR Article 17 — purge every record for ``user_id``.
+    def forget(
+        self,
+        user_id: str | None = None,
+        *,
+        mind_id: str | None = None,
+    ) -> int:
+        """GDPR Article 17 — purge every record matching the filters.
+
+        Filters AND-combine like :meth:`history`. At least one of
+        ``user_id`` / ``mind_id`` MUST be supplied — a wildcard purge
+        is rejected so a buggy caller can't wipe the entire ledger.
 
         Walks every segment, rewrites in-place omitting any record
-        whose ``user_id`` matches, then appends a single
+        matching the filter, then appends a single
         :data:`ConsentAction.DELETE` tombstone so the audit trail
-        records that the deletion happened (without the
-        tombstone, an external auditor couldn't distinguish
-        "user was never recorded" from "user was forgotten").
+        records that the deletion happened (without the tombstone,
+        an external auditor couldn't distinguish "user was never
+        recorded" from "user was forgotten"). The tombstone carries
+        whichever filter values were supplied, plus a context entry
+        ``purged_record_count`` for forensics.
 
         The rewrite is atomic per segment (write to ``<segment>.tmp``,
         then ``os.replace``) so a crash mid-rewrite leaves the
         original segment intact.
 
+        Args:
+            user_id: When set, purge records with this user_id (AND
+                with mind_id if also set).
+            mind_id: When set (Phase 8 / T8.21), purge records with
+                this mind_id (AND with user_id if also set). Used by
+                the ``sovyx mind forget <mind_id>`` CLI to wipe an
+                entire mind's voice audit trail across users.
+
         Returns:
             Number of records purged (excludes the tombstone).
+
+        Raises:
+            ValueError: Both ``user_id`` and ``mind_id`` are ``None``.
         """
+        if user_id is None and mind_id is None:
+            msg = (
+                "ConsentLedger.forget requires at least one of "
+                "user_id or mind_id; a wildcard purge is not "
+                "supported (would defeat per-user / per-mind audit "
+                "isolation)"
+            )
+            raise ValueError(msg)
         purged_total = 0
         with self._lock:
             for segment in self._iter_segments():
                 purged_total += self._rewrite_segment_excluding(
                     segment,
                     user_id=user_id,
+                    mind_id=mind_id,
                 )
         # Tombstone goes through the normal append path so it's also
-        # subject to PII validation + fsync + locking.
+        # subject to PII validation + fsync + locking. Empty user_id
+        # is acceptable for mind-only purges (the tombstone records
+        # WHICH mind was forgotten; user_id="" is the wildcard
+        # marker matching the JSONL serialisation).
+        tombstone_user_id = user_id if user_id is not None else ""
         self.append(
-            user_id=user_id,
+            user_id=tombstone_user_id,
             action=ConsentAction.DELETE,
             context={"purged_record_count": purged_total},
+            mind_id=mind_id,
         )
         logger.warning(
             "voice.consent.user_forgotten",
             **{
-                "voice.user_id_hash_prefix": user_id[:8] if user_id else "",
+                "voice.user_id_hash_prefix": (user_id or "")[:8],
+                "voice.mind_id": mind_id or "",
                 "voice.purged_record_count": purged_total,
             },
         )
@@ -430,8 +527,33 @@ class ConsentLedger:
             yield self._path
 
     @staticmethod
-    def _read_segment_filtered(segment: Path, *, user_id: str) -> list[ConsentRecord]:
-        """Read ``segment`` and return records matching ``user_id``."""
+    def _record_matches(
+        data: Mapping[str, Any],
+        *,
+        user_id: str | None,
+        mind_id: str | None,
+    ) -> bool:
+        """AND-filter: a None filter is wildcard, a set filter is strict.
+
+        Phase 8 / T8.21 isolation contract: if the operator asks for
+        ``mind_id="aria"``, legacy records (no mind_id field) MUST
+        NOT match — they predate per-mind audit and can't be
+        retroactively assigned to a mind. Conversely, a query with
+        ``mind_id=None`` accepts both legacy + mind-tagged records.
+        """
+        if user_id is not None and data.get("user_id") != user_id:
+            return False
+        return not (mind_id is not None and data.get("mind_id") != mind_id)
+
+    @classmethod
+    def _read_segment_filtered(
+        cls,
+        segment: Path,
+        *,
+        user_id: str | None,
+        mind_id: str | None,
+    ) -> list[ConsentRecord]:
+        """Read ``segment`` and return records matching the AND-filter."""
         out: list[ConsentRecord] = []
         try:
             with open(segment, encoding="utf-8") as fh:  # noqa: PTH123
@@ -453,15 +575,19 @@ class ConsentLedger:
                             },
                         )
                         continue
-                    if data.get("user_id") != user_id:
+                    if not cls._record_matches(data, user_id=user_id, mind_id=mind_id):
                         continue
                     try:
+                        record_mind_id = data.get("mind_id")
                         out.append(
                             ConsentRecord(
                                 timestamp_utc=str(data["timestamp_utc"]),
                                 user_id=str(data["user_id"]),
                                 action=ConsentAction(data["action"]),
                                 context=dict(data.get("context", {})),
+                                mind_id=(
+                                    str(record_mind_id) if record_mind_id is not None else None
+                                ),
                             ),
                         )
                     except (KeyError, ValueError):
@@ -480,9 +606,10 @@ class ConsentLedger:
         self,
         segment: Path,
         *,
-        user_id: str,
+        user_id: str | None,
+        mind_id: str | None,
     ) -> int:
-        """Rewrite ``segment`` omitting every record with ``user_id``.
+        """Rewrite ``segment`` omitting every record matching the filter.
 
         Returns the count of records EXCLUDED. Atomic via tempfile +
         os.replace so a crash mid-rewrite doesn't lose the original
@@ -507,7 +634,7 @@ class ConsentLedger:
                         # audit anomalies in someone else's record.
                         dst.write(raw)
                         continue
-                    if data.get("user_id") == user_id:
+                    if self._record_matches(data, user_id=user_id, mind_id=mind_id):
                         excluded += 1
                         continue
                     dst.write(raw)
