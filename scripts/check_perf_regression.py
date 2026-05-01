@@ -80,10 +80,21 @@ _ABSOLUTE_P99_CEILING_US: float = 10_000.0
 _DEFAULT_BENCH_ITERATIONS: int = 20_000
 
 # Default independent-run count for median-of-N computation. Three is
-# the canonical minimum (survives exactly one noisy run); five is
-# overkill for a 60-second CI gate. Odd numbers avoid the ambiguity
-# of the median between two central values.
-_DEFAULT_REPEATS: int = 3
+# the canonical minimum (survives exactly one noisy run); five doubles
+# the noise headroom for the cost of ~30s extra CI time. Odd numbers
+# avoid the ambiguity of the median between two central values.
+#
+# Bumped 3 → 5 in v0.27.0 after CLAUDE.md anti-pattern #31 fired on
+# the v0.27.0 release tag: the SAME gate ran twice (standalone CI +
+# Publish to PyPI / CI Gate workflow_call) on the same commit and
+# the same runner pool — one passed (41s), one failed (43s). The
+# split outcome with zero overlap on observability/logging paths
+# (this release touched voice/* + dashboard/* + metrics.py — none of
+# which sit on the ``logging.emit.async / logging.emit.minimal``
+# measurement path) is the textbook anti-pattern #31 signature for
+# runner contention drift, and the documented enterprise fix is
+# exactly this constant bump.
+_DEFAULT_REPEATS: int = 5
 
 
 def _run_benchmark(*, iterations: int, repo_root: Path) -> list[dict[str, Any]]:
