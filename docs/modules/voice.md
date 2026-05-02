@@ -40,7 +40,11 @@ Frames are 512 int16 samples at 16 kHz (~32 ms). The pipeline does not own audio
 ## Example
 
 ```python
-# src/sovyx/voice/pipeline.py — constants and state
+# src/sovyx/voice/pipeline/_orchestrator.py — constants and state
+# (the legacy pipeline.py was split into a subpackage; constants live
+# alongside the orchestrator class. Public re-exports keep
+# ``from sovyx.voice.pipeline import VoicePipeline, VoicePipelineConfig``
+# working unchanged.)
 _SAMPLE_RATE = 16_000
 _FRAME_SAMPLES = 512            # 32 ms at 16 kHz
 _SILENCE_FRAMES_END = 22        # ~700 ms silence ends an utterance
@@ -353,6 +357,6 @@ right now" — both are observable, neither corrupts the other.
 
 ## See also
 
-- Source: `src/sovyx/voice/pipeline.py`, `src/sovyx/voice/wyoming.py`, `src/sovyx/voice/stt.py`, `src/sovyx/voice/tts_piper.py`, `src/sovyx/voice/tts_kokoro.py`, `src/sovyx/voice/vad.py`, `src/sovyx/voice/wake_word.py`, `src/sovyx/voice/auto_select.py`, `src/sovyx/voice/jarvis.py`.
+- Source: `src/sovyx/voice/pipeline/` (orchestrator + state machine + barge-in + output queue, split into the subpackage in v0.21.x), `src/sovyx/voice/wyoming.py`, `src/sovyx/voice/stt.py`, `src/sovyx/voice/tts_piper.py`, `src/sovyx/voice/tts_kokoro.py`, `src/sovyx/voice/vad.py`, `src/sovyx/voice/wake_word.py`, `src/sovyx/voice/auto_select.py`, `src/sovyx/voice/jarvis.py`.
 - Tests: `tests/unit/voice/`, `tests/integration/voice/`.
 - Related modules: [`cognitive`](./engine.md) for the loop that consumes perceptions, [`dashboard`](./dashboard.md) for `/api/voice/status`.
