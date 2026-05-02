@@ -189,3 +189,89 @@ release:
   72-hour notification webhook without editing YAML.
 * Internal TLS gate for the dashboard so a misconfigured reverse
   proxy can no longer expose plain HTTP.
+
+---
+
+## Self-assessment summary
+
+> Phase 7 / T7.48. Last reviewed 2026-05-02 against the v0.30.0
+> single-mind GA candidate.
+
+This section is the formal pass/fail summary per regime. The
+matrix above is the line-item evidence; this is the
+roll-up that an operator's compliance officer signs before deployment.
+
+### GDPR (EU 2016/679) — **Pass with documented operator obligations**
+
+| Article | Sovyx posture | Status |
+|---|---|---|
+| Art. 5(1)(a) — lawful, fair, transparent processing | Operator-side policy + Sovyx audit log records the boundary at every TRANSCRIBE/STORE/SHARE event. | **Operator** owns lawful-basis declaration |
+| Art. 5(1)(c) — data minimisation | `PIIRedactor` + four log verbosity modes + voice subsystem persists no raw audio by default | **Implemented** |
+| Art. 5(1)(e) — storage limitation | `LoggingConfig.retention_days` (logs) + `MindConfig.retention.*` (per-mind data) + `voice_audio_retention_days` | **Implemented** (Phase 8 T8.21 step 6) |
+| Art. 15 — Right of access | `GET /api/conversations/export?mind_id=X` + `sovyx voice history` | **Implemented** |
+| Art. 17 — Right to erasure | `sovyx mind forget` CLI + `POST /api/mind/{mind_id}/forget` | **Implemented** (Phase 8 T8.21 steps 4-5) |
+| Art. 20 — Portability | JSONL export end-to-end | **Implemented** |
+| Art. 30 — Records of processing | Audit log + ConsentLedger (per-user + per-mind) | **Implemented** |
+| Art. 32 — Security of processing | Hash-chain integrity + plugin sandbox + zero-trust posture | **Implemented** |
+| Art. 33 — Breach notification (72h) | `AlertManager` security.incident.detected webhook | **Partial** — operator wires sink |
+
+**Verdict:** GDPR-compliant for self-hosted deployments where the
+operator owns the lawful-basis policy + DPA chain. Sovyx provides
+the technical controls; the operator owns the Article 6 lawful-basis
+declaration and any Article 13/14 transparency notice.
+
+### LGPD (Brasil 13.709/2018) — **Pass with documented operator obligations**
+
+LGPD parallels GDPR for the technical-controls subset (Art. 18 I/V/VI
+mirror GDPR Art. 15/20/17). Article 16 storage-limitation is
+satisfied by the same retention infrastructure as GDPR Art. 5(1)(e).
+Article 37 audit trail is satisfied by the same audit log. **Same
+verdict as GDPR.**
+
+### CCPA / CPRA (California) — **Pass for self-hosted; Cloud-LLM operators add DPA**
+
+* Right to know (Sec. 1798.110): `sovyx voice history` + conversation
+  export — **Implemented**.
+* Right to delete (Sec. 1798.105): `sovyx mind forget` — **Implemented**.
+* Right to opt out of sale: Sovyx never sells data — **N/A by design**.
+
+**Operator obligation:** when wiring a cloud LLM provider, the
+operator MUST sign a DPA with the provider that prohibits training
+on operator data (cf. OpenAI DPA, Anthropic DPA, Google Cloud DPA).
+
+### BIPA (Illinois 740 ILCS 14) — **Pass with explicit opt-in**
+
+Voice biometrics (voiceprint / speaker-ID) are **off by default**.
+`voice_biometric_processing_enabled = False` ships as the safe
+posture. When operators flip the flag to enable Phase 8 multi-mind
+voice ID, they MUST capture written consent from each enrolled
+speaker per BIPA §15. Sovyx provides the technical control + audit
+trail (every SHARE event involving biometric features is logged);
+the legal-basis chain is the operator's responsibility.
+
+### HIPAA (US healthcare) — **Forward-compatible flag; not yet active**
+
+`EngineConfig.compliance.hipaa_mode: bool = False` ships as a
+forward-compat flag (Phase 8 T8.21 step 1). When future minor
+cycles wire its effects (HIPAA-minimum retention horizons + HMAC
+chain on ConsentLedger + mandatory encryption-at-rest), operators
+deploying in healthcare contexts will flip it to `True`. As of
+v0.30.0 the flag is reserved schema only.
+
+**Until HIPAA mode is active**, Sovyx is **not** marketed as
+HIPAA-compliant. Healthcare deployments should defer to a future
+release or implement compensating controls (operator-side
+encryption-at-rest, custom retention horizons).
+
+### Aggregate verdict
+
+* **Self-hosted, non-healthcare deployment** (typical Sovyx user):
+  GDPR + LGPD + CCPA/CPRA + BIPA technical controls all pass at
+  the v0.30.0 GA candidate point. Operator owns the lawful-basis
+  + DPA chain.
+* **Healthcare deployment**: defer; HIPAA mode active flag wires
+  in v0.31.x patches per the master mission roadmap.
+
+This summary is **not** a legal opinion. Operators should review
+the line-item matrix above with their counsel and document the
+verdict in their compliance file before deployment.

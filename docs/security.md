@@ -203,6 +203,108 @@ resident on the host, LLM providers logging or training on cloud queries
 
 ---
 
+## Security audit summary
+
+> Phase 7 / T7.47. Latest run: 2026-05-02.
+
+Static-analysis + dependency-policy snapshot of the codebase at
+the v0.30.0 GA candidate point.
+
+### Static analysis (Bandit)
+
+```
+Code scanned:        126,513 lines of code
+Issues identified:   0
+Severity:            Undefined: 0  Low: 0  Medium: 0  High: 0
+Confidence:          Undefined: 0  Low: 0  Medium: 0  High: 0
+Files scanned:       468 Python source files
+Specifically suppressed (#nosec): 2 entries
+```
+
+The 2 specifically-suppressed `#nosec` entries are for the
+`subprocess` module in `voice/_phonetic_matcher.py` (Phase 8 / T8.12)
+where the binary is `shutil.which`-resolved + arguments are bounded
++ no shell. Both annotations cite the rationale inline and have
+matching test coverage that exercises the subprocess timeout +
+non-zero-exit + OSError paths.
+
+Run command (CI-equivalent):
+
+```bash
+uv run bandit -r src/sovyx/ --configfile pyproject.toml
+```
+
+### Dependency security policy
+
+Sovyx pins exact dependency versions in `uv.lock` (committed). CI
+enforces `uv lock --check` so a drift between `pyproject.toml` and
+`uv.lock` fails the build. Dependency upgrades happen via deliberate
+PRs that touch both files — never silent.
+
+Vulnerability scans are run via `pip-audit` against the locked
+dependency tree (operator-side, not yet wired into CI as of
+v0.30.0 — tracked as a v0.30.x patch item). Operators running
+their own deployment SHOULD run:
+
+```bash
+uv export --no-dev | pip-audit --requirement /dev/stdin --strict
+```
+
+before each tag bump. A `--strict` exit failure should be triaged
+before deployment; non-strict (informational) findings should be
+documented in the operator's compliance log.
+
+### Plugin sandbox audit posture
+
+The five-layer sandbox documented above is the **architectural**
+defense; the **operational** evidence is:
+
+* `tests/security/` exercises every layer's reject path (50+ tests).
+* `tests/unit/plugins/test_sandbox_*.py` covers the SandboxedHttpClient
+  + filesystem-sandbox positive + negative paths.
+* `tests/property/` includes Hypothesis-based tests pinning the
+  AST scanner against arbitrary attacker-generated import graphs.
+
+No bypass has been reported as of v0.30.0. Re-audits at every minor
+version bump are operator-side per
+[`OPERATOR-DEBT-MASTER-2026-05-01.md`](../docs-internal/OPERATOR-DEBT-MASTER-2026-05-01.md).
+
+### Test coverage (T7.46 evidence)
+
+Run on Windows 11 dev hardware, 2026-05-02:
+
+```
+13,512 tests passed, 26 skipped, 0 failed in 446 s
+```
+
+Coverage spans:
+
+* `tests/unit/` — 12k+ unit tests across every subpackage.
+* `tests/integration/` — cross-component flow tests.
+* `tests/dashboard/` — 1,040 backend API tests.
+* `tests/property/` — Hypothesis property-based tests including
+  cross-mind isolation invariants (T8.20).
+* `tests/security/` — sandbox + auth + plugin permission tests.
+* `tests/stress/` — load / contention / soak tests.
+
+CI runs on a self-hosted `sovyx-4core` runner with Linux + Python
+3.11 + 3.12 matrix; local Windows runtime is ~50% of total time
+because of psutil's Windows-specific handle-iteration cost
+(anti-pattern #30). CI runtime stays under the 5-minute T7.46
+target via parallelisation across the matrix.
+
+### Audit log integrity
+
+The `audit/audit.jsonl` log uses `HashChainHandler` for tamper
+evidence. Each record carries a SHA-256 of the previous record's
+hash, forming a chain that detects insertion, deletion, or
+modification. `sovyx audit verify-chain` exits non-zero on any
+break. Operators run this before submitting any audit extract to
+a regulator or third party — a passing verification is the only
+evidence that the extract is integrity-protected.
+
+---
+
 ## Reporting vulnerabilities
 
 Please email **security@sovyx.ai** with a minimal reproduction and the
