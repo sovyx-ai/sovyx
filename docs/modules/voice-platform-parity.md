@@ -134,7 +134,7 @@ single mature API). Hardening targets:
 
 This subsection is the **truth-as-of-2026-05-01**. Hardware-blocked
 items are tracked in
-[`OPERATOR-DEBT-MASTER-2026-05-01.md`](../../docs-internal/OPERATOR-DEBT-MASTER-2026-05-01.md).
+[`OPERATOR-DEBT-MASTER-2026-05-02.md`](../../docs-internal/OPERATOR-DEBT-MASTER-2026-05-02.md).
 
 | Platform | Daily-driver pilot | Soak status | Notes |
 |---|---|---|---|
@@ -205,5 +205,5 @@ enough operator demand to justify the platform-specific hardening:
 * **Public audio quality:** [`docs/audio-quality.md`](../audio-quality.md)
 * **Public troubleshooting (Windows):** [`docs/modules/voice-troubleshooting-windows.md`](voice-troubleshooting-windows.md)
 * **Per-platform device test:** [`docs/modules/voice-device-test.md`](voice-device-test.md)
-* **Operator hardware pilots:** `docs-internal/OPERATOR-DEBT-MASTER-2026-05-01.md` D11–D13 (gitignored).
+* **Operator hardware pilots:** `docs-internal/OPERATOR-DEBT-MASTER-2026-05-02.md` D11–D13 (gitignored).
 * **OpenTelemetry semconv:** [`docs/modules/voice-otel-semconv.md`](voice-otel-semconv.md)

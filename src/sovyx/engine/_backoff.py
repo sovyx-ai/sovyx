@@ -29,7 +29,8 @@ for cross-component primitives (alongside ``_lock_dict.py``).
 
 Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25
 band-aid #10 (``_capture_task.py:75``); F1 inventory entry #10
-(`docs-internal/diagnostics/F1-band-aid-inventory-2026-04-25.md`);
+(archived at
+`docs-internal/archive/audits-completed/F1-band-aid-inventory-2026-04-25.md`);
 AWS exponential backoff guide
 (``aws.amazon.com/blogs/architecture/exponential-backoff-and-
 jitter/``); CLAUDE.md anti-patterns #9 (StrEnum), #11

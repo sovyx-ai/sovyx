@@ -172,7 +172,7 @@ class RetentionTuningConfig(BaseSettings):
       Two policies on the same surface would cause double-deletion.
 
     See :class:`SafetyTuningConfig` for the ``BaseSettings`` rationale.
-    See ``OPERATOR-DEBT-MASTER-2026-05-01.md`` D9/D18 for the design
+    See ``OPERATOR-DEBT-MASTER-2026-05-02.md`` D9/D18 for the design
     decisions ratifying these defaults.
 
     Reference: GDPR Art. 5(1)(e) "storage limitation" + LGPD Art. 16
@@ -2372,7 +2372,7 @@ class ComplianceConfig(BaseModel):
     HIPAA) ship behind opt-in flags so operators declare deployment
     intent explicitly.
 
-    See ``OPERATOR-DEBT-MASTER-2026-05-01.md`` D9 for the design
+    See ``OPERATOR-DEBT-MASTER-2026-05-02.md`` D9 for the design
     decision pinning HIPAA mode as forward-compat-only at v0.28.0.
     """
 

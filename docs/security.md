@@ -267,7 +267,7 @@ defense; the **operational** evidence is:
 
 No bypass has been reported as of v0.30.0. Re-audits at every minor
 version bump are operator-side per
-[`OPERATOR-DEBT-MASTER-2026-05-01.md`](../docs-internal/OPERATOR-DEBT-MASTER-2026-05-01.md).
+[`OPERATOR-DEBT-MASTER-2026-05-02.md`](../docs-internal/OPERATOR-DEBT-MASTER-2026-05-02.md).
 
 ### Test coverage (T7.46 evidence)
 
