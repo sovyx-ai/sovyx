@@ -1,0 +1,94 @@
+%% Sovyx — Compliance / Data Flow (per-mind isolation + erasure surfaces)
+%% README §14 reference. GDPR Art. 17 + LGPD Art. 18 VI surfaces.
+
+flowchart TB
+    USER[User interaction<br/>voice / text / channel]
+
+    subgraph Capture["Audio capture path"]
+        AC1[Mic input]
+        AC2[ConsentLedger<br/>WAKE event<br/>voice/_consent_ledger.py]
+        AC3[STT transcribe]
+        AC4[ConsentLedger<br/>TRANSCRIBE event]
+    end
+
+    subgraph PerMindStorage["Per-mind isolated storage"]
+        BRAIN_LUCIA[(mind=lucia<br/>brain.db<br/>concepts + episodes + relations)]
+        CONV_LUCIA[(mind=lucia<br/>conversations.db<br/>turns + imports)]
+        BRAIN_JONNY[(mind=jonny<br/>brain.db)]
+        CONV_JONNY[(mind=jonny<br/>conversations.db)]
+        SYS[(shared system pool<br/>system.db<br/>consolidation_log + daily_stats)]
+    end
+
+    LEDGER[(ConsentLedger<br/>data_dir/voice/consent.jsonl<br/>append-only<br/>cross-process file lock<br/>fsync per write)]
+
+    subgraph LedgerActions["7 ConsentAction values"]
+        L1[WAKE]
+        L2[LISTEN]
+        L3[TRANSCRIBE]
+        L4[STORE]
+        L5[SHARE]
+        L6[DELETE — operator erasure]
+        L7[RETENTION_PURGE — time-based]
+    end
+
+    subgraph ErasureCLI["5 erasure surfaces"]
+        E1[sovyx mind forget mind_id<br/>→ MindForgetService<br/>wipes brain + conv + system]
+        E2[sovyx mind retention prune mind_id<br/>→ MindRetentionService<br/>per-pool time-based]
+        E3[sovyx mind retention status mind_id<br/>→ same RPC dry_run=True]
+        E4[sovyx voice forget --user-id<br/>→ ConsentLedger.forget<br/>writes DELETE tombstone]
+        E5[sovyx voice history --user-id<br/>→ right-of-access audit dump]
+    end
+
+    subgraph Dashboard["Dashboard endpoints — defense-in-depth"]
+        D1[POST /api/mind/id/forget<br/>requires confirm: id field]
+        D2[POST /api/mind/id/retention/prune]
+        D3[GET /api/voice/consent/history]
+    end
+
+    subgraph RetentionConfig["Retention policy — per-mind override"]
+        RC1[EngineConfig.tuning.retention<br/>global defaults]
+        RC2[MindConfig.retention<br/>per-mind override]
+        RC3[Default horizons<br/>episodes: 30d<br/>conversations: 30d<br/>consolidation: 365d<br/>daily_stats: 90d<br/>consent: 0d unlimited]
+    end
+
+    subgraph Scheduler["RetentionScheduler"]
+        SC1[default-OFF<br/>opt-in per mind via<br/>auto_prune_enabled]
+        SC2[anti-pattern #34<br/>bootstrap skips instantiation<br/>when disabled]
+    end
+
+    subgraph Compliance["6-regime self-assessment"]
+        REG1[GDPR Art. 5/17 ✅<br/>operator obligations]
+        REG2[LGPD Art. 16/18 ✅]
+        REG3[CCPA / CPRA ✅<br/>self-hosted: operator is business]
+        REG4[BIPA ✅<br/>opt-in via voice_biometric_<br/>processing_enabled=False default]
+        REG5[HIPAA forward-compat<br/>hipaa_mode flag<br/>active wiring v0.31.x]
+    end
+
+    USER --> Capture
+    Capture --> PerMindStorage
+    Capture --> LEDGER
+    LEDGER -.records.-> LedgerActions
+
+    USER -.invokes.-> ErasureCLI
+    USER -.dashboard.-> Dashboard
+    Dashboard --> ErasureCLI
+    ErasureCLI --> PerMindStorage
+    ErasureCLI --> LEDGER
+
+    RetentionConfig --> Scheduler
+    Scheduler --> ErasureCLI
+    Scheduler -.scheduled prune.-> PerMindStorage
+
+    Compliance -.posture.-> ErasureCLI
+    Compliance -.posture.-> RetentionConfig
+
+    classDef storage fill:#4a3a5f,stroke:#7a6a8f,color:#e8e8e8
+    classDef erase fill:#5f2d3a,stroke:#8f5a6a,color:#e8e8e8
+    classDef ledger fill:#2d4a3e,stroke:#5a8a6e,color:#e8e8e8
+    classDef config fill:#5f4a2d,stroke:#8f7a5d,color:#e8e8e8
+    classDef regime fill:#1e3a5f,stroke:#4a7fb8,color:#e8e8e8
+    class BRAIN_LUCIA,CONV_LUCIA,BRAIN_JONNY,CONV_JONNY,SYS storage
+    class E1,E2,E3,E4,E5,D1,D2,D3 erase
+    class LEDGER,L1,L2,L3,L4,L5,L6,L7,AC1,AC2,AC3,AC4 ledger
+    class RC1,RC2,RC3,SC1,SC2 config
+    class REG1,REG2,REG3,REG4,REG5 regime

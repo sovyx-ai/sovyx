@@ -1,0 +1,77 @@
+%% Sovyx — Cognitive Loop Detail (5 phases + 2 schedulers)
+%% README §6 reference. Latency budgets per audit R02.
+
+flowchart TB
+    PER[Perception<br/>max 10,000 chars<br/>perceive.py:71]
+
+    subgraph Perceive["1. Perceive — perceive.py:62"]
+        P1[Normalize input]
+        P2[Channel context bind]
+        P3[Build Perception]
+    end
+
+    subgraph Attend["2. Attend — attend.py:40"]
+        A1[Salience scoring]
+        A2[Safety pre-check]
+    end
+
+    subgraph SafetyPipeline["Safety guards — cognitive/safety/"]
+        SF1[PIIGuard<br/>output redaction<br/>pii_guard.py:277]
+        SF2[InjectionContextTracker<br/>multi-turn window=5<br/>injection_tracker.py:294]
+        SF3[OutputGuard<br/>regex+LLM cascade<br/>output_guard.py:72]
+        SF4[FinancialGate<br/>tool-call intercept<br/>financial_gate.py:263]
+    end
+
+    subgraph Think["3. Think — think.py:23"]
+        T1[Context assembly<br/>RRF retrieval k=60]
+        T2[LLM Router<br/>10 providers]
+        T3[Streaming response]
+    end
+
+    subgraph Act["4. Act — act.py:131"]
+        AC1[ReAct loop<br/>max 3 iterations<br/>act.py:62]
+        AC2[Plugin tool calls<br/>5-layer sandbox]
+        AC3[Financial confirm<br/>300s timeout]
+    end
+
+    subgraph Reflect["5. Reflect — reflect/phase.py:45"]
+        R1[Concept extraction<br/>PAD 3D emotional]
+        R2[Episode encoding]
+        R3[Hebbian co-activation<br/>min(1.0, old + lr × (1−old) × co)]
+        R4[Brain write-back]
+    end
+
+    subgraph Schedulers["Background schedulers"]
+        CONS[Consolidation<br/>6h ±20% jitter<br/>consolidation.py:533]
+        DREAM[Dream<br/>02:00 UTC<br/>dream.py:420]
+    end
+
+    GATE[CogLoopGate<br/>PriorityQueue maxsize=10<br/>30s default timeout<br/>gate.py:43-150]
+
+    PER --> GATE
+    GATE --> Perceive
+    Perceive --> Attend
+    Attend --> SafetyPipeline
+    SafetyPipeline --> Think
+    Think --> Act
+    Act --> Reflect
+    Reflect --> RESP[Response]
+
+    Reflect --> BRAIN[(Brain<br/>per-mind SQLite)]
+    CONS --> BRAIN
+    DREAM --> BRAIN
+
+    OTEL[OTel histogram<br/>sovyx.cognitive.latency<br/>full-loop only]
+    Reflect -.metrics.-> OTEL
+
+    note1[Per-phase latency<br/>UNTIMED at HEAD<br/>only full-loop measured]
+    OTEL -.-> note1
+
+    classDef phase fill:#2d4a3e,stroke:#5a8a6e,color:#e8e8e8
+    classDef safety fill:#5f2d3a,stroke:#8f5a6a,color:#e8e8e8
+    classDef sched fill:#5f4a2d,stroke:#8f7a5d,color:#e8e8e8
+    classDef gate fill:#1e3a5f,stroke:#4a7fb8,color:#e8e8e8
+    class P1,P2,P3,A1,A2,T1,T2,T3,AC1,AC2,AC3,R1,R2,R3,R4 phase
+    class SF1,SF2,SF3,SF4 safety
+    class CONS,DREAM sched
+    class GATE,PER,RESP gate

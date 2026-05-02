@@ -1,0 +1,80 @@
+%% Sovyx — System Architecture (top-level data flow)
+%% README §5 reference. Renders in GitHub mermaid + MkDocs.
+
+flowchart TB
+    subgraph Channels["Inbound channels"]
+        TG[Telegram]
+        SG[Signal]
+        VX[Voice mic]
+        WY[Wyoming<br/>HA Voice Assist]
+        WEB[Dashboard chat]
+        CLI[CLI REPL]
+    end
+
+    subgraph Bridge["Bridge layer"]
+        BR[BridgeManager<br/>bridge/manager.py]
+        VCB[VoiceCognitiveBridge<br/>voice/cognitive_bridge.py]
+    end
+
+    GATE[CogLoopGate<br/>asyncio.PriorityQueue<br/>maxsize=10, timeout 30s]
+
+    subgraph CogLoop["Cognitive Loop — 5 request-driven phases"]
+        direction LR
+        P[Perceive] --> AT[Attend]
+        AT --> TH[Think]
+        TH --> ACT[Act]
+        ACT --> RF[Reflect]
+    end
+
+    subgraph Engine["Engine services"]
+        SAFETY[Safety guards<br/>4 layers]
+        CTX[Context Assembler]
+        LLM[LLM Router<br/>10 providers]
+        PLG[Plugin Executor<br/>5-layer sandbox]
+    end
+
+    subgraph Brain["Brain Graph — per-mind SQLite + sqlite-vec"]
+        CON[(Concepts<br/>FTS5 + vec0 384d)]
+        EPI[(Episodes<br/>vec0 384d)]
+        REL[(Relations)]
+        EMB[Retrieval<br/>KNN + FTS5 + RRF k=60]
+    end
+
+    subgraph Background["Background schedulers"]
+        CONS[Consolidation<br/>every 6h ±20% jitter]
+        DREAM[Dream<br/>02:00 UTC nightly]
+        RET[RetentionScheduler<br/>default-OFF, opt-in]
+    end
+
+    EB(((Event Bus<br/>15+ Event subclasses)))
+    DASH[FastAPI Dashboard<br/>91 routes, 30 routers]
+
+    TG & SG & WEB & CLI --> BR
+    VX & WY --> VCB
+    BR & VCB --> GATE
+    GATE --> CogLoop
+
+    AT <-.-> SAFETY
+    TH --> CTX
+    CTX --> Brain
+    TH --> LLM
+    ACT --> PLG
+    RF --> Brain
+
+    CONS --> Brain
+    DREAM --> Brain
+    RET --> Brain
+
+    CogLoop --> BR
+    CogLoop --> EB
+    EB -.WebSocket.-> DASH
+    DASH -.HTTP.-> WEB
+
+    classDef channel fill:#1e3a5f,stroke:#4a7fb8,color:#e8e8e8
+    classDef engine fill:#2d4a3e,stroke:#5a8a6e,color:#e8e8e8
+    classDef brain fill:#4a3a5f,stroke:#7a6a8f,color:#e8e8e8
+    classDef bg fill:#5f4a2d,stroke:#8f7a5d,color:#e8e8e8
+    class TG,SG,VX,WY,WEB,CLI channel
+    class BR,VCB,GATE,SAFETY,CTX,LLM,PLG engine
+    class CON,EPI,REL,EMB brain
+    class CONS,DREAM,RET bg

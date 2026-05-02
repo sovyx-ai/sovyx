@@ -1,0 +1,103 @@
+%% Sovyx — Voice Subsystem Detail (capture → bypass → ring → VAD → router → STT → loop → TTS)
+%% README §9 reference. Cross-platform branches highlighted.
+
+flowchart TB
+    MIC[Mic input<br/>16-bit PCM, 16 kHz]
+
+    subgraph CapturePlatform["Platform capture"]
+        WIN[Windows<br/>WASAPI / MME / DirectSound]
+        LIN[Linux<br/>PulseAudio / PipeWire / ALSA]
+        MAC[macOS<br/>CoreAudio]
+    end
+
+    subgraph BypassTiers["Voice Clarity APO bypass tiers — Windows"]
+        T1[Tier 1 RAW<br/>IAudioClient3 RAW<br/>flag-gated stub<br/>T27 deferred]
+        T2[Tier 2 host_api_rotate<br/>MME→WASAPI then exclusive<br/>shipped, opt-in]
+        T3[Tier 3 WASAPI exclusive<br/>autofix=True default<br/>SHIPPED, default-on]
+    end
+
+    subgraph LinuxBypass["Linux bypass strategies"]
+        L1[ALSA mixer reset<br/>default-on]
+        L2[PipeWire direct<br/>opt-in]
+        L3[Session manager escape<br/>runtime-only]
+    end
+
+    APO[Voice Clarity APO detector<br/>winreg-based<br/>_apo_detector.py:230]
+    COLD[Cold probe<br/>signal validation<br/>AP #28<br/>probe/_cold.py:296]
+
+    subgraph CaptureTask["AudioCaptureTask — voice/capture/ 5-mixin"]
+        EM[EpochMixin<br/>40-bit packed<br/>_epoch.py:48-66]
+        RM[RingMixin<br/>256-frame buffer<br/>_ring.py]
+        LM[LifecycleMixin<br/>_lifecycle_mixin.py]
+        LP[LoopMixin<br/>audio thread<br/>_loop_mixin.py]
+        RST[RestartMixin<br/>5 strategies<br/>_restart_mixin.py 1549 LOC]
+    end
+
+    COORD[CaptureIntegrityCoordinator<br/>capture_integrity.py:433<br/>strategy iteration]
+
+    VAD[SileroVAD v5<br/>32 ms frames @ 16 kHz<br/>512 samples per frame]
+
+    ROUTER[WakeWordRouter<br/>N detectors per mind<br/>first-hit wins<br/>_wake_word_router.py:121]
+
+    subgraph WakeDetect["Wake-word detection paths"]
+        ONNX[ONNX detector<br/>~80ms latency]
+        STT_FB[STT fallback<br/>Moonshine ASR<br/>~500ms latency<br/>T8.17-T8.19]
+    end
+
+    DISPATCH[Mind dispatch<br/>≤50ms target<br/>T8.10]
+
+    STT[STT engine<br/>Moonshine ONNX]
+
+    subgraph Pipeline["VoicePipeline — 6-state machine"]
+        S1[IDLE]
+        S2[WAKE_DETECTED]
+        S3[RECORDING]
+        S4[TRANSCRIBING]
+        S5[THINKING]
+        S6[SPEAKING]
+    end
+
+    BARGE[Barge-in detector<br/>≥5 sustained frames<br/>~160ms]
+
+    LOOP[Cognitive Loop]
+
+    TTS[TTS engine<br/>Piper / Kokoro<br/>filler 800ms default]
+
+    OUTQ[AudioOutputQueue<br/>+ mic ducking -18dB<br/>+ half-duplex gate]
+
+    SPK[Speaker output]
+
+    MIC --> CapturePlatform
+    APO --> WIN
+    WIN --> BypassTiers
+    LIN --> LinuxBypass
+    MAC --> CaptureTask
+    BypassTiers --> COORD
+    LinuxBypass --> COORD
+    COORD --> CaptureTask
+    COLD --> COORD
+
+    CaptureTask --> VAD
+    VAD --> ROUTER
+    ROUTER --> WakeDetect
+    WakeDetect --> DISPATCH
+    DISPATCH --> Pipeline
+    Pipeline --> STT
+    STT --> LOOP
+    LOOP --> TTS
+    TTS --> OUTQ
+    OUTQ --> SPK
+
+    BARGE -.interrupt.-> Pipeline
+    OUTQ -.duck mic.-> CaptureTask
+
+    classDef platform fill:#1e3a5f,stroke:#4a7fb8,color:#e8e8e8
+    classDef bypass fill:#5f2d3a,stroke:#8f5a6a,color:#e8e8e8
+    classDef capture fill:#2d4a3e,stroke:#5a8a6e,color:#e8e8e8
+    classDef pipeline fill:#4a3a5f,stroke:#7a6a8f,color:#e8e8e8
+    classDef io fill:#5f4a2d,stroke:#8f7a5d,color:#e8e8e8
+    class WIN,LIN,MAC platform
+    class T1,T2,T3,L1,L2,L3 bypass
+    class EM,RM,LM,LP,RST,COORD,VAD,APO,COLD capture
+    class S1,S2,S3,S4,S5,S6,STT,LOOP,TTS,BARGE,DISPATCH,ROUTER pipeline
+    class MIC,SPK,OUTQ io

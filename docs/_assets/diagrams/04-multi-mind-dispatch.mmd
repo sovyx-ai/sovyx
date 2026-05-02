@@ -1,0 +1,73 @@
+%% Sovyx — Multi-Mind Wake-Word Dispatch (T8.6 + T8.10)
+%% README §11 reference. N concurrent detectors + first-hit wins + ≤50ms mind context load.
+
+flowchart TB
+    MIC[Audio frames<br/>16 kHz / 32 ms]
+
+    VAD[SileroVAD v5<br/>speech detection]
+
+    subgraph Router["WakeWordRouter — _wake_word_router.py:121"]
+        direction TB
+        D1[Detector for<br/>mind: lucia<br/>ONNX 'Lúcia']
+        D2[Detector for<br/>mind: jonny<br/>ONNX 'Jonny']
+        D3[Detector for<br/>mind: aria<br/>ONNX 'Aria']
+        FALLBACK[STT fallback<br/>for minds without<br/>trained ONNX<br/>~500ms]
+    end
+
+    HIT{First detector<br/>to fire wins}
+
+    subgraph Variants["Per-mind variant matrix — T8.16"]
+        V1[Layer 1: original × ASCII-fold<br/>× bare × hey-prefix<br/>mind/config.py:633]
+        V2[Layer 2: per-language mishears<br/>pt/es/fr/de tables<br/>_wake_word_variants.py:60-86]
+    end
+
+    subgraph MindContext["Mind context load — ≤50ms target T8.10"]
+        MC1[Load MindConfig<br/>wake_word, voice_id,<br/>voice_language, voice_accent,<br/>voice_cadence_wpm, retention]
+        MC2[Bind brain pool<br/>per-mind SQLite]
+        MC3[Bind personality<br/>persona, tone, humor]
+        MC4[Bind retention policy<br/>per-mind override]
+    end
+
+    subgraph PerMindIsolation["Per-mind isolation guarantees"]
+        ISO1[Cooldown<br/>independent per mind<br/>T8.8]
+        ISO2[False-fire counter<br/>voice.wake_word.<br/>false_fire_count<br/>{mind_id}<br/>T8.9]
+        ISO3[Property tests<br/>tests/property/<br/>test_cross_mind_isolation_t820.py]
+    end
+
+    DISPATCH[Mind dispatch event<br/>WakeWordDetectedEvent<br/>matched mind_id]
+
+    subgraph HotReload["Hot-reload after T8.13 training"]
+        HR1[CLI sovyx voice train-wake-word]
+        HR2[register_default_backend]
+        HR3[wake_word.register_mind RPC]
+        HR4[VoicePipeline.register_mind_wake_word]
+        HR5[router.register_mind idempotent<br/>replaces detector live]
+    end
+
+    PIPELINE[Continue voice pipeline<br/>RECORDING → TRANSCRIBING<br/>→ THINKING → SPEAKING]
+
+    MIC --> VAD
+    VAD --> Router
+    Variants --> Router
+    Router --> HIT
+    HIT --> MindContext
+    MindContext --> DISPATCH
+    PerMindIsolation -.contract.-> Router
+    DISPATCH --> PIPELINE
+
+    HR1 --> HR3
+    HR2 -.boot wire.-> Router
+    HR3 --> HR4
+    HR4 --> HR5
+    HR5 -.live swap.-> D1
+
+    classDef router fill:#2d4a3e,stroke:#5a8a6e,color:#e8e8e8
+    classDef mind fill:#4a3a5f,stroke:#7a6a8f,color:#e8e8e8
+    classDef iso fill:#5f2d3a,stroke:#8f5a6a,color:#e8e8e8
+    classDef reload fill:#5f4a2d,stroke:#8f7a5d,color:#e8e8e8
+    classDef io fill:#1e3a5f,stroke:#4a7fb8,color:#e8e8e8
+    class D1,D2,D3,FALLBACK,HIT,V1,V2 router
+    class MC1,MC2,MC3,MC4,DISPATCH mind
+    class ISO1,ISO2,ISO3 iso
+    class HR1,HR2,HR3,HR4,HR5 reload
+    class MIC,VAD,PIPELINE io

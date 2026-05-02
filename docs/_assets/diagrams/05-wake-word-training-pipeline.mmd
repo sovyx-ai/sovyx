@@ -1,0 +1,97 @@
+%% Sovyx — Wake-Word Training Pipeline (Phase 8 T8.13 + T8.14 + T8.15)
+%% README §10 reference. State machine + 3 operator paths + hot-reload.
+
+flowchart TB
+    OP[Operator wants<br/>custom wake word<br/>e.g. 'Lúcia']
+
+    DECISION{Choose operator path}
+
+    subgraph PathA["Path 1: External train + drop"]
+        A1[OpenWakeWord Colab<br/>OR<br/>lgpearson1771/openwakeword-trainer]
+        A2[Resulting .onnx file]
+        A3[Drop into<br/>data_dir/wake_word_models/<br/>pretrained/lucia.onnx]
+        A4[Daemon picks up<br/>at next boot<br/>via PretrainedModelRegistry]
+        A4_ALT[OR hot-reload via<br/>wake_word.register_mind RPC]
+    end
+
+    subgraph PathB["Path 2: Implement TrainerBackend"]
+        B1[Custom Python class<br/>impl TrainerBackend Protocol]
+        B2[register_default_backend at boot]
+        B3[sovyx voice train-wake-word CLI<br/>resolves your backend]
+    end
+
+    subgraph PathC["Path 3: STT fallback only"]
+        C1[Skip ONNX training<br/>register_mind_stt_fallback]
+        C2[Moonshine STT<br/>matches transcription]
+        C3[~500ms latency<br/>vs ~80ms ONNX]
+    end
+
+    subgraph CLIWorkflow["CLI workflow — sovyx voice train-wake-word"]
+        CLI1[Validate wake_word + negatives_dir]
+        CLI2[Resolve trainer backend<br/>fail-fast if not registered]
+        CLI3[Build job_dir<br/>data_dir/wake_word_training/lucia/]
+    end
+
+    subgraph StateMachine["TrainingOrchestrator state machine"]
+        direction LR
+        ST_PEND[PENDING]
+        ST_SYN[SYNTHESIZING<br/>Kokoro generates<br/>200 positive samples<br/>at varied voices/speeds]
+        ST_TRA[TRAINING<br/>backend.train wrapped<br/>in asyncio.to_thread<br/>AP #14]
+        ST_COMP[COMPLETE]
+        ST_FAIL[FAILED]
+        ST_CANC[CANCELLED]
+
+        ST_PEND --> ST_SYN
+        ST_SYN --> ST_TRA
+        ST_TRA --> ST_COMP
+        ST_TRA --> ST_FAIL
+        ST_SYN --> ST_CANC
+        ST_TRA --> ST_CANC
+    end
+
+    PROG[ProgressTracker<br/>JSONL append + fsync<br/>thread-safe writes<br/>lockless reads]
+
+    CANCEL[Cancellation paths<br/>1. Ctrl+C in CLI → exit 130<br/>2. touch job_dir/.cancel<br/>3. dashboard POST /jobs/id/cancel]
+
+    subgraph HotReload["Hot-reload — T8.15"]
+        HR1[on_complete callback<br/>fires when COMPLETE]
+        HR2[CLI _attempt_hot_reload]
+        HR3[DaemonClient probe<br/>is_daemon_running?]
+        HR4[RPC wake_word.register_mind]
+        HR5[VoicePipeline.<br/>register_mind_wake_word]
+        HR6[Router live-swap<br/>idempotent register_mind]
+    end
+
+    LIVE[Live wake-word<br/>active in running daemon<br/>NO restart needed]
+
+    OP --> DECISION
+    DECISION --> PathA
+    DECISION --> PathB
+    DECISION --> PathC
+
+    A1 --> A2 --> A3
+    A3 --> A4
+    A3 --> A4_ALT
+
+    B1 --> B2 --> B3
+    B3 --> CLIWorkflow
+
+    C1 --> C2 --> C3
+
+    PathA --> CLIWorkflow
+    CLIWorkflow --> StateMachine
+    StateMachine -.events.-> PROG
+    CANCEL -.touch.-> ST_CANC
+
+    ST_COMP --> HotReload
+    A4_ALT --> HotReload
+    HotReload --> LIVE
+
+    classDef path fill:#2d4a3e,stroke:#5a8a6e,color:#e8e8e8
+    classDef state fill:#4a3a5f,stroke:#7a6a8f,color:#e8e8e8
+    classDef cli fill:#1e3a5f,stroke:#4a7fb8,color:#e8e8e8
+    classDef reload fill:#5f4a2d,stroke:#8f7a5d,color:#e8e8e8
+    class A1,A2,A3,A4,A4_ALT,B1,B2,B3,C1,C2,C3 path
+    class ST_PEND,ST_SYN,ST_TRA,ST_COMP,ST_FAIL,ST_CANC,PROG state
+    class CLI1,CLI2,CLI3,OP,DECISION cli
+    class HR1,HR2,HR3,HR4,HR5,HR6,LIVE,CANCEL reload
