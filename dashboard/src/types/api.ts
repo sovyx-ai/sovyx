@@ -1587,3 +1587,65 @@ export interface PruneRetentionResponse {
   total_rows_purged: number;
   dry_run: boolean;
 }
+
+/* ── Voice setup wizard — Phase 7 / T7.21-T7.24 ──────────────
+ *
+ *   GET  /api/voice/wizard/devices
+ *   POST /api/voice/wizard/test-record
+ *   GET  /api/voice/wizard/test-result/{session_id}
+ *   GET  /api/voice/wizard/diagnostic
+ *
+ * Frontend wizard component (T7.25-T7.30) consumes these. The
+ * backend ships independently of the frontend per
+ * ``feedback_staged_adoption`` — frontend is operator-pilot
+ * gated.
+ */
+
+export interface WizardDeviceInfo {
+  device_id: string;
+  name: string;
+  friendly_name: string;
+  max_input_channels: number;
+  default_sample_rate: number;
+  is_default: boolean;
+  /** ``ready`` | ``warning_low_channels`` | ``warning_high_sample_rate`` | ``error_unavailable`` */
+  diagnosis_hint: string;
+}
+
+export interface WizardDevicesResponse {
+  devices: WizardDeviceInfo[];
+  total_count: number;
+  default_device_id: string | null;
+}
+
+export interface WizardTestRecordRequest {
+  device_id?: string | null;
+  /** Bounded [1.0, 10.0] s; default 3.0. */
+  duration_seconds?: number;
+}
+
+export interface WizardTestResultResponse {
+  session_id: string;
+  success: boolean;
+  duration_actual_s: number;
+  sample_rate_hz: number;
+  level_rms_dbfs: number | null;
+  level_peak_dbfs: number | null;
+  snr_db: number | null;
+  clipping_detected: boolean;
+  silent_capture: boolean;
+  /** Closed-set: ``ok`` | ``low_signal`` | ``clipping`` | ``no_audio`` | ``noisy`` | ``device_error``. */
+  diagnosis: string;
+  diagnosis_hint: string;
+  recorded_at_utc: string;
+  error: string | null;
+}
+
+export interface WizardDiagnosticResponse {
+  ready: boolean;
+  voice_clarity_active: boolean;
+  active_device_name: string | null;
+  /** ``win32`` | ``linux`` | ``darwin``. */
+  platform: string;
+  recommendations: string[];
+}

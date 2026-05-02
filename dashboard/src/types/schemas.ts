@@ -1277,3 +1277,45 @@ export const PruneRetentionResponseSchema = z.object({
   total_rows_purged: z.number().int().nonnegative(),
   dry_run: z.boolean(),
 });
+
+/* ── Voice setup wizard runtime schemas — Phase 7 / T7.21-T7.24 ── */
+
+export const WizardDeviceInfoSchema = z.object({
+  device_id: z.string(),
+  name: z.string(),
+  friendly_name: z.string(),
+  max_input_channels: z.number().int().nonnegative(),
+  default_sample_rate: z.number().int().nonnegative(),
+  is_default: z.boolean(),
+  diagnosis_hint: z.string(),
+});
+
+export const WizardDevicesResponseSchema = z.object({
+  devices: z.array(WizardDeviceInfoSchema),
+  total_count: z.number().int().nonnegative(),
+  default_device_id: z.string().nullable(),
+});
+
+export const WizardTestResultResponseSchema = z.object({
+  session_id: z.string(),
+  success: z.boolean(),
+  duration_actual_s: z.number().nonnegative(),
+  sample_rate_hz: z.number().int().nonnegative(),
+  level_rms_dbfs: z.number().nullable(),
+  level_peak_dbfs: z.number().nullable(),
+  snr_db: z.number().nullable(),
+  clipping_detected: z.boolean(),
+  silent_capture: z.boolean(),
+  diagnosis: z.string(),
+  diagnosis_hint: z.string(),
+  recorded_at_utc: z.string(),
+  error: z.string().nullable(),
+});
+
+export const WizardDiagnosticResponseSchema = z.object({
+  ready: z.boolean(),
+  voice_clarity_active: z.boolean(),
+  active_device_name: z.string().nullable(),
+  platform: z.string(),
+  recommendations: z.array(z.string()),
+});

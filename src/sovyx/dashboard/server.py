@@ -517,6 +517,9 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
         voice_test as voice_test_routes,
     )
     from sovyx.dashboard.routes import (
+        voice_wizard as voice_wizard_routes,
+    )
+    from sovyx.dashboard.routes import (
         websocket as ws_routes,
     )
 
@@ -538,6 +541,7 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.include_router(voice_kb_contribute_routes.router)
     app.include_router(voice_platform_diag_routes.router)
     app.include_router(voice_test_routes.router)
+    app.include_router(voice_wizard_routes.router)
     app.include_router(plugins_routes.router)
     app.include_router(config_routes.router)
     app.include_router(providers_routes.router)
