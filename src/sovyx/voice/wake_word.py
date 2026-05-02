@@ -61,19 +61,124 @@ _DEFAULT_COOLDOWN_ADAPTIVE_THRESHOLD = 2
 # baseline (per ``feedback_staged_adoption``).
 _DEFAULT_STAGE1_HIGH_CONFIDENCE_THRESHOLD = 1.0
 
-# Variants for STT verification (stage 2)
-_WAKE_VARIANTS: frozenset[str] = frozenset(
-    {
-        "sovyx",
-        "so vyx",
-        "sovix",
-        "hey sovyx",
-        "hey so vyx",
-        "hey sovix",
-        "soyvix",
-        "hey soyvix",
-    }
+# ---------------------------------------------------------------------------
+# Wake variant tables — Phase 7 / T7.11-T7.16
+# ---------------------------------------------------------------------------
+#
+# Two-tier composition:
+#
+# 1. ``_SOVYX_PHONETIC_VARIANTS`` — locale-agnostic mishears of the
+#    base wake word "Sovyx". STT engines mis-segment + mis-spell the
+#    word similarly across languages because the phonetics overlap
+#    with English short syllables.
+# 2. ``_LOCALE_GREETING_PREFIXES`` — per-locale courtesy greetings
+#    that operators commonly utter before the wake word. STT engines
+#    return these alongside "Sovyx" in normal speech, so matching
+#    "<greeting> sovyx" prevents the courtesy from breaking the
+#    wake match.
+#
+# ``compose_wake_variants_for_locale(locale)`` produces the union of
+# the two tables for a given BCP-47 locale, falling back to ``en``
+# for unknown locales (operators with novel languages get the English
+# greeting set + the universal Sovyx mishears — never an empty set).
+#
+# ``_WAKE_VARIANTS`` (kept for backward-compat) is the en-US default.
+# New code SHOULD use ``compose_wake_variants_for_locale`` explicitly;
+# the global default exists only for v0.30.0 single-mind pre-Phase-8
+# call sites that haven't been wired to ``MindConfig.voice_language``
+# yet.
+#
+# Reference: master mission §Phase 7 / T7.11-T7.16.
+
+_SOVYX_PHONETIC_VARIANTS: tuple[str, ...] = (
+    "sovyx",
+    "so vyx",
+    "sovix",
+    "soyvix",
 )
+"""Phonetic mishears of "Sovyx" itself. Locale-agnostic — STT engines
+across languages reproduce the same mis-segmentations because the
+word has no native equivalent in any locale's lexicon."""
+
+
+_LOCALE_GREETING_PREFIXES: dict[str, tuple[str, ...]] = {
+    # English (en-US, en-GB, en-CA, en-AU). T7.11 was original baseline;
+    # included for completeness alongside the new locales.
+    "en": ("hey", "hi", "ok", "yo"),
+    # Spanish (es-ES, es-MX, es-AR). T7.11.
+    "es": ("hola", "oye", "ey"),
+    # Portuguese (pt-BR, pt-PT). T7.12.
+    "pt": ("oi", "olá", "ola", "ei"),
+    # French (fr-FR, fr-CA). T7.13.
+    "fr": ("bonjour", "salut", "coucou", "hé"),
+    # German (de-DE, de-AT, de-CH). T7.14.
+    "de": ("hallo", "hey", "hi"),
+    # Italian (it-IT). Adjacent Romance language; ships alongside
+    # ES/PT/FR for the European deployment cohort.
+    "it": ("ciao", "ehi"),
+    # Mandarin Chinese (zh-CN, zh-TW). T7.15.
+    # Both Pinyin (with + without space) and Han characters covered
+    # — STT engines may return either depending on configuration.
+    "zh": ("你好", "ni hao", "nihao", "嗨", "hai"),
+}
+"""BCP-47-primary-subtag → courtesy-greeting prefixes.
+
+Each tuple lists the lowercased greetings the locale's speakers
+commonly utter before a wake word. The composition function combines
+each prefix with each :data:`_SOVYX_PHONETIC_VARIANTS` entry to
+produce the full wake-variant set.
+
+Adding a locale: append a new entry. The :func:`compose_wake_variants_for_locale`
+function picks it up automatically via ``dict.get`` with English
+fallback. Operators in unmapped locales still get a working English
+match path."""
+
+
+def compose_wake_variants_for_locale(locale: str) -> frozenset[str]:
+    """Build the wake-variant set for a BCP-47 ``locale``.
+
+    Phase 7 / T7.16 — runtime locale detection. Replaces the
+    hardcoded :data:`_WAKE_VARIANTS` for callers that know the
+    operator's voice language (typically
+    ``MindConfig.effective_voice_language`` from Phase 8).
+
+    The returned set is the union of:
+
+    * Every entry in :data:`_SOVYX_PHONETIC_VARIANTS` (so the bare
+      word "Sovyx" matches without a greeting).
+    * Every ``"<greeting> <variant>"`` pair where ``greeting`` comes
+      from the locale's prefix table and ``variant`` from
+      :data:`_SOVYX_PHONETIC_VARIANTS`.
+
+    Args:
+        locale: BCP-47 tag (e.g. ``"pt-BR"``, ``"zh-CN"``,
+            ``"en"``). Only the primary subtag is consulted — pt-BR
+            and pt-PT share the table, zh-CN and zh-TW share, etc.
+            Empty / unknown locales fall back to ``en``.
+
+    Returns:
+        Frozen set of lowercased variant strings. Always non-empty
+        (the Sovyx phonetic variants are present even when the
+        locale is unknown).
+    """
+    prefix_subtag = locale.split("-", maxsplit=1)[0].lower() if locale else "en"
+    prefixes = _LOCALE_GREETING_PREFIXES.get(
+        prefix_subtag,
+        _LOCALE_GREETING_PREFIXES["en"],
+    )
+    variants: set[str] = set(_SOVYX_PHONETIC_VARIANTS)
+    for prefix in prefixes:
+        for sovyx_variant in _SOVYX_PHONETIC_VARIANTS:
+            variants.add(f"{prefix} {sovyx_variant}")
+    return frozenset(variants)
+
+
+# Variants for STT verification (stage 2) — backward-compat default
+# composed from the English locale via the new
+# :func:`compose_wake_variants_for_locale` path. Pre-T7.16 callers
+# that import ``_WAKE_VARIANTS`` directly continue to work without
+# any code change.
+_WAKE_VARIANTS: frozenset[str] = compose_wake_variants_for_locale("en")
 
 
 # ---------------------------------------------------------------------------
