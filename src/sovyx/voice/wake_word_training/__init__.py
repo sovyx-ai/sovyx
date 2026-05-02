@@ -27,6 +27,10 @@ notes T8.13-T8.15 as the next focused mini-mission.
 
 from __future__ import annotations
 
+from sovyx.voice.wake_word_training._orchestrator import (
+    TrainingOrchestrator,
+    TrainingRequest,
+)
 from sovyx.voice.wake_word_training._progress import (
     ProgressEvent,
     ProgressTracker,
@@ -58,6 +62,8 @@ __all__ = [
     "TrainerBackend",
     "TrainingCancelledError",
     "TrainingJobState",
+    "TrainingOrchestrator",
+    "TrainingRequest",
     "TrainingStatus",
     "register_default_backend",
     "resolve_default_backend",
