@@ -322,3 +322,291 @@ class TestSlugifyHelper:
         from sovyx.cli.commands.voice import _slugify_for_filesystem
 
         assert len(_slugify_for_filesystem("a" * 100)) == 48  # noqa: PLR2004
+
+
+# ── _attempt_hot_reload — Phase 8 / T8.15 CLI wire-up ────────────────
+
+
+class TestAttemptHotReload:
+    """``_attempt_hot_reload`` is the CLI's post-training hook into
+    the daemon's ``wake_word.register_mind`` RPC. Best-effort: every
+    failure mode falls through to the operator-restart path with a
+    clear hint, and NEVER aborts (training already succeeded — model
+    is on disk).
+    """
+
+    def test_daemon_not_running_renders_restart_hint(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from sovyx.cli.commands.voice import _attempt_hot_reload
+
+        with patch(
+            "sovyx.cli.rpc_client.DaemonClient.is_daemon_running",
+            return_value=False,
+        ):
+            _attempt_hot_reload("lucia", tmp_path / "lucia.onnx")
+
+        out = capsys.readouterr().out
+        assert "Daemon not running" in out
+        assert "restart" in out.lower()
+
+    def test_daemon_success_renders_green_confirmation(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from sovyx.cli.commands.voice import _attempt_hot_reload
+
+        async def _fake_call(*_args: object, **_kw: object) -> dict[str, object]:
+            return {
+                "mind_id": "lucia",
+                "model_path": str(tmp_path / "lucia.onnx"),
+                "hot_reload_succeeded": True,
+            }
+
+        with (
+            patch(
+                "sovyx.cli.rpc_client.DaemonClient.is_daemon_running",
+                return_value=True,
+            ),
+            patch("sovyx.cli.rpc_client.DaemonClient.call", side_effect=_fake_call),
+        ):
+            _attempt_hot_reload("lucia", tmp_path / "lucia.onnx")
+
+        out = capsys.readouterr().out
+        assert "Hot-reloaded" in out
+        assert "lucia" in out
+
+    def test_channel_connection_error_renders_remediation(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from sovyx.cli.commands.voice import _attempt_hot_reload
+        from sovyx.engine.errors import ChannelConnectionError
+
+        async def _fake_call(*_args: object, **_kw: object) -> object:
+            msg = "RPC error (-32001): voice subsystem not enabled"
+            raise ChannelConnectionError(msg)
+
+        with (
+            patch(
+                "sovyx.cli.rpc_client.DaemonClient.is_daemon_running",
+                return_value=True,
+            ),
+            patch("sovyx.cli.rpc_client.DaemonClient.call", side_effect=_fake_call),
+        ):
+            _attempt_hot_reload("lucia", tmp_path / "lucia.onnx")
+
+        out = capsys.readouterr().out
+        assert "Hot-reload via daemon failed" in out
+        assert "voice subsystem not enabled" in out
+        assert "Restart the daemon" in out
+
+    def test_unexpected_response_shape_falls_through_to_warning(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from sovyx.cli.commands.voice import _attempt_hot_reload
+
+        async def _fake_call(*_args: object, **_kw: object) -> object:
+            # Daemon protocol drift / malformed response — the helper
+            # MUST surface this rather than pretend success.
+            return {"unexpected": "shape"}
+
+        with (
+            patch(
+                "sovyx.cli.rpc_client.DaemonClient.is_daemon_running",
+                return_value=True,
+            ),
+            patch("sovyx.cli.rpc_client.DaemonClient.call", side_effect=_fake_call),
+        ):
+            _attempt_hot_reload("lucia", tmp_path / "lucia.onnx")
+
+        out = capsys.readouterr().out
+        assert "unexpected response" in out
+
+    def test_arbitrary_exception_does_not_propagate(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Defence-in-depth — even an unforeseen exception type must
+        fall through. The CLI exits 0 (training succeeded); hot-reload
+        is convenience, never a correctness gate."""
+        from sovyx.cli.commands.voice import _attempt_hot_reload
+
+        async def _fake_call(*_args: object, **_kw: object) -> object:
+            raise RuntimeError("unexpected runtime")
+
+        with (
+            patch(
+                "sovyx.cli.rpc_client.DaemonClient.is_daemon_running",
+                return_value=True,
+            ),
+            patch("sovyx.cli.rpc_client.DaemonClient.call", side_effect=_fake_call),
+        ):
+            # Must NOT raise.
+            _attempt_hot_reload("lucia", tmp_path / "lucia.onnx")
+
+        out = capsys.readouterr().out
+        assert "Hot-reload error" in out
+        assert "unexpected runtime" in out
+
+
+# ── End-to-end hot-reload wire through the CLI command ──────────────
+
+
+class TestTrainCommandHotReload:
+    """End-to-end: ``sovyx voice train-wake-word --mind-id=...`` after
+    successful training calls the daemon's ``wake_word.register_mind``
+    RPC. Validates the message rendering + the call path. The daemon
+    is mocked at the DaemonClient layer."""
+
+    def test_no_mind_id_skips_hot_reload_entirely(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        register_default_backend(_StubBackend())
+        _seed_negatives(tmp_path / "neg")
+        output = tmp_path / "out" / "x.onnx"
+        monkeypatch.setenv("SOVYX_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("SOVYX_DATABASE__DATA_DIR", str(tmp_path))
+
+        with (
+            patch("sovyx.voice.tts_kokoro.KokoroTTS", _StubKokoroTTS),
+            patch(
+                "sovyx.cli.rpc_client.DaemonClient.is_daemon_running",
+                return_value=True,
+            ) as is_running_mock,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "voice",
+                    "train-wake-word",
+                    "Lucia",
+                    "--target-samples",
+                    "10",
+                    "--negatives-dir",
+                    str(tmp_path / "neg"),
+                    "--output",
+                    str(output),
+                    "--voices",
+                    "v",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        # Without --mind-id, the helper is never called → daemon
+        # probe never runs.
+        assert is_running_mock.call_count == 0
+        # Rich may word-wrap the rendered line; assert on a stable
+        # substring that survives wrap.
+        assert "Trained without --mind-id" in result.stdout
+        assert "next restart" in result.stdout
+
+    def test_with_mind_id_and_daemon_running_calls_rpc(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        register_default_backend(_StubBackend())
+        _seed_negatives(tmp_path / "neg")
+        output = tmp_path / "out" / "lucia.onnx"
+        monkeypatch.setenv("SOVYX_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("SOVYX_DATABASE__DATA_DIR", str(tmp_path))
+
+        captured: dict[str, object] = {}
+
+        async def _fake_call(method: str, params: dict[str, object]) -> dict[str, object]:
+            captured["method"] = method
+            captured["params"] = params
+            return {
+                "mind_id": params["mind_id"],
+                "model_path": params["model_path"],
+                "hot_reload_succeeded": True,
+            }
+
+        with (
+            patch("sovyx.voice.tts_kokoro.KokoroTTS", _StubKokoroTTS),
+            patch(
+                "sovyx.cli.rpc_client.DaemonClient.is_daemon_running",
+                return_value=True,
+            ),
+            patch("sovyx.cli.rpc_client.DaemonClient.call", side_effect=_fake_call),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "voice",
+                    "train-wake-word",
+                    "Lucia",
+                    "--mind-id",
+                    "lucia",
+                    "--target-samples",
+                    "10",
+                    "--negatives-dir",
+                    str(tmp_path / "neg"),
+                    "--output",
+                    str(output),
+                    "--voices",
+                    "v",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+        assert captured["method"] == "wake_word.register_mind"
+        params = captured["params"]
+        assert isinstance(params, dict)
+        assert params["mind_id"] == "lucia"
+        assert params["model_path"] == str(output)
+        assert "Hot-reloaded" in result.stdout
+
+    def test_with_mind_id_and_daemon_down_renders_restart_hint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        register_default_backend(_StubBackend())
+        _seed_negatives(tmp_path / "neg")
+        output = tmp_path / "out" / "lucia.onnx"
+        monkeypatch.setenv("SOVYX_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("SOVYX_DATABASE__DATA_DIR", str(tmp_path))
+
+        with (
+            patch("sovyx.voice.tts_kokoro.KokoroTTS", _StubKokoroTTS),
+            patch(
+                "sovyx.cli.rpc_client.DaemonClient.is_daemon_running",
+                return_value=False,
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "voice",
+                    "train-wake-word",
+                    "Lucia",
+                    "--mind-id",
+                    "lucia",
+                    "--target-samples",
+                    "10",
+                    "--negatives-dir",
+                    str(tmp_path / "neg"),
+                    "--output",
+                    str(output),
+                    "--voices",
+                    "v",
+                ],
+                catch_exceptions=False,
+            )
+
+        # Training still succeeded (exit 0); restart hint surfaces.
+        assert result.exit_code == 0
+        assert "Daemon not running" in result.stdout

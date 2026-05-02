@@ -202,6 +202,78 @@ def _slugify_for_filesystem(text: str) -> str:
     return "".join(c if (c.isascii() and c.isalnum()) else "_" for c in folded)[:48]
 
 
+def _attempt_hot_reload(mind_id: str, output_path: Path) -> None:
+    """Try to hot-reload the trained model into the running daemon.
+
+    Phase 8 / T8.15 — calls the ``wake_word.register_mind`` RPC
+    (commit `96f8abe`) so the operator does not have to restart the
+    daemon. Best-effort: every failure mode falls through to the
+    operator-restart path with a clear remediation hint, NEVER
+    aborts the CLI exit code (training succeeded — the model is on
+    disk; hot-reload is a convenience, not a correctness gate).
+
+    Failure modes (each renders a yellow hint, returns cleanly):
+      * Daemon not running → next-restart pickup.
+      * Daemon RPC error (voice disabled, single-mind mode, etc.) →
+        surface the daemon-side message; restart still works.
+      * Unexpected exception (network race, malformed response) →
+        surface the exception text; restart still works.
+
+    Args:
+        mind_id: ``--mind-id`` from the operator's CLI invocation.
+        output_path: The trained ``.onnx`` path (from the orchestrator
+            final state, never empty when this is called).
+    """
+    import asyncio  # noqa: PLC0415
+
+    from sovyx.cli.rpc_client import DaemonClient  # noqa: PLC0415
+    from sovyx.engine.errors import ChannelConnectionError  # noqa: PLC0415
+
+    client = DaemonClient()
+    if not client.is_daemon_running():
+        console.print(
+            "  [yellow]Daemon not running[/yellow] — restart the daemon "
+            "to activate the new model "
+            f"(loaded from [dim]{output_path}[/dim] on next boot).",
+        )
+        return
+
+    try:
+        result = asyncio.run(
+            client.call(
+                "wake_word.register_mind",
+                {"mind_id": mind_id, "model_path": str(output_path)},
+            ),
+        )
+    except ChannelConnectionError as exc:
+        # Surface the daemon-side message verbatim — it carries the
+        # remediation hint (single-mind mode, voice disabled, etc.).
+        console.print(
+            f"  [yellow]Hot-reload via daemon failed:[/yellow] {exc}\n"
+            "  Restart the daemon to pick up the new model.",
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 — operator-readable boundary
+        console.print(
+            f"  [yellow]Hot-reload error:[/yellow] {exc}\n"
+            "  Restart the daemon to pick up the new model.",
+        )
+        return
+
+    if isinstance(result, dict) and result.get("hot_reload_succeeded"):
+        console.print(
+            f"  [green]✓ Hot-reloaded[/green] into mind "
+            f"[cyan]{mind_id!r}[/cyan] — wake-word detection is "
+            "live with the new model (no restart needed).",
+        )
+    else:
+        console.print(
+            f"  [yellow]Daemon returned unexpected response:[/yellow] "
+            f"{result!r}\n"
+            "  Restart the daemon to be safe.",
+        )
+
+
 @voice_app.command("train-wake-word")
 def train_wake_word(
     wake_word: str = typer.Argument(
@@ -432,12 +504,16 @@ def train_wake_word(
         console.print(
             f"  duration_actual:  [dim]{final_state.completed_at}[/dim]",
         )
-        if mind_id:
+        if mind_id and final_state.output_path:
+            _attempt_hot_reload(mind_id, Path(final_state.output_path))
+        elif mind_id:
             console.print(
-                "  Hot-reload was attempted via on_complete callback "
-                "(only fires when daemon registered one). Check "
-                "``voice.training.on_complete_failed`` log if "
-                "wake-word detection doesn't pick up the new model.",
+                "  [yellow]No output path recorded — hot-reload skipped.[/yellow]",
+            )
+        else:
+            console.print(
+                "  [dim]Trained without --mind-id; daemon will pick up "
+                "this model from the pretrained pool on next restart.[/dim]",
             )
     elif final_state.status is TrainingStatus.CANCELLED:
         console.print(
