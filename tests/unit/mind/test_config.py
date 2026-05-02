@@ -366,6 +366,27 @@ class TestPhase8VoiceIdentityFields:
         assert "lucia" in m.effective_wake_word_variants
         assert "hey lucia" in m.effective_wake_word_variants
 
+    def test_effective_variants_t816_full_matrix(self) -> None:
+        """T8.16 — derived list covers (original × ASCII-fold) ×
+        (bare × "hey") so STT engines that DO preserve diacritics
+        also match. Lúcia → ["lúcia", "lucia", "hey lúcia",
+        "hey lucia"]."""
+        m = MindConfig(name="Lúcia", wake_word="Lúcia")
+        variants = m.effective_wake_word_variants
+        assert "lúcia" in variants  # original-form preserved
+        assert "lucia" in variants  # ASCII-fold
+        assert "hey lúcia" in variants
+        assert "hey lucia" in variants
+        assert len(variants) == 4  # noqa: PLR2004 — full matrix
+
+    def test_effective_variants_ascii_only_dedupes_to_two(self) -> None:
+        """Pure-ASCII names (Sovyx) collapse the matrix because
+        original-lower == ascii-lower."""
+        m = MindConfig(name="Aria")
+        # effective_wake_word="Sovyx" → matrix ["sovyx", "sovyx",
+        # "hey sovyx", "hey sovyx"] dedupes to 2.
+        assert m.effective_wake_word_variants == ["sovyx", "hey sovyx"]
+
     def test_effective_variants_explicit_field_wins(self) -> None:
         """When operator sets the list, it's returned verbatim."""
         m = MindConfig(

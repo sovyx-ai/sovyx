@@ -635,20 +635,27 @@ class MindConfig(BaseModel):
         """Resolve the variants list with auto-derivation when empty.
 
         When the field is non-empty, returns it verbatim. When empty,
-        derives the canonical ``[<wake>, hey <wake>]`` pair from
-        :prop:`effective_wake_word`, lowercased + stripped of common
-        diacritics so the STT verifier matches transcriptions that
-        the model returns without diacritics (Moonshine / Whisper
-        commonly drop them).
+        derives the canonical variant set from
+        :prop:`effective_wake_word` covering the (original ×
+        ASCII-fold) × (bare × "hey" prefix) matrix:
 
-        The auto-derivation is intentionally minimal — the master
-        mission spec calls for espeak-ng phoneme expansion in T8.16
-        which lands as a hardware-blocked task. This minimal
-        derivation is the fallback that works for the common case
-        (Latin-script names without unusual phonetics) without the
-        espeak-ng dependency.
+        For ``wake_word="Lúcia"`` → ``["lúcia", "lucia",
+        "hey lúcia", "hey lucia"]``. STT engines vary on whether
+        they preserve diacritics — Moonshine + Whisper commonly
+        drop them; some cloud STT providers retain them. Including
+        both forms means the variant matcher succeeds regardless.
 
-        Phase 8 / T8.2.
+        For pure-ASCII names (e.g. "Sovyx") deduplication keeps the
+        list at 2 entries.
+
+        Phonetic mishears + per-language phoneme expansion (T8.16
+        "Lousha" for "Lúcia", "Mueller" for "Müller") are layered on
+        top by :func:`sovyx.voice._wake_word_variants.expand_wake_word_variants`
+        when espeak-ng is available — that surface stays out of
+        ``MindConfig`` to keep ``mind/`` independent of the voice
+        subsystem.
+
+        Phase 8 / T8.2 + T8.16.
         """
         if self.wake_word_variants:
             return list(self.wake_word_variants)
@@ -660,8 +667,19 @@ class MindConfig(BaseModel):
 
         normalised = unicodedata.normalize("NFKD", wake)
         ascii_wake = "".join(c for c in normalised if not unicodedata.combining(c))
-        wake_lower = ascii_wake.lower()
-        return [wake_lower, f"hey {wake_lower}"]
+        # Build the (original × ASCII-fold) × (bare × "hey" prefix) matrix.
+        # Dedup via dict-of-keys so insertion order survives (Python 3.7+).
+        wake_lower = wake.lower()
+        ascii_lower = ascii_wake.lower()
+        seen: dict[str, None] = {}
+        for v in (
+            wake_lower,
+            ascii_lower,
+            f"hey {wake_lower}",
+            f"hey {ascii_lower}",
+        ):
+            seen[v] = None
+        return list(seen)
 
     @property
     def effective_voice_language(self) -> str:
