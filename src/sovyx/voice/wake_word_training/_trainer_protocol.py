@@ -5,27 +5,49 @@ specific wake-word training backend. Operators register a backend
 that implements :class:`TrainerBackend` and the orchestrator drives
 it via the Protocol contract.
 
-Why pluggable + no default:
+Why pluggable + no default (verified 2026-05-02):
 
-* OpenWakeWord training requires a feature-extractor model + a
-  custom training script (Jupyter notebook in their docs). Bundling
-  that path adds ~500 MB of training assets and a heavy ML dep tree.
-* Sherpa-ONNX (alternative) has different sample format requirements.
-* Custom enterprise deployments may want their own trainer (e.g.
-  integrated with internal ML platforms).
+The pluggable-Protocol design was chosen after reviewing every
+candidate that could plausibly ship as the Sovyx default. None
+qualifies:
 
-Bundling one default would force every Sovyx install to carry the
-ML dep tree even when not training. The Protocol approach keeps the
-default install lean + lets operators opt in via a single
-``register_default_backend`` call from their bootstrap code.
+* **OpenWakeWord 0.6.0** (the canonical OSS option): the official
+  ``[full]`` extra (NOT ``[training]`` — that name does not exist)
+  pins ``tensorflow-cpu==2.8.1`` + ``protobuf>=3.20,<4`` + ``onnx==1.14.0``.
+  Those are 4-year-old pins incompatible with Sovyx's stack
+  (Python 3.11/3.12, modern ``onnxruntime>=1.18``, modern protobuf).
+  The latest release is dated 2024-02-11; the project has been
+  effectively dormant since then. There is also no documented
+  programmatic training API — the canonical training surface is a
+  Google Colab notebook referenced in their README, not a Python
+  library entry-point. Wrapping notebook code is fragile.
+* **lgpearson1771/openwakeword-trainer** (third-party fork, MIT,
+  active): ships compatibility patches for modern torchaudio /
+  speechbrain / Piper, but is a CLI/script pipeline (YAML-driven
+  ``train_wakeword.py``), not a Python library — wrapping it
+  requires shelling out + parsing YAML + tracking output paths,
+  which is fragile and not enterprise-grade.
+* **Sherpa-ONNX** (k2-fsa): uses *open-vocabulary* keyword spotting
+  (one generic ASR model + a keywords text file, NO per-keyword
+  training). The Sovyx STT-fallback path (T8.17 - T8.19) already
+  covers this no-training-needed scenario; adding it as a "trainer"
+  would be a semantic mismatch.
+* **Custom enterprise deployments**: any internal ML platform
+  trivially implements ``TrainerBackend`` against its own pipeline.
+
+Bundling any of the above as the Sovyx default would either force
+every install to carry an incompatible / dormant / non-API dep
+cluster, OR misrepresent what the backend actually does. The
+pluggable Protocol is the correct architectural answer: lean
+default install, operators bring their own trainer.
 
 Reference architecture:
 * ``register_default_backend`` is the single registration point
   (one process, one default backend).
 * The CLI / dashboard / orchestrator query
   ``resolve_default_backend`` and raise
-  :class:`NoBackendRegisteredError` with installation hints when
-  none is registered.
+  :class:`NoBackendRegisteredError` with verified operator
+  guidance when none is registered.
 """
 
 from __future__ import annotations
@@ -175,20 +197,39 @@ def resolve_default_backend() -> TrainerBackend:
             operators can self-resolve without docs.
     """
     if _DEFAULT_BACKEND is None:
+        # Verified 2026-05-02: no default ML backend ships with
+        # Sovyx because every candidate fails enterprise-grade
+        # criteria (see module docstring). The hints below point to
+        # paths that actually exist + work, NOT to speculative
+        # extras. This message is the operator's first encounter
+        # with the pluggable surface — keep it accurate.
         msg = (
-            "No wake-word training backend registered. "
-            "T8.13-T8.15 ships the orchestrator + state machine; "
-            "the actual training backend is pluggable. Operator "
-            "options:\n"
-            "  1. Install OpenWakeWord training extras: "
-            "``pip install openwakeword[training]`` then call "
-            "``register_default_backend(OpenWakeWordBackend(...))`` "
-            "from your bootstrap code.\n"
-            "  2. Implement ``TrainerBackend`` for your custom ML "
-            "platform and register it the same way.\n"
-            "  3. Wait for the v0.32+ default OpenWakeWord backend "
-            "ratification (mini-mission tracked in "
-            "``OPERATOR-DEBT-MASTER-2026-05-01.md``)."
+            "No wake-word training backend registered. Sovyx ships "
+            "the orchestrator + CLI + dashboard surface; the ML "
+            "training step is pluggable BY DESIGN — see "
+            "``sovyx.voice.wake_word_training`` package docstring "
+            "for the verified rationale. Three operator paths:\n"
+            "  1. **Train externally**, then drop the ``.onnx`` "
+            "into ``<data_dir>/wake_word_models/pretrained/<id>.onnx``. "
+            "Sovyx's ``PretrainedModelRegistry`` picks it up at boot; "
+            "the dashboard's hot-reload endpoint "
+            "(``POST /api/voice/training/jobs/<id>/cancel``-adjacent "
+            "RPC ``wake_word.register_mind``) activates it without "
+            "a daemon restart. Canonical external trainers: the "
+            "OpenWakeWord Colab notebook (linked from "
+            "github.com/dscripka/openWakeWord) OR the actively "
+            "maintained MIT-licensed fork at "
+            "github.com/lgpearson1771/openwakeword-trainer.\n"
+            "  2. **Implement** ``TrainerBackend`` for your in-house "
+            "ML platform + register at boot via "
+            "``register_default_backend(MyBackend())``. The Protocol "
+            "is 2 methods (``name`` + ``train``); see the source for "
+            "the contract.\n"
+            "  3. **Use STT fallback** (already shipped, T8.17 - T8.19) "
+            "if per-keyword ONNX training is more friction than the "
+            "operator wants — the Moonshine STT path matches wake "
+            "words from transcriptions with ~500 ms latency vs "
+            "~80 ms for ONNX, no training required."
         )
         raise NoBackendRegisteredError(msg)
     return _DEFAULT_BACKEND

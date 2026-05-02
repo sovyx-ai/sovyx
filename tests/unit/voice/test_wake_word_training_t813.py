@@ -396,10 +396,22 @@ class TestRegisterDefaultBackend:
     def test_resolve_without_register_raises_with_install_hints(self) -> None:
         with pytest.raises(NoBackendRegisteredError) as exc_info:
             resolve_default_backend()
-        # Error message must include actionable install hints.
+        # Error message must include actionable, VERIFIED operator
+        # paths (no speculative extras). Anchored on each of the 3
+        # documented options: external train + drop, custom Backend
+        # impl, or STT fallback.
         msg = str(exc_info.value)
-        assert "openwakeword[training]" in msg
+        # Path 1: external train + drop into pretrained pool.
+        assert "wake_word_models/pretrained" in msg
+        assert "openwakeword-trainer" in msg or "OpenWakeWord Colab" in msg
+        # Path 2: register custom backend.
         assert "register_default_backend" in msg
+        # Path 3: STT fallback (already shipped).
+        assert "STT fallback" in msg
+        # Must NOT carry the old speculative extras name.
+        assert "sovyx[wake-training]" not in msg
+        # Must NOT carry the wrong openwakeword extra name.
+        assert "openwakeword[training]" not in msg
 
     def test_register_then_resolve(self) -> None:
         backend = _StubBackend()

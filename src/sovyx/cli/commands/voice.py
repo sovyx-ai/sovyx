@@ -345,10 +345,15 @@ def train_wake_word(
 
     1. **Synthesise** ``target_samples`` positive samples via Kokoro
        TTS at varied voices + speeds.
-    2. **Train** an ONNX model via the registered trainer backend
-       (operators install ``sovyx[wake-training]`` extras + register
-       the backend at boot — see ``sovyx.voice.wake_word_training``
-       package docs).
+    2. **Train** an ONNX model via the registered trainer backend.
+       Sovyx ships the orchestrator only — no default ML backend
+       (verified 2026-05-02; see ``sovyx.voice.wake_word_training``
+       package docstring for why every candidate failed enterprise
+       criteria). Operators register a backend at boot via
+       ``register_default_backend(MyBackend())`` against an
+       in-house ML platform OR train externally (OpenWakeWord
+       Colab / lgpearson1771/openwakeword-trainer fork) and drop
+       the ``.onnx`` directly into the pretrained pool.
     3. **Hot-reload** the trained model into the daemon's
        ``WakeWordRouter`` on success (when ``--mind-id`` is set
        AND the daemon is running).
