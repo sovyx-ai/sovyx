@@ -35,6 +35,11 @@ from sovyx.voice.wake_word_training._state import (
     TrainingJobState,
     TrainingStatus,
 )
+from sovyx.voice.wake_word_training._synthesizer import (
+    KokoroSampleSynthesizer,
+    SynthesisRequest,
+    SynthesisResult,
+)
 from sovyx.voice.wake_word_training._trainer_protocol import (
     NoBackendRegisteredError,
     TrainerBackend,
@@ -44,9 +49,12 @@ from sovyx.voice.wake_word_training._trainer_protocol import (
 )
 
 __all__ = [
+    "KokoroSampleSynthesizer",
     "NoBackendRegisteredError",
     "ProgressEvent",
     "ProgressTracker",
+    "SynthesisRequest",
+    "SynthesisResult",
     "TrainerBackend",
     "TrainingCancelledError",
     "TrainingJobState",

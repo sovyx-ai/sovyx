@@ -209,13 +209,9 @@ class TrainingJobState:
             updated_at=now_iso,
             completed_at=new_completed_at,
             output_path=self.output_path if output_path is None else output_path,
-            error_summary=(
-                self.error_summary if error_summary is None else error_summary
-            ),
+            error_summary=(self.error_summary if error_summary is None else error_summary),
             samples_generated=(
-                self.samples_generated
-                if samples_generated is None
-                else samples_generated
+                self.samples_generated if samples_generated is None else samples_generated
             ),
             target_samples=self.target_samples,
         )
@@ -255,25 +251,31 @@ class _StateTransitionRule:
 
 _TRANSITION_RULES: dict[TrainingStatus, _StateTransitionRule] = {
     TrainingStatus.PENDING: _StateTransitionRule(
-        allowed=frozenset({
-            TrainingStatus.SYNTHESIZING,
-            TrainingStatus.CANCELLED,
-            TrainingStatus.FAILED,
-        }),
+        allowed=frozenset(
+            {
+                TrainingStatus.SYNTHESIZING,
+                TrainingStatus.CANCELLED,
+                TrainingStatus.FAILED,
+            }
+        ),
     ),
     TrainingStatus.SYNTHESIZING: _StateTransitionRule(
-        allowed=frozenset({
-            TrainingStatus.TRAINING,
-            TrainingStatus.CANCELLED,
-            TrainingStatus.FAILED,
-        }),
+        allowed=frozenset(
+            {
+                TrainingStatus.TRAINING,
+                TrainingStatus.CANCELLED,
+                TrainingStatus.FAILED,
+            }
+        ),
     ),
     TrainingStatus.TRAINING: _StateTransitionRule(
-        allowed=frozenset({
-            TrainingStatus.COMPLETE,
-            TrainingStatus.CANCELLED,
-            TrainingStatus.FAILED,
-        }),
+        allowed=frozenset(
+            {
+                TrainingStatus.COMPLETE,
+                TrainingStatus.CANCELLED,
+                TrainingStatus.FAILED,
+            }
+        ),
     ),
     # Terminal states have empty allowed sets — any transition out
     # is rejected by ``is_legal_transition``.
