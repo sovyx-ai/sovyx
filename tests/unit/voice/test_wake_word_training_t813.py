@@ -328,8 +328,7 @@ class TestProgressTrackerRobustness:
         path.parent.mkdir(parents=True, exist_ok=True)
         # A line with status that's not in the enum.
         path.write_text(
-            json.dumps({"status": "running_quantum_inference", "wake_word": "x"})
-            + "\n",
+            json.dumps({"status": "running_quantum_inference", "wake_word": "x"}) + "\n",
             encoding="utf-8",
         )
         tracker = ProgressTracker(path)
