@@ -1319,3 +1319,54 @@ export const WizardDiagnosticResponseSchema = z.object({
   platform: z.string(),
   recommendations: z.array(z.string()),
 });
+
+/* ── Wake-word training runtime schemas — Phase 8 / T8.13 ── */
+
+export const TrainingJobStatusSchema = z.enum([
+  "pending",
+  "synthesizing",
+  "training",
+  "complete",
+  "failed",
+  "cancelled",
+]);
+
+export const TrainingJobSummarySchema = z.object({
+  job_id: z.string(),
+  wake_word: z.string(),
+  mind_id: z.string(),
+  language: z.string(),
+  status: TrainingJobStatusSchema,
+  progress: z.number().min(0).max(1),
+  samples_generated: z.number().int().nonnegative(),
+  target_samples: z.number().int().nonnegative(),
+  started_at: z.string(),
+  updated_at: z.string(),
+  completed_at: z.string(),
+  output_path: z.string(),
+  error_summary: z.string(),
+  cancelled_signalled: z.boolean(),
+});
+
+export const TrainingJobsResponseSchema = z.object({
+  jobs: z.array(TrainingJobSummarySchema),
+  total_count: z.number().int().nonnegative(),
+});
+
+export const TrainingJobDetailResponseSchema = z.object({
+  summary: TrainingJobSummarySchema,
+  /**
+   * Each history event is a state snapshot dict. We don't enforce
+   * exact shape here because the orchestrator may add fields in
+   * future minor versions and frontend should ignore-unknown
+   * gracefully — z.record allows arbitrary keys.
+   */
+  history: z.array(z.record(z.string(), z.union([z.string(), z.number()]))),
+  history_truncated: z.boolean(),
+});
+
+export const CancelJobResponseSchema = z.object({
+  job_id: z.string(),
+  cancel_signal_written: z.boolean(),
+  already_terminal: z.boolean(),
+});

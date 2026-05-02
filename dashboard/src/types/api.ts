@@ -1649,3 +1649,60 @@ export interface WizardDiagnosticResponse {
   platform: string;
   recommendations: string[];
 }
+
+/* ── Wake-word training — Phase 8 / T8.13 ──────────────
+ *
+ *   GET  /api/voice/training/jobs           — list all jobs
+ *   GET  /api/voice/training/jobs/{job_id}  — detail + history
+ *   POST /api/voice/training/jobs/{job_id}/cancel — touch .cancel
+ *
+ * Read-only observability + cancellation surface. Job creation
+ * happens via the ``sovyx voice train-wake-word`` CLI — training
+ * takes 30-60 minutes, blocking a dashboard request for that
+ * long isn't tractable.
+ */
+
+export type TrainingJobStatus =
+  | "pending"
+  | "synthesizing"
+  | "training"
+  | "complete"
+  | "failed"
+  | "cancelled";
+
+export interface TrainingJobSummary {
+  job_id: string;
+  wake_word: string;
+  mind_id: string;
+  language: string;
+  status: TrainingJobStatus;
+  /** 0.0 to 1.0 fractional progress within the current status phase. */
+  progress: number;
+  samples_generated: number;
+  target_samples: number;
+  started_at: string;
+  updated_at: string;
+  completed_at: string;
+  output_path: string;
+  error_summary: string;
+  /** True when ``<job_dir>/.cancel`` exists. */
+  cancelled_signalled: boolean;
+}
+
+export interface TrainingJobsResponse {
+  jobs: TrainingJobSummary[];
+  total_count: number;
+}
+
+export interface TrainingJobDetailResponse {
+  summary: TrainingJobSummary;
+  /** Most-recent ``limit`` progress events, oldest-first. */
+  history: Record<string, string | number>[];
+  history_truncated: boolean;
+}
+
+export interface CancelJobResponse {
+  job_id: string;
+  cancel_signal_written: boolean;
+  already_terminal: boolean;
+}

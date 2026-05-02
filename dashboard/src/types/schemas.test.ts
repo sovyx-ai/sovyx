@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  CancelJobResponseSchema,
   CaptureRestartFrameSchema,
   CaptureRestartReasonSchema,
   ForgetMindResponseSchema,
   PruneRetentionResponseSchema,
+  TrainingJobDetailResponseSchema,
+  TrainingJobsResponseSchema,
+  TrainingJobStatusSchema,
+  TrainingJobSummarySchema,
   VoiceBypassTierStatusResponseSchema,
   VoiceRestartHistoryResponseSchema,
   WizardDevicesResponseSchema,
@@ -528,6 +533,133 @@ describe("WizardDiagnosticResponseSchema", () => {
         active_device_name: null,
         recommendations: [],
       }),
+    ).toThrow();
+  });
+});
+
+// ── Phase 8 / T8.13 — wake-word training endpoints ─
+
+describe("TrainingJobStatusSchema", () => {
+  it("accepts every documented status", () => {
+    for (const status of [
+      "pending",
+      "synthesizing",
+      "training",
+      "complete",
+      "failed",
+      "cancelled",
+    ]) {
+      expect(TrainingJobStatusSchema.parse(status)).toBe(status);
+    }
+  });
+
+  it("rejects unknown status string", () => {
+    expect(() => TrainingJobStatusSchema.parse("running")).toThrow();
+  });
+});
+
+describe("TrainingJobSummarySchema", () => {
+  const valid = {
+    job_id: "lucia",
+    wake_word: "Lúcia",
+    mind_id: "lucia",
+    language: "pt-BR",
+    status: "synthesizing" as const,
+    progress: 0.45,
+    samples_generated: 9,
+    target_samples: 20,
+    started_at: "2026-05-02T12:00:00+00:00",
+    updated_at: "2026-05-02T12:01:00+00:00",
+    completed_at: "",
+    output_path: "",
+    error_summary: "",
+    cancelled_signalled: false,
+  };
+
+  it("parses an in-flight summary", () => {
+    expect(TrainingJobSummarySchema.parse(valid).status).toBe("synthesizing");
+  });
+
+  it("rejects progress outside [0, 1]", () => {
+    expect(() =>
+      TrainingJobSummarySchema.parse({ ...valid, progress: 1.5 }),
+    ).toThrow();
+    expect(() =>
+      TrainingJobSummarySchema.parse({ ...valid, progress: -0.1 }),
+    ).toThrow();
+  });
+
+  it("rejects negative samples_generated", () => {
+    expect(() =>
+      TrainingJobSummarySchema.parse({ ...valid, samples_generated: -1 }),
+    ).toThrow();
+  });
+});
+
+describe("TrainingJobsResponseSchema", () => {
+  it("parses the empty-state payload", () => {
+    expect(TrainingJobsResponseSchema.parse({ jobs: [], total_count: 0 })).toEqual({
+      jobs: [],
+      total_count: 0,
+    });
+  });
+});
+
+describe("TrainingJobDetailResponseSchema", () => {
+  const summary = {
+    job_id: "lucia",
+    wake_word: "Lúcia",
+    mind_id: "lucia",
+    language: "pt-BR",
+    status: "complete" as const,
+    progress: 1.0,
+    samples_generated: 20,
+    target_samples: 20,
+    started_at: "2026-05-02T12:00:00+00:00",
+    updated_at: "2026-05-02T12:30:00+00:00",
+    completed_at: "2026-05-02T12:30:00+00:00",
+    output_path: "/tmp/lucia.onnx",
+    error_summary: "",
+    cancelled_signalled: false,
+  };
+
+  it("parses a complete-state detail with history", () => {
+    const parsed = TrainingJobDetailResponseSchema.parse({
+      summary,
+      history: [
+        { status: "pending", progress: 0, samples_generated: 0 },
+        { status: "complete", progress: 1.0, samples_generated: 20 },
+      ],
+      history_truncated: false,
+    });
+    expect(parsed.summary.status).toBe("complete");
+    expect(parsed.history.length).toBe(2);
+  });
+
+  it("rejects payloads missing summary", () => {
+    expect(() =>
+      TrainingJobDetailResponseSchema.parse({
+        history: [],
+        history_truncated: false,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("CancelJobResponseSchema", () => {
+  it("parses a successful cancel", () => {
+    expect(
+      CancelJobResponseSchema.parse({
+        job_id: "lucia",
+        cancel_signal_written: true,
+        already_terminal: false,
+      }).already_terminal,
+    ).toBe(false);
+  });
+
+  it("rejects payloads missing booleans", () => {
+    expect(() =>
+      CancelJobResponseSchema.parse({ job_id: "lucia" }),
     ).toThrow();
   });
 });
