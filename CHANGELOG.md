@@ -6,6 +6,145 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+(none — every shipped delta is in 0.28.0 below)
+
+## [0.28.0] — 2026-05-02
+
+### Phase 8 — Multi-mind voice (21/22 tasks shipped; only v0.31.0 final tag remains)
+
+- **T8.6 — `WakeWordRouter`** — N concurrent ONNX detectors per mind,
+  first-hit wins, ≤ 50 ms mind context dispatch. `voice/_wake_word_router.py`.
+- **T8.7-T8.10** — lazy-load contract, per-mind cooldown, false-fire
+  counter `voice.wake_word.false_fire_count{mind_id}`, mind context
+  switching.
+- **T8.12** — phonetic similarity matching (`PhoneticMatcher` espeak-ng
+  subprocess + `WakeWordModelResolver` EXACT/PHONETIC/NONE strategies +
+  `voice.wake_word.resolution_strategy` counter). Commit `93ab9d6`.
+- **T8.13 wake-word training pipeline foundation + operator surface** —
+  `voice/wake_word_training/` package: `TrainingStatus` 6-state
+  StrEnum + `TrainingJobState` frozen+slots dataclass +
+  `is_legal_transition` guard + `ProgressTracker` JSONL + `TrainerBackend`
+  Protocol + `KokoroSampleSynthesizer` (deterministic filenames + skip-
+  existing resume + ASCII sanitisation + 24kHz→16kHz resample) +
+  `TrainingOrchestrator` (state machine + `.cancel` polling +
+  on_complete callback) + `sovyx voice train-wake-word` CLI (8 flags +
+  Ctrl+C → exit 130) + dashboard `/api/voice/training/*` (3 endpoints)
+  + frontend types + zod schemas. Commits `845e9cc`, `7e0548d`,
+  `ba3a68a`, `659eb72`, `5c46e28`.
+- **T8.13 ML backend deferral RESOLVED-by-design** — verified PyPI/
+  GitHub research 2026-05-02 proved no viable default backend
+  (OpenWakeWord 0.6.0 incompatible deps + dormant; lgpearson1771 fork
+  script-only; sherpa-onnx semantic mismatch). Pluggable Protocol IS
+  the design. Install hints in `NoBackendRegisteredError` carry 3
+  verified operator paths (external train + drop, custom backend
+  impl, STT fallback). Commit `a3f28d4`.
+- **T8.15 hot-reload primitive end-to-end** —
+  `VoicePipeline.register_mind_wake_word` public delegate +
+  `wake_word.register_mind` daemon RPC (5-step defense-in-depth
+  validation) + CLI `_attempt_hot_reload` with 4 outcome paths.
+  Commits `96f8abe`, `2fff082`.
+- **T8.16** — diacritic + accent variant expansion: 4-variant matrix
+  `(original × ASCII-fold) × (bare × hey-prefix)` + per-language
+  mishears (pt/es/fr/de). 39 tests. Commit `886a688`.
+- **T8.20** — cross-mind isolation Hypothesis property tests at
+  `tests/property/test_cross_mind_isolation_t820.py`. Pins
+  `forall (mind_a, mind_b, action) ⇒ no leak` for ConceptRepository,
+  EpisodeRepository, ConsentLedger.
+- **T8.21 per-mind retention pipeline (6 sub-steps)**:
+  - `ConsentLedger` per-mind audit boundary (step 1)
+  - `MindForgetService` brain DB wipe (step 2)
+  - Service extension to conversations + system pools (step 3)
+  - `sovyx mind forget` CLI + `mind.forget` RPC (step 4)
+  - `POST /api/mind/{mind_id}/forget` dashboard endpoint with
+    defense-in-depth `confirm: <mind_id>` field (step 5)
+  - Time-based retention: `RetentionTuningConfig` + `MindRetentionConfig`
+    + `MindRetentionService.prune_mind` per-pool prune (episodes/
+    conversations/cascade/consolidation_log/daily_stats/consent_ledger)
+    + `ConsentLedger.prune_old` time-axis primitive with
+    `RETENTION_PURGE` tombstone + `sovyx mind retention prune|status`
+    CLI + `mind.retention.prune` RPC + `POST /api/mind/{id}/retention/prune`
+    dashboard endpoint + `RetentionScheduler` daemon auto-prune
+    (default-OFF; opt-in via `MindConfig.retention.auto_prune_enabled`)
+    + `ComplianceConfig.hipaa_mode` forward-compat flag (step 6)
+  - Frontend types + zod schemas + docs/compliance.md +
+    docs/modules/voice-privacy.md updated.
+
+### Phase 7 — Single-mind GA close-out
+
+- **T7.11-T7.16** — multi-language wake variants per BCP-47 locale
+  (pt/es/fr/de/it/zh + Pinyin/Hanzi). Commit `d6ac23f`.
+- **T7.21-T7.24** — wizard backend cluster: `GET /api/voice/wizard/devices`,
+  `POST /api/voice/wizard/test-record`, `GET /api/voice/wizard/test-result/{id}`,
+  `GET /api/voice/wizard/diagnostic`. Commit `ee8489f`.
+- **T7.27 + T7.28** — audio error translation: `voice/_error_messages.py`
+  with `translate_audio_error` + 11-class `AudioErrorClass` StrEnum +
+  23 patterns across 5 platform families (Windows AUDCLNT_E_*, MMSYSERR,
+  macOS Core Audio, PortAudio, POSIX errno). Commit `d935e12`.
+- **T7.43, T7.45-T7.48** — final docs cluster: cross-platform parity
+  matrix, 7 voice docs, 13,512-test pass evidence, security audit
+  summary, 6-regime compliance self-assessment. Commit `7fea5d7`.
+
+### Voice Windows Paranoid Mission — T35 Scenario 2
+
+- Coordinator-level integration test at
+  `tests/integration/voice/test_paranoid_mission_chain.py::TestScenario2Tier1FailsTier2Succeeds`.
+  4 sub-tests pin: fall-through happy path, ring-buffer epoch
+  increment-once contract (Risk #3), tap-only-on-success
+  (`capture_integrity.py:586`), no-spurious-revert. Commit `131461a`.
+- Mission spec audit corrected: Scenario 1 blocked on T27 (Tier 1 RAW
+  COM bindings, operator-deferred per ADR); Scenario 3 blocked on
+  `request_device_change_restart` wire-up (out of scope per runtime
+  listener mission Phase 2); Scenario 4 ✅ shipped via cold-probe
+  strict validation.
+
+### Documentation — enterprise-grade rewrite
+
+- **README** — 26-section enterprise-grade rewrite (1,309 LOC, 7,985
+  words, 73 file:line citations, 6 mermaid diagrams). Sections cover
+  every subsystem, every install path, voice training step-by-step,
+  multi-mind architecture, 6-regime compliance, 31 CLI commands, 91
+  dashboard endpoints, 78 OTel instruments, 34 anti-patterns. Commit
+  `927c33a`.
+- **6 mermaid diagrams committed** at `docs/_assets/diagrams/`:
+  system architecture, cognitive loop detail, voice subsystem detail,
+  multi-mind dispatch, wake-word training pipeline, compliance data
+  flow.
+- **Mission spec** at `docs-internal/missions/MISSION-readme-enterprise-grade-2026-05-02.md`
+  (gitignored). 5-phase mission with 50 tasks. 15 internal research
+  files + 5 best-practice external research files (gitignored,
+  forensic-only).
+- **`OPERATOR-DEBT-MASTER-2026-05-02.md`** consolidated ledger (D1..D22)
+  + **`ROADMAP-POST-V0.31.0.md`** 4-tier post-Phase-8 future features
+  catalogue (Tier A adjacent missions / Tier B quality / Tier C v1.0
+  product expansion / Tier D commercial).
+- **.md hygiene cleanup** — 4 stale files deleted (tmp/ ephemera +
+  zero-friction-install plan that never shipped); 5 items archived
+  per CLAUDE.md mission lifecycle (T1.4 mixin surgery plan, T1.50
+  audit, F1 inventory, voice-failure-analysis, voice-mission-research)
+  with archive footers naming code references and successor missions.
+
+### Quality posture
+
+- 13,690+ backend tests (unit, integration, dashboard, plugin,
+  Hypothesis property, security, stress)
+- 1,009+ frontend vitest cases + Zod runtime schema validation
+- `ruff check` + `ruff format --check` clean across 994+ files
+- `mypy --strict` clean across 432 source files
+- `bandit -r src/sovyx/` 0 issues across all severities
+- `tsc -b` clean
+
+### Default-OFF release posture (deliberate)
+
+This release ships with **conservative defaults**: 27 voice features
+remain default-OFF pending operator pilot validation (D1-D14 in
+`OPERATOR-DEBT-MASTER-2026-05-02.md`). The Phase 8 multi-mind code
+is fully shipped and exercised by tests, but operator pilots
+(macOS / Linux distros / BT headsets / 3+ minds concurrent / 30-day
+soak) are required before flipping defaults to True. The next patch
+release (v0.28.1) will land the 6 voice default flips
+(`voice_aec_enabled`, `voice_noise_suppression_enabled`, etc.) when
+D2 AEC ERLE pilot returns p50 ≥ 35 dB AND p95 ≥ 30 dB.
+
 ### Voice Subsystem — Phase 4 + 5 (partial) + 6 since v0.26.0
 
 This unreleased surface accumulates 44 commits since v0.26.0 spanning
