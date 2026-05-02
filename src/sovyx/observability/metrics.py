@@ -688,6 +688,16 @@ class MetricsRegistry:
             "method=onnx|stt_fallback, mind_id (cardinality bounded "
             "by operator's MindRegistry).",
         )
+        self.voice_wake_word_resolution_strategy = self._counter(
+            "sovyx.voice.wake_word.resolution_strategy",
+            "Increments at mind boot per wake-word model resolution. "
+            "Labels: strategy=exact|phonetic|none, mind_id "
+            "(cardinality bounded). Operator value: ratio of "
+            "phonetic/total tells how often the pretrained pool's "
+            "phonetic fallback is engaged — high ratio = many minds "
+            "without exact pretrained models, candidate for T8.13 "
+            "custom training. Phase 8 / T8.12.",
+        )
         self.voice_opener_attempts = self._counter(
             "sovyx.voice.opener.attempts",
             "Per-attempt outcomes of open_input_stream pyramid (labels: "

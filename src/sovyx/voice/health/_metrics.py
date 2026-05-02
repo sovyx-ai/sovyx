@@ -712,6 +712,36 @@ def record_wake_word_detection_method(
     )
 
 
+def record_wake_word_resolution_strategy(
+    *,
+    strategy: str,
+    mind_id: str = "",
+) -> None:
+    """Increment the T8.12 resolution-strategy counter.
+
+    Fires once at mind boot when the WakeWordModelResolver picks a
+    model path (or decides there's no usable pretrained model).
+    Operator dashboards aggregate the ratio:
+
+    * ``exact`` ratio high → operator's pretrained pool aligns
+      with their mind names (deliberate naming).
+    * ``phonetic`` ratio high → many minds use names without
+      exact pretrained models — candidates for T8.13 custom
+      training to drop ~80 ms ONNX vs. fall-back latency.
+    * ``none`` ratio high → empty/sparse pool; either populate
+      it (T8.11) or accept the STT-fallback latency (~500 ms).
+
+    Args:
+        strategy: ``"exact"``, ``"phonetic"``, or ``"none"``.
+            Matches :class:`WakeWordResolutionStrategy` values.
+        mind_id: Per-mind attribution.
+    """
+    get_metrics().voice_wake_word_resolution_strategy.add(
+        1,
+        attributes={"strategy": strategy, "mind_id": mind_id},
+    )
+
+
 def record_wake_word_fast_path_engaged(*, score: float) -> None:
     """Increment the T7.4 fast-path engagement counter.
 
@@ -1346,6 +1376,7 @@ __all__ = [
     "record_vad_quiet_signal_gated",
     "record_wake_word_confidence",
     "record_wake_word_detection_method",
+    "record_wake_word_resolution_strategy",
     "record_wake_word_detection_ms",
     "record_wake_word_false_fire",
     "record_wake_word_fast_path_engaged",

@@ -329,6 +329,37 @@ class VoiceTuningConfig(BaseSettings):
     Sovyx instance — operators opt in when they've observed
     audio-service-related issues. Non-Windows platforms skip."""
 
+    wake_word_phonetic_fallback_enabled: bool = True
+    """Phase 8 / T8.12 — phonetic similarity matching fallback.
+
+    When ``True`` (default), :class:`WakeWordModelResolver`
+    consults the pretrained pool (``~/.sovyx/wake_word_models/pretrained/``)
+    and uses espeak-ng phoneme distance to pick the closest model
+    when no exact match exists for ``MindConfig.wake_word``. When
+    espeak-ng is not installed, the matcher is gracefully unavailable
+    and the resolver falls through to the STT-based detector
+    (Phase 8 / T8.17).
+
+    Default ``True`` because the fallback is purely additive — a
+    successful phonetic match speeds up wake-word detection
+    (~80 ms ONNX vs ~500 ms STT) without changing the user-perceived
+    contract; an unsuccessful match is logged + falls through.
+    Operators can disable to force STT for compliance reasons (e.g.
+    a deployment where wake-word audio MUST not be matched against
+    a pre-trained model that wasn't explicitly approved)."""
+
+    wake_word_phonetic_max_distance: int = Field(default=3, ge=0, le=20)
+    """Maximum Levenshtein-on-phonemes distance for accepting a
+    phonetic match. Distance 0 = exact phoneme match;
+    higher = more permissive. Default 3 chosen empirically:
+
+    * "Jhonatan" → "Jonny" distance ≈ 2 (drops ``a`` + ``t``)
+    * "Lúcia" → "Lucia" distance = 0 (after ASCII-fold)
+    * "Müller" → "Miller" distance ≈ 1
+
+    Above 3, false-matches start dominating (e.g. "Sarah" →
+    "Sara" distance 1, but "Sarah" → "Carl" distance 4)."""
+
     voice_probe_macos_diagnostics_enabled: bool = True
     """MA1+MA5+MA6 wire-up (mission §1.5 Step 5): when True (darwin
     only), voice factory runs the macOS audio diagnostic trio at boot:
