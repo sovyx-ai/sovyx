@@ -287,6 +287,27 @@ class TestTestRecord:
         assert data["diagnosis"] == "device_error"
         assert data["error"] == "Permission denied"
 
+    def test_recorder_error_diagnosis_hint_translated_to_plain_language(
+        self,
+    ) -> None:
+        """T7.27 + T7.28 wire-up: ``diagnosis_hint`` now carries the
+        plain-language translation from ``_error_messages.translate_audio_error``
+        rather than a generic fallback string."""
+        app = _build_app(recorder=_ErroringRecorder())
+        client = _client(app)
+        response = client.post(
+            "/api/voice/wizard/test-record",
+            json={"duration_seconds": 3.0},
+        )
+        assert response.status_code == 200  # noqa: PLR2004
+        data = response.json()
+        # _ErroringRecorder raises "Permission denied" — translation
+        # table maps it to PERMISSION_DENIED with the multi-platform
+        # hint mentioning macOS / Linux / Windows settings.
+        hint = data["diagnosis_hint"].lower()
+        assert "permission" in hint
+        assert "macos" in hint or "linux" in hint or "windows" in hint
+
     def test_duration_lower_bound_rejected(self) -> None:
         app = _build_app(recorder=_DeterministicRecorder())
         client = _client(app)

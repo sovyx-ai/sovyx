@@ -553,11 +553,19 @@ async def post_wizard_test_record(
             device_id=body.device_id,
         )
     except Exception as exc:  # noqa: BLE001
+        # T7.27 / T7.28 — translate raw OS error to operator-facing
+        # plain-language guidance. Fallback path returns the raw
+        # error verbatim (truncated) when the translation table has
+        # no match, so operators always see SOMETHING actionable.
+        from sovyx.voice._error_messages import translate_audio_error  # noqa: PLC0415
+
+        translation = translate_audio_error(exc)
         logger.warning(
             "voice_wizard_test_record_failed",
             session_id=session_id,
             device_id=body.device_id,
             error=str(exc),
+            error_class=translation.error_class.value,
         )
         response = WizardTestResultResponse(
             session_id=session_id,
@@ -570,10 +578,7 @@ async def post_wizard_test_record(
             clipping_detected=False,
             silent_capture=True,
             diagnosis="device_error",
-            diagnosis_hint=(
-                "Could not open microphone for capture. The device may "
-                "be in use by another application or require permission."
-            ),
+            diagnosis_hint=f"{translation.user_message} {translation.actionable_hint}",
             recorded_at_utc=recorded_at_iso,
             error=str(exc),
         )
