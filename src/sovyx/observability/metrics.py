@@ -698,6 +698,20 @@ class MetricsRegistry:
             "without exact pretrained models, candidate for T8.13 "
             "custom training. Phase 8 / T8.12.",
         )
+        self.voice_audio_error_translated = self._counter(
+            "sovyx.voice.audio_error.translated",
+            "Increments per call to ``translate_audio_error``. Labels: "
+            "class=device_not_found|device_in_use|device_disconnected|"
+            "permission_denied|unsupported_format|buffer_size_error|"
+            "exclusive_mode_denied|driver_failure|invalid_argument|"
+            "service_not_running|unknown (closed-set, cardinality "
+            "bounded by ``AudioErrorClass`` enum). Operator value: "
+            "histogram of error patterns over time — spike in "
+            "``permission_denied`` = TCC/Group-Policy regression; "
+            "spike in ``device_in_use`` = competing app installed; "
+            "rising ``unknown`` = translation table needs new entries "
+            "for an OS update. Phase 7 / T7.27 + T7.28.",
+        )
         self.voice_opener_attempts = self._counter(
             "sovyx.voice.opener.attempts",
             "Per-attempt outcomes of open_input_stream pyramid (labels: "

@@ -552,7 +552,7 @@ def translate_audio_error(
     text = str(error)
 
     if not text.strip():
-        return AudioErrorTranslation(
+        result = AudioErrorTranslation(
             error_class=AudioErrorClass.UNKNOWN,
             user_message="Unknown audio error (empty error message).",
             actionable_hint=(
@@ -562,18 +562,21 @@ def translate_audio_error(
             severity="warning",
             raw_token="",
         )
+        _emit_translation_metric(result.error_class.value)
+        return result
 
     lowered = text.lower()
     for pattern in _ALL_PATTERNS:
         for token in pattern.tokens:
             if token in lowered:
+                _emit_translation_metric(pattern.translation.error_class.value)
                 return pattern.translation
 
     # No match — fall back to the raw text. Truncate to 200 chars so
     # the wizard UI doesn't blow out the layout on multi-line stack
     # traces.
     truncated = text if len(text) <= 200 else f"{text[:197]}..."  # noqa: PLR2004
-    return AudioErrorTranslation(
+    result = AudioErrorTranslation(
         error_class=AudioErrorClass.UNKNOWN,
         user_message=f"Audio error: {truncated}",
         actionable_hint=(
@@ -584,6 +587,28 @@ def translate_audio_error(
         severity="error",
         raw_token="",
     )
+    _emit_translation_metric(result.error_class.value)
+    return result
+
+
+def _emit_translation_metric(error_class: str) -> None:
+    """Best-effort OTel counter emission. Suppresses any failure.
+
+    The translation function MUST stay correct even when the metrics
+    subsystem isn't initialised (early boot, tests with mocked
+    registry, headless one-off uses). Telemetry emission is a
+    side-effect that observers care about; translation correctness
+    is the contract callers depend on. So we lazy-import + suppress
+    every failure mode.
+    """
+    try:
+        from sovyx.voice.health._metrics import (  # noqa: PLC0415
+            record_audio_error_translated,
+        )
+
+        record_audio_error_translated(error_class=error_class)
+    except Exception:  # noqa: BLE001 — best-effort by design
+        pass
 
 
 def translation_count() -> int:

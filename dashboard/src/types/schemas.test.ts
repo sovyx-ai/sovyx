@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   CaptureRestartFrameSchema,
   CaptureRestartReasonSchema,
+  ForgetMindResponseSchema,
+  PruneRetentionResponseSchema,
   VoiceBypassTierStatusResponseSchema,
   VoiceRestartHistoryResponseSchema,
+  WizardDevicesResponseSchema,
+  WizardDiagnosticResponseSchema,
+  WizardTestResultResponseSchema,
 } from "./schemas";
 
 // Voice Windows Paranoid Mission (v0.24.0) — pin the wire contract
@@ -249,6 +254,279 @@ describe("VoiceBypassTierStatusResponseSchema", () => {
       VoiceBypassTierStatusResponseSchema.parse({
         tier1_raw_attempted: 0,
         // missing tier1_raw_succeeded + tier2/3 counters
+      }),
+    ).toThrow();
+  });
+});
+
+// ── Phase 8 / T8.21 — mind forget + retention dashboard endpoints ─
+
+describe("ForgetMindResponseSchema", () => {
+  const valid = {
+    mind_id: "aria",
+    concepts_purged: 0,
+    relations_purged: 0,
+    episodes_purged: 0,
+    concept_embeddings_purged: 0,
+    episode_embeddings_purged: 0,
+    conversation_imports_purged: 0,
+    consolidation_log_purged: 0,
+    conversations_purged: 0,
+    conversation_turns_purged: 0,
+    daily_stats_purged: 0,
+    consent_ledger_purged: 0,
+    total_brain_rows_purged: 0,
+    total_conversations_rows_purged: 0,
+    total_system_rows_purged: 0,
+    total_rows_purged: 0,
+    dry_run: true,
+  };
+
+  it("parses the dry-run zero-state payload", () => {
+    expect(ForgetMindResponseSchema.parse(valid).dry_run).toBe(true);
+  });
+
+  it("parses a populated wipe payload", () => {
+    const populated = {
+      ...valid,
+      dry_run: false,
+      concepts_purged: 3,
+      episodes_purged: 4,
+      total_brain_rows_purged: 7,
+      total_rows_purged: 7,
+    };
+    const parsed = ForgetMindResponseSchema.parse(populated);
+    expect(parsed.concepts_purged).toBe(3);
+    expect(parsed.total_rows_purged).toBe(7);
+  });
+
+  it("rejects negative counts", () => {
+    expect(() =>
+      ForgetMindResponseSchema.parse({ ...valid, concepts_purged: -1 }),
+    ).toThrow();
+  });
+
+  it("rejects non-integer counts", () => {
+    expect(() =>
+      ForgetMindResponseSchema.parse({ ...valid, episodes_purged: 3.5 }),
+    ).toThrow();
+  });
+
+  it("rejects payloads missing required fields", () => {
+    expect(() => ForgetMindResponseSchema.parse({})).toThrow();
+    const { mind_id: _omit, ...withoutMindId } = valid;
+    expect(() => ForgetMindResponseSchema.parse(withoutMindId)).toThrow();
+  });
+});
+
+describe("PruneRetentionResponseSchema", () => {
+  const valid = {
+    mind_id: "aria",
+    cutoff_utc: "2026-04-01T00:00:00+00:00",
+    episodes_purged: 0,
+    conversations_purged: 0,
+    conversation_turns_purged: 0,
+    daily_stats_purged: 0,
+    consolidation_log_purged: 0,
+    consent_ledger_purged: 0,
+    effective_horizons: {
+      episodes: 30,
+      conversations: 30,
+      consolidation_log: 90,
+      daily_stats: 365,
+      consent_ledger: 0,
+    },
+    total_brain_rows_purged: 0,
+    total_conversations_rows_purged: 0,
+    total_system_rows_purged: 0,
+    total_rows_purged: 0,
+    dry_run: true,
+  };
+
+  it("parses a dry-run preview with default horizons", () => {
+    const parsed = PruneRetentionResponseSchema.parse(valid);
+    expect(parsed.effective_horizons.episodes).toBe(30);
+    expect(parsed.effective_horizons.consent_ledger).toBe(0);
+  });
+
+  it("parses a real-run with mind override horizons", () => {
+    const realRun = {
+      ...valid,
+      dry_run: false,
+      effective_horizons: { ...valid.effective_horizons, episodes: 90 },
+      episodes_purged: 5,
+      total_brain_rows_purged: 5,
+      total_rows_purged: 5,
+    };
+    const parsed = PruneRetentionResponseSchema.parse(realRun);
+    expect(parsed.effective_horizons.episodes).toBe(90);
+    expect(parsed.episodes_purged).toBe(5);
+  });
+
+  it("rejects negative horizon values", () => {
+    expect(() =>
+      PruneRetentionResponseSchema.parse({
+        ...valid,
+        effective_horizons: { episodes: -1 },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects payloads missing cutoff_utc", () => {
+    const { cutoff_utc: _omit, ...withoutCutoff } = valid;
+    expect(() => PruneRetentionResponseSchema.parse(withoutCutoff)).toThrow();
+  });
+});
+
+// ── Phase 7 / T7.21-T7.24 — voice wizard endpoints ─
+
+describe("WizardDevicesResponseSchema", () => {
+  it("parses an empty-list payload (no audio hardware)", () => {
+    const parsed = WizardDevicesResponseSchema.parse({
+      devices: [],
+      total_count: 0,
+      default_device_id: null,
+    });
+    expect(parsed.devices).toEqual([]);
+    expect(parsed.default_device_id).toBeNull();
+  });
+
+  it("parses a populated devices payload", () => {
+    const parsed = WizardDevicesResponseSchema.parse({
+      devices: [
+        {
+          device_id: "0",
+          name: "Built-in Microphone",
+          friendly_name: "Built-in Microphone",
+          max_input_channels: 2,
+          default_sample_rate: 48000,
+          is_default: true,
+          diagnosis_hint: "ready",
+        },
+      ],
+      total_count: 1,
+      default_device_id: "0",
+    });
+    expect(parsed.devices.length).toBe(1);
+    expect(parsed.devices[0].diagnosis_hint).toBe("ready");
+  });
+
+  it("rejects negative channel counts", () => {
+    expect(() =>
+      WizardDevicesResponseSchema.parse({
+        devices: [
+          {
+            device_id: "0",
+            name: "x",
+            friendly_name: "x",
+            max_input_channels: -1,
+            default_sample_rate: 48000,
+            is_default: false,
+            diagnosis_hint: "ready",
+          },
+        ],
+        total_count: 1,
+        default_device_id: null,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("WizardTestResultResponseSchema", () => {
+  const valid = {
+    session_id: "abc123",
+    success: true,
+    duration_actual_s: 3.0,
+    sample_rate_hz: 16000,
+    level_rms_dbfs: -20.0,
+    level_peak_dbfs: -6.0,
+    snr_db: 25.0,
+    clipping_detected: false,
+    silent_capture: false,
+    diagnosis: "ok",
+    diagnosis_hint: "Microphone looks good.",
+    recorded_at_utc: "2026-05-02T12:00:00+00:00",
+    error: null,
+  };
+
+  it("parses a successful capture payload", () => {
+    expect(WizardTestResultResponseSchema.parse(valid).diagnosis).toBe("ok");
+  });
+
+  it("parses a silent-capture payload (null levels)", () => {
+    const silent = {
+      ...valid,
+      success: true,
+      silent_capture: true,
+      level_rms_dbfs: null,
+      level_peak_dbfs: null,
+      snr_db: null,
+      diagnosis: "no_audio",
+      diagnosis_hint: "No usable signal captured.",
+    };
+    const parsed = WizardTestResultResponseSchema.parse(silent);
+    expect(parsed.silent_capture).toBe(true);
+    expect(parsed.level_peak_dbfs).toBeNull();
+  });
+
+  it("parses a recorder-error payload (success=false)", () => {
+    const errorPayload = {
+      ...valid,
+      success: false,
+      level_rms_dbfs: null,
+      level_peak_dbfs: null,
+      snr_db: null,
+      diagnosis: "device_error",
+      diagnosis_hint: "Permission denied. Open System Settings...",
+      error: "Permission denied",
+    };
+    const parsed = WizardTestResultResponseSchema.parse(errorPayload);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toBe("Permission denied");
+  });
+
+  it("rejects negative duration", () => {
+    expect(() =>
+      WizardTestResultResponseSchema.parse({
+        ...valid,
+        duration_actual_s: -1.0,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("WizardDiagnosticResponseSchema", () => {
+  it("parses a ready=true payload (no APOs)", () => {
+    const parsed = WizardDiagnosticResponseSchema.parse({
+      ready: true,
+      voice_clarity_active: false,
+      active_device_name: null,
+      platform: "linux",
+      recommendations: [],
+    });
+    expect(parsed.ready).toBe(true);
+    expect(parsed.recommendations).toEqual([]);
+  });
+
+  it("parses a not-ready payload with Voice Clarity active", () => {
+    const parsed = WizardDiagnosticResponseSchema.parse({
+      ready: false,
+      voice_clarity_active: true,
+      active_device_name: "Razer BlackShark V2 Pro",
+      platform: "win32",
+      recommendations: ["Windows Voice Clarity APO is active..."],
+    });
+    expect(parsed.voice_clarity_active).toBe(true);
+    expect(parsed.recommendations.length).toBe(1);
+  });
+
+  it("rejects payloads missing platform", () => {
+    expect(() =>
+      WizardDiagnosticResponseSchema.parse({
+        ready: true,
+        voice_clarity_active: false,
+        active_device_name: null,
+        recommendations: [],
       }),
     ).toThrow();
   });

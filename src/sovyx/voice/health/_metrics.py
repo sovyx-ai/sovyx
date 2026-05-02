@@ -712,6 +712,34 @@ def record_wake_word_detection_method(
     )
 
 
+def record_audio_error_translated(*, error_class: str) -> None:
+    """Increment the T7.27 / T7.28 audio-error-translated counter.
+
+    Fires per call to
+    :func:`sovyx.voice._error_messages.translate_audio_error`. The
+    label is the ``AudioErrorClass`` value (closed-set, cardinality
+    bounded by the enum).
+
+    Operator dashboards aggregate the histogram for trend analysis:
+
+    * ``permission_denied`` spike → TCC / Group Policy regression
+      after an OS update.
+    * ``device_in_use`` spike → operator installed a competing app
+      (Zoom, Teams) that grabs exclusive mode.
+    * Rising ``unknown`` ratio → translation table needs new
+      entries for an OS update; surface as a tracked debt.
+
+    Args:
+        error_class: One of the :class:`AudioErrorClass` values
+            (``device_not_found`` / ``device_in_use`` / ... /
+            ``unknown``). Stable wire format.
+    """
+    get_metrics().voice_audio_error_translated.add(
+        1,
+        attributes={"class": error_class},
+    )
+
+
 def record_wake_word_resolution_strategy(
     *,
     strategy: str,
@@ -1375,6 +1403,7 @@ __all__ = [
     "record_time_to_first_utterance",
     "record_vad_quiet_signal_gated",
     "record_wake_word_confidence",
+    "record_audio_error_translated",
     "record_wake_word_detection_method",
     "record_wake_word_resolution_strategy",
     "record_wake_word_detection_ms",

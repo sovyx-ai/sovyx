@@ -178,6 +178,14 @@ Probe mode discriminator: `cold`, `warm`. From
 | `sovyx.voice.wake_word.confidence` | Histogram | 1 | ONNX score at confirmed detection (T7.6). Labels: `detection_path=two_stage\|fast_path` |
 | `sovyx.voice.wake_word.fast_path_engaged` | Counter | 1 | T7.4 fast-path engagement events. Labels: `score_bucket=<0.80\|0.80-0.85\|0.85-0.90\|0.90-0.95\|0.95-1.00` |
 | `sovyx.voice.wake_word.false_fire_count` | Counter | 1 | Wake fired + STT discarded transcript (T7.7). Labels: `reason=empty_transcription\|rejected_transcription\|sub_confidence` |
+| `sovyx.voice.wake_word.detection_method` | Counter | 1 | Per-detection method label. T8.19. Labels: `method=onnx\|stt_fallback`, `mind_id` |
+| `sovyx.voice.wake_word.resolution_strategy` | Counter | 1 | Per-mind boot wake-word model resolution. T8.12. Labels: `strategy=exact\|phonetic\|none`, `mind_id` |
+
+### `sovyx.voice.audio_error.*` (Phase 7 — error translation)
+
+| Instrument | Kind | Unit | Description |
+|---|---|---|---|
+| `sovyx.voice.audio_error.translated` | Counter | 1 | Increments per call to ``translate_audio_error``. T7.27 + T7.28. Labels: `class=device_not_found\|device_in_use\|device_disconnected\|permission_denied\|unsupported_format\|buffer_size_error\|exclusive_mode_denied\|driver_failure\|invalid_argument\|service_not_running\|unknown` (closed-set, cardinality bounded by `AudioErrorClass` enum). Operator dashboards: histogram of error patterns over time — spike in `permission_denied` = TCC/Group-Policy regression after OS update; spike in `device_in_use` = competing app installed; rising `unknown` ratio = translation table needs new entries |
 
 ### `sovyx.voice.health.*` (cascade + bypass + watchdog)
 
