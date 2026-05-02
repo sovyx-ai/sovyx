@@ -321,9 +321,97 @@ def register_cli_handlers(
             "dry_run": report.dry_run,
         }
 
+    async def _wake_word_register_mind(
+        mind_id: str,
+        model_path: str,
+    ) -> dict[str, Any]:
+        """Hot-reload a mind's wake-word ONNX model into the live router.
+
+        Phase 8 / T8.15 wire-up — surfaces
+        :meth:`sovyx.voice.pipeline._orchestrator.VoicePipeline.register_mind_wake_word`
+        as a daemon RPC so the CLI's ``sovyx voice train-wake-word`` (or
+        a future dashboard endpoint) can activate a freshly trained
+        ``.onnx`` without restarting the daemon. The router-side
+        primitive is idempotent — re-registering the same ``mind_id``
+        replaces the prior detector, the prior ONNX session is
+        GC'd by Python's ref-count.
+
+        Validation order (defense-in-depth):
+          1. ``mind_id`` non-empty after strip().
+          2. ``model_path`` exists on disk.
+          3. ``model_path`` ends in ``.onnx`` (string-match on suffix —
+             the router itself does not enforce this, but mismatched
+             extensions are a strong signal of operator error).
+          4. ``VoicePipeline`` is registered (voice subsystem enabled).
+          5. The pipeline must have a ``WakeWordRouter`` (multi-mind
+             mode). Raises :class:`VoiceError` with a remediation hint
+             when the router is missing.
+
+        Args:
+            mind_id: Target mind. Empty/whitespace rejected.
+            model_path: Filesystem path to the trained ``.onnx``
+                checkpoint.
+
+        Returns:
+            ``{"mind_id": ..., "model_path": ..., "hot_reload_succeeded":
+            True}`` on success. Failures raise — the RPC framework
+            surfaces them as JSON-RPC error responses.
+
+        Raises:
+            ValueError: Empty mind_id OR non-``.onnx`` model_path.
+            FileNotFoundError: Model file does not exist.
+            VoiceError: Voice pipeline not registered, OR pipeline
+                lacks a multi-mind WakeWordRouter (single-mind mode).
+        """
+        from pathlib import Path  # noqa: PLC0415
+
+        from sovyx.engine.errors import VoiceError  # noqa: PLC0415
+        from sovyx.engine.types import MindId  # noqa: PLC0415
+        from sovyx.voice.pipeline._orchestrator import (  # noqa: PLC0415
+            VoicePipeline,
+        )
+
+        if not mind_id.strip():
+            msg = "mind_id must be a non-empty string"
+            raise ValueError(msg)
+
+        path = Path(model_path)
+        if not path.exists():
+            msg = f"model_path does not exist: {path}"
+            raise FileNotFoundError(msg)
+        if path.suffix.lower() != ".onnx":
+            msg = f"model_path must end in .onnx (got {path.suffix!r}): {path}"
+            raise ValueError(msg)
+
+        if not registry.is_registered(VoicePipeline):
+            msg = (
+                "voice subsystem not enabled (VoicePipeline not "
+                "registered); enable voice in the dashboard first"
+            )
+            raise VoiceError(msg)
+
+        pipeline = await registry.resolve(VoicePipeline)
+        # Delegate to the public method on VoicePipeline; this raises
+        # ``VoiceError`` if the multi-mind router isn't configured.
+        pipeline.register_mind_wake_word(MindId(mind_id), model_path=path)
+
+        logger.info(
+            "voice.wake_word.rpc.register_mind_succeeded",
+            **{
+                "voice.mind_id": mind_id,
+                "voice.model_path": str(path),
+            },
+        )
+        return {
+            "mind_id": mind_id,
+            "model_path": str(path),
+            "hot_reload_succeeded": True,
+        }
+
     rpc.register_method("chat", _chat)
     rpc.register_method("mind.list", _mind_list)
     rpc.register_method("mind.forget", _mind_forget)
     rpc.register_method("mind.retention.prune", _mind_retention_prune)
     rpc.register_method("config.get", _config_get)
-    logger.debug("cli_rpc_handlers_registered", count=5)
+    rpc.register_method("wake_word.register_mind", _wake_word_register_mind)
+    logger.debug("cli_rpc_handlers_registered", count=6)

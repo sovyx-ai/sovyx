@@ -331,6 +331,7 @@ class TestRpcHandlerRegistration:
             "mind.forget",
             "mind.retention.prune",
             "config.get",
+            "wake_word.register_mind",
         } <= registered
 
 
@@ -573,3 +574,252 @@ class TestRpcHandlerBehavior:
             await brain.close()
             await conv.close()
             await system.close()
+
+
+# ── Phase 8 / T8.13 + T8.15 — wake_word.register_mind RPC handler ──
+
+
+@pytest.mark.asyncio
+class TestWakeWordRegisterMindRpc:
+    """``wake_word.register_mind`` RPC handler — Phase 8 T8.15 hot-reload.
+
+    Surface contract: validates ``mind_id`` + ``model_path`` (existence
+    + ``.onnx`` suffix), confirms voice subsystem is enabled, then
+    delegates to :meth:`VoicePipeline.register_mind_wake_word`.
+    """
+
+    async def test_happy_path_registers_and_returns_success(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.rpc_server import DaemonRPCServer
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        model_path = tmp_path / "lucia.onnx"
+        model_path.write_bytes(b"\x00\x01\x02\x03")  # any bytes — handler doesn't load
+
+        pipeline = MagicMock(spec=VoicePipeline)
+        pipeline.register_mind_wake_word = MagicMock(return_value=None)
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=pipeline)
+
+        rpc = DaemonRPCServer()
+        register_cli_handlers(rpc, registry)
+
+        result = await rpc._methods["wake_word.register_mind"](  # noqa: SLF001
+            mind_id="lucia",
+            model_path=str(model_path),
+        )
+
+        assert result == {
+            "mind_id": "lucia",
+            "model_path": str(model_path),
+            "hot_reload_succeeded": True,
+        }
+        # Validates the delegation actually happened with the right
+        # ``MindId``-typed arg + ``Path``-typed kwarg.
+        pipeline.register_mind_wake_word.assert_called_once()
+        call_args = pipeline.register_mind_wake_word.call_args
+        assert str(call_args.args[0]) == "lucia"
+        assert str(call_args.kwargs["model_path"]) == str(model_path)
+
+    async def test_empty_mind_id_rejected(self, tmp_path: Path) -> None:
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.rpc_server import DaemonRPCServer
+
+        rpc = DaemonRPCServer()
+        registry = MagicMock()
+        register_cli_handlers(rpc, registry)
+
+        with pytest.raises(ValueError, match="non-empty"):
+            await rpc._methods["wake_word.register_mind"](  # noqa: SLF001
+                mind_id="",
+                model_path=str(tmp_path / "x.onnx"),
+            )
+
+    async def test_whitespace_only_mind_id_rejected(self, tmp_path: Path) -> None:
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.rpc_server import DaemonRPCServer
+
+        rpc = DaemonRPCServer()
+        registry = MagicMock()
+        register_cli_handlers(rpc, registry)
+
+        with pytest.raises(ValueError, match="non-empty"):
+            await rpc._methods["wake_word.register_mind"](  # noqa: SLF001
+                mind_id="   ",
+                model_path=str(tmp_path / "x.onnx"),
+            )
+
+    async def test_missing_model_file_raises_file_not_found(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.rpc_server import DaemonRPCServer
+
+        rpc = DaemonRPCServer()
+        registry = MagicMock()
+        register_cli_handlers(rpc, registry)
+
+        with pytest.raises(FileNotFoundError):
+            await rpc._methods["wake_word.register_mind"](  # noqa: SLF001
+                mind_id="lucia",
+                model_path=str(tmp_path / "does_not_exist.onnx"),
+            )
+
+    async def test_non_onnx_suffix_rejected(self, tmp_path: Path) -> None:
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.rpc_server import DaemonRPCServer
+
+        bad = tmp_path / "lucia.txt"
+        bad.write_text("not an onnx model")
+
+        rpc = DaemonRPCServer()
+        registry = MagicMock()
+        register_cli_handlers(rpc, registry)
+
+        with pytest.raises(ValueError, match="must end in .onnx"):
+            await rpc._methods["wake_word.register_mind"](  # noqa: SLF001
+                mind_id="lucia",
+                model_path=str(bad),
+            )
+
+    async def test_voice_disabled_raises_voice_error(self, tmp_path: Path) -> None:
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.errors import VoiceError
+        from sovyx.engine.rpc_server import DaemonRPCServer
+
+        model = tmp_path / "lucia.onnx"
+        model.write_bytes(b"\x00")
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=False)
+
+        rpc = DaemonRPCServer()
+        register_cli_handlers(rpc, registry)
+
+        with pytest.raises(VoiceError, match="voice subsystem not enabled"):
+            await rpc._methods["wake_word.register_mind"](  # noqa: SLF001
+                mind_id="lucia",
+                model_path=str(model),
+            )
+
+    async def test_uppercase_onnx_suffix_accepted(self, tmp_path: Path) -> None:
+        """Suffix check is case-insensitive — Windows operators may
+        end up with ``.ONNX`` from path round-trips."""
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.rpc_server import DaemonRPCServer
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        model = tmp_path / "lucia.ONNX"
+        model.write_bytes(b"\x00")
+
+        pipeline = MagicMock(spec=VoicePipeline)
+        pipeline.register_mind_wake_word = MagicMock(return_value=None)
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=pipeline)
+
+        rpc = DaemonRPCServer()
+        register_cli_handlers(rpc, registry)
+
+        result = await rpc._methods["wake_word.register_mind"](  # noqa: SLF001
+            mind_id="lucia",
+            model_path=str(model),
+        )
+        assert result["hot_reload_succeeded"] is True
+
+    async def test_pipeline_register_propagates_voice_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """When VoicePipeline raises (single-mind mode — no router),
+        the RPC handler propagates the VoiceError verbatim."""
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.errors import VoiceError
+        from sovyx.engine.rpc_server import DaemonRPCServer
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        model = tmp_path / "lucia.onnx"
+        model.write_bytes(b"\x00")
+
+        pipeline = MagicMock(spec=VoicePipeline)
+        pipeline.register_mind_wake_word = MagicMock(
+            side_effect=VoiceError("router not configured (single-mind mode)"),
+        )
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=pipeline)
+
+        rpc = DaemonRPCServer()
+        register_cli_handlers(rpc, registry)
+
+        with pytest.raises(VoiceError, match="router not configured"):
+            await rpc._methods["wake_word.register_mind"](  # noqa: SLF001
+                mind_id="lucia",
+                model_path=str(model),
+            )
+
+
+# ── Phase 8 / T8.15 — VoicePipeline.register_mind_wake_word delegate ──
+
+
+class TestVoicePipelineRegisterMindWakeWord:
+    """:meth:`VoicePipeline.register_mind_wake_word` — public wrapper
+    around :meth:`WakeWordRouter.register_mind` for hot-reload."""
+
+    def test_no_router_raises_voice_error_with_remediation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Single-mind mode — pipeline has no router; method must
+        raise a clear remediation hint not a private-attribute traceback."""
+        from sovyx.engine.errors import VoiceError
+        from sovyx.engine.types import MindId
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        # Build a pipeline-shaped object with the only attribute the
+        # method touches; spec=VoicePipeline keeps mypy honest.
+        pipeline = MagicMock(spec=VoicePipeline)
+        pipeline._wake_word_router = None  # noqa: SLF001
+        # Bind the real method to the mock to exercise the contract
+        # without constructing a real pipeline (heavy ONNX deps).
+        pipeline.register_mind_wake_word = VoicePipeline.register_mind_wake_word.__get__(
+            pipeline, VoicePipeline
+        )
+
+        with pytest.raises(VoiceError, match="single-mind mode"):
+            pipeline.register_mind_wake_word(
+                MindId("lucia"),
+                model_path=tmp_path / "lucia.onnx",
+            )
+
+    def test_with_router_delegates_to_register_mind(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from sovyx.engine.types import MindId
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        router = MagicMock()
+        pipeline = MagicMock(spec=VoicePipeline)
+        pipeline._wake_word_router = router  # noqa: SLF001
+        pipeline.register_mind_wake_word = VoicePipeline.register_mind_wake_word.__get__(
+            pipeline, VoicePipeline
+        )
+
+        model_path = tmp_path / "lucia.onnx"
+        pipeline.register_mind_wake_word(
+            MindId("lucia"),
+            model_path=model_path,
+        )
+
+        router.register_mind.assert_called_once()
+        kwargs = router.register_mind.call_args.kwargs
+        assert kwargs["model_path"] == model_path
+        assert kwargs["config"] is None

@@ -65,11 +65,13 @@ from sovyx.voice.pipeline._state_machine import PipelineStateMachine
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
+    from pathlib import Path
 
     import numpy as np
     import numpy.typing as npt
 
     from sovyx.engine.events import EventBus
+    from sovyx.engine.types import MindId
     from sovyx.voice._aec import RenderPcmSink
     from sovyx.voice._wake_word_router import WakeWordRouter
     from sovyx.voice.health._self_feedback import SelfFeedbackGate
@@ -77,7 +79,7 @@ if TYPE_CHECKING:
     from sovyx.voice.stt import STTEngine
     from sovyx.voice.tts_piper import TTSEngine
     from sovyx.voice.vad import SileroVAD, VADEvent
-    from sovyx.voice.wake_word import WakeWordDetector
+    from sovyx.voice.wake_word import WakeWordConfig, WakeWordDetector
 
 logger = get_logger(__name__)
 
@@ -811,6 +813,58 @@ class VoicePipeline:
     def wake_word(self) -> WakeWordDetector:
         """Wake word detector used by this pipeline."""
         return self._wake_word
+
+    def register_mind_wake_word(
+        self,
+        mind_id: MindId,
+        *,
+        model_path: Path,
+        config: WakeWordConfig | None = None,
+    ) -> None:
+        """Hot-reload a mind's wake-word detector with a new ONNX model.
+
+        Phase 8 / T8.15 — wires the ``wake_word.register_mind`` RPC
+        handler to the live :class:`~sovyx.voice._wake_word_router.WakeWordRouter`
+        owned by this pipeline. Idempotent: re-registering the same
+        ``mind_id`` replaces the prior detector (the prior ONNX session
+        is garbage-collected normally; no manual close needed). Use case:
+        the operator finishes ``sovyx voice train-wake-word ...`` and
+        wants the new model active without restarting the daemon.
+
+        Args:
+            mind_id: Stable mind identifier (matches MindConfig.id).
+            model_path: Filesystem path to the trained ``.onnx``
+                checkpoint. The router does not validate the file;
+                callers MUST verify the path exists + ends in ``.onnx``
+                before invoking. The RPC handler in
+                :mod:`sovyx.engine._rpc_handlers` performs that
+                validation.
+            config: Per-mind ``WakeWordConfig`` (cooldown, thresholds,
+                etc.). Default ``None`` reuses the router's default.
+
+        Raises:
+            VoiceError: When the multi-mind ``WakeWordRouter`` is not
+                configured (single-mind mode). Message includes a
+                remediation hint.
+            ValueError: Propagated from
+                :meth:`WakeWordRouter.register_mind` when ``mind_id``
+                is empty.
+        """
+        from sovyx.engine.errors import VoiceError  # noqa: PLC0415
+
+        if self._wake_word_router is None:
+            msg = (
+                "wake-word router not configured (single-mind mode); "
+                "hot-reload requires multi-mind setup. Restart the daemon "
+                "to pick up the new model from "
+                "``<data_dir>/wake_word_models/pretrained/``."
+            )
+            raise VoiceError(msg)
+        self._wake_word_router.register_mind(
+            mind_id,
+            model_path=model_path,
+            config=config,
+        )
 
     @property
     def vad_inference_timeout_count(self) -> int:
