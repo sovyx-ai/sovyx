@@ -40,10 +40,12 @@ Reference: master mission ``MISSION-voice-final-skype-grade-2026.md``
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from starlette.status import (
     HTTP_202_ACCEPTED,
@@ -66,6 +68,14 @@ logger = get_logger(__name__)
 
 
 router = APIRouter(prefix="/api/voice/training", dependencies=[Depends(verify_token)])
+
+# Mission MISSION-v0.30.0-single-mind-ga-2026-05-03 §T1.2 (D2):
+# WebSocket router for live training progress. Auth via query-param
+# token (FastAPI's ``Depends(verify_token)`` doesn't flow into
+# WebSocket routes reliably across versions — same pattern as
+# ``routes/logs.py:269``). The token must match
+# ``request.app.state.auth_token`` set by ``server.create_app``.
+ws_router = APIRouter(prefix="/api/voice/training")
 
 
 _HISTORY_DEFAULT_LIMIT = 200
@@ -764,6 +774,137 @@ async def cancel_training_job(
     )
 
 
+@ws_router.websocket("/jobs/{job_id}/stream")
+async def stream_training_job(websocket: WebSocket, job_id: str) -> None:
+    """Real-time training progress stream — Mission §T1.2 (D2).
+
+    Tails ``<training_root>/<job_id>/progress.jsonl`` at 0.5 s
+    intervals and pushes JSON messages to the client. Mirrors the
+    proven ``routes/logs.py:269-329`` pattern (token via query param,
+    poll loop with ``asyncio.wait_for`` heartbeat, contextlib.suppress
+    on close).
+
+    Message shapes:
+
+    * ``{"type": "snapshot", "state": {<TrainingJobState fields>}}``
+      — emitted for every progress.jsonl line not yet observed.
+    * ``{"type": "terminal", "state": {<TrainingJobState fields>}}``
+      — emitted ONCE when the orchestrator writes a terminal status
+      (COMPLETE / FAILED / CANCELLED). After this message the socket
+      closes cleanly with code 1000.
+    * ``{"type": "error", "message": "..."}`` + close code 4404 —
+      job_id not found / no progress.jsonl yet.
+
+    Auth: ``token`` query param must match
+    ``websocket.app.state.auth_token`` (set by
+    :func:`sovyx.dashboard.server.create_app`). Mismatch closes the
+    socket with code 4401.
+
+    Job-id validation: path-traversal defence rejects ``/``, ``\\``,
+    or ``..`` in ``job_id`` even though FastAPI's path-param parser
+    would accept them. Same defence as
+    :func:`get_training_job` (lines 270-282 of this file).
+    """
+    expected = getattr(websocket.app.state, "auth_token", None)
+    provided = websocket.query_params.get("token")
+    if expected is not None and provided != expected:
+        await websocket.close(code=4401)
+        return
+
+    # Path-traversal defence — operators on shared hosts shouldn't
+    # be able to peek at sibling-tenant data via crafted job_ids.
+    if not job_id.strip() or "/" in job_id or "\\" in job_id or ".." in job_id:
+        await websocket.accept()
+        await websocket.send_json(
+            {"type": "error", "message": f"invalid job_id: {job_id!r}"},
+        )
+        await websocket.close(code=4400)
+        return
+
+    # Resolve training root (mirrors HTTP endpoint logic; can't reuse
+    # ``_resolve_engine_config`` because that takes a Request object,
+    # but the engine_config lives on the same ``app.state``).
+    engine_config = getattr(websocket.app.state, "engine_config", None)
+    if engine_config is not None:
+        training_root = engine_config.data_dir / "wake_word_training"
+    else:
+        training_root = Path.home() / ".sovyx" / "wake_word_training"
+    job_dir = training_root / job_id
+
+    # Validate the job exists. Note: a job that's about to start
+    # (POST /jobs/start spawn just fired) might not have written its
+    # first progress line yet. We accept the WS connection and tail
+    # the file once it appears (frontend race-tolerance: connect
+    # immediately after POST returns 202).
+    progress_path = job_dir / "progress.jsonl"
+    if not job_dir.is_dir():
+        await websocket.accept()
+        await websocket.send_json(
+            {"type": "error", "message": f"job not found: {job_id}"},
+        )
+        await websocket.close(code=4404)
+        return
+
+    await websocket.accept()
+    poll_interval = 0.5
+    line_offset = 0
+
+    try:
+        while True:
+            if progress_path.is_file():
+                # Read all lines and emit any new ones since last cursor.
+                lines = progress_path.read_text(encoding="utf-8").splitlines()
+                if line_offset < len(lines):
+                    new_lines = lines[line_offset:]
+                    line_offset = len(lines)
+                    for raw_line in new_lines:
+                        if not raw_line.strip():
+                            continue
+                        # Parse the JSONL line into a state dict.
+                        # Defensive: a malformed line shouldn't kill
+                        # the stream — log + skip.
+                        try:
+                            import json  # noqa: PLC0415
+
+                            state_dict = json.loads(raw_line)
+                        except (ValueError, TypeError):
+                            logger.debug(
+                                "voice.training.stream.malformed_line",
+                                **{
+                                    "voice.training.job_id": job_id,
+                                    "voice.training.line_offset": line_offset,
+                                },
+                            )
+                            continue
+
+                        status_value = state_dict.get("status", "")
+                        is_terminal = status_value in _TERMINAL_STATUSES
+                        msg_type = "terminal" if is_terminal else "snapshot"
+                        await websocket.send_json(
+                            {"type": msg_type, "state": state_dict},
+                        )
+                        if is_terminal:
+                            # Terminal state seen — close cleanly.
+                            await websocket.close(code=1000)
+                            return
+
+            # Heartbeat: wait poll_interval seconds OR until the
+            # client sends something (ping, control message, etc).
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=poll_interval)
+            except TimeoutError:
+                continue
+    except WebSocketDisconnect:
+        return
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "voice.training.stream.unexpected_error",
+            **{"voice.training.job_id": job_id},
+        )
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1011)
+
+
 __all__ = [
     "CancelJobResponse",
     "StartTrainingRequest",
@@ -772,4 +913,5 @@ __all__ = [
     "TrainingJobSummary",
     "TrainingJobsResponse",
     "router",
+    "ws_router",
 ]
