@@ -580,10 +580,29 @@ async def post_mind_wake_word_toggle(
                 detail=f"failed to load mind.yaml for pre-validate: {exc}",
             ) from exc
 
+        # Thread per-mind ``voice_language`` + the global phonetic
+        # tuning knob so the dashboard hot-apply path resolves
+        # symmetrically to the boot path. Asymmetry would surface as
+        # operator-visible drift ("Lúcia.onnx matches at boot but not
+        # in the dashboard"). The engine_config lookup is best-effort
+        # — when the tuning knob isn't reachable from app.state we
+        # default to the conservative ``True`` (matches the engine
+        # default).
+        from sovyx.engine.config import VoiceTuningConfig  # noqa: PLC0415
+
+        engine_config_state = getattr(request.app.state, "engine_config", None)
+        if engine_config_state is not None:
+            voice_tuning = engine_config_state.tuning.voice
+        else:
+            voice_tuning = VoiceTuningConfig()
+
         try:
             pre_resolved_model_path = resolve_wake_word_model_for_mind(
                 data_dir=data_dir,
                 wake_word=mind_config.effective_wake_word,
+                voice_language=mind_config.voice_language or "en",
+                phonetic_max_distance=voice_tuning.wake_word_phonetic_max_distance,
+                phonetic_fallback_enabled=voice_tuning.wake_word_phonetic_fallback_enabled,
             )
         except VoiceError as exc:
             # NONE strategy — no ONNX matches this wake word. Surface

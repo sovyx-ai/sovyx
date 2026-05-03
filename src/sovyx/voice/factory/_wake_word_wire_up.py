@@ -57,6 +57,7 @@ from sovyx.engine.errors import MindConfigError, VoiceError
 from sovyx.engine.types import MindId
 from sovyx.mind.config import load_mind_config
 from sovyx.observability.logging import get_logger
+from sovyx.voice._phonetic_matcher import PhoneticMatcher
 from sovyx.voice._wake_word_resolver import (
     PretrainedModelRegistry,
     WakeWordModelResolver,
@@ -74,6 +75,7 @@ def build_wake_word_router_for_enabled_minds(
     *,
     data_dir: Path,
     phonetic_max_distance: int = 3,
+    phonetic_fallback_enabled: bool = True,
 ) -> WakeWordRouter | None:
     """Return a :class:`WakeWordRouter` populated for enabled minds, or ``None``.
 
@@ -84,6 +86,16 @@ def build_wake_word_router_for_enabled_minds(
         phonetic_max_distance: Maximum Levenshtein distance for
             phonetic matching. Mirrors
             ``EngineConfig.tuning.voice.wake_word_phonetic_max_distance``.
+        phonetic_fallback_enabled: Kill-switch for the per-mind
+            :class:`PhoneticMatcher`. When ``True`` (default), the
+            resolver consults espeak-ng for diacritic / phonetic
+            matches against the pretrained pool ("Lúcia" → matches
+            ``lucia.onnx``); when ``False``, falls back to EXACT-only.
+            Auto-degrades to EXACT-only when espeak-ng is not on PATH
+            (Windows hosts without manual install) — zero behavioral
+            risk vs the v0.28.2 hardcoded-None contract on those
+            hosts. Mirrors
+            ``EngineConfig.tuning.voice.wake_word_phonetic_fallback_enabled``.
 
     Returns:
         A populated :class:`WakeWordRouter` when at least one mind on
@@ -114,23 +126,27 @@ def build_wake_word_router_for_enabled_minds(
 
     pretrained_dir = data_dir / "wake_word_models" / "pretrained"
     registry = PretrainedModelRegistry(models_dir=pretrained_dir)
-    # Phonetic matcher is deliberately omitted (None) at this site:
-    # espeak-ng is a system binary that may not be present on the
-    # operator's host (especially Windows). The resolver gracefully
-    # downgrades to EXACT-only when matcher=None — operators who want
-    # PHONETIC fallback install espeak-ng and the runtime path can be
-    # plumbed through in a follow-up task once we surface a tuning
-    # toggle for it. Unblocking T1 with EXACT-only is correct: T8.13
-    # custom training writes the ONNX with the operator's exact
-    # filename, so EXACT always hits for trained wake words.
-    resolver = WakeWordModelResolver(
-        registry=registry,
-        phonetic_matcher=None,
-        max_phoneme_distance=phonetic_max_distance,
-    )
 
     router = WakeWordRouter()
-    for mind_id, wake_word in enabled_minds:
+    for mind_id, wake_word, language in enabled_minds:
+        # T3 of MISSION-pre-wake-word-ui-hardening (2026-05-03):
+        # build a per-mind matcher because espeak-ng phoneme
+        # generation is language-specific. Auto-detect via
+        # ``enabled=None`` — when espeak-ng is not on PATH,
+        # ``is_available=False`` and the resolver gracefully degrades
+        # to EXACT-only (bit-exact v0.28.2 behaviour on Windows hosts
+        # without espeak-ng manually installed). Kill-switch
+        # ``phonetic_fallback_enabled=False`` lets operators force
+        # EXACT-only even when espeak-ng IS present (compliance
+        # / strict-naming environments).
+        matcher = (
+            PhoneticMatcher(language=language, enabled=None) if phonetic_fallback_enabled else None
+        )
+        resolver = WakeWordModelResolver(
+            registry=registry,
+            phonetic_matcher=matcher,
+            max_phoneme_distance=phonetic_max_distance,
+        )
         resolution = resolver.resolve(wake_word)
         if resolution.strategy is WakeWordResolutionStrategy.NONE:
             msg = (
@@ -155,6 +171,7 @@ def build_wake_word_router_for_enabled_minds(
             **{
                 "voice.mind_id": str(mind_id),
                 "voice.wake_word": wake_word,
+                "voice.language": language,
                 "voice.resolution_strategy": resolution.strategy.value,
                 "voice.matched_name": resolution.matched_name,
                 "voice.model_path": str(resolution.model_path),
@@ -180,7 +197,9 @@ def resolve_wake_word_model_for_mind(
     *,
     data_dir: Path,
     wake_word: str,
+    voice_language: str = "en",
     phonetic_max_distance: int = 3,
+    phonetic_fallback_enabled: bool = True,
 ) -> Path:
     """Resolve a single mind's wake word to a pretrained ONNX path.
 
@@ -193,13 +212,30 @@ def resolve_wake_word_model_for_mind(
     refuse-to-start contract: NONE strategy raises with a clear
     remediation message instead of silently failing.
 
+    Symmetry note (T3 of pre-wake-word-ui-hardening, 2026-05-03):
+    keeps the same phonetic matcher contract as
+    :func:`build_wake_word_router_for_enabled_minds` so boot-time
+    and dashboard hot-apply produce identical resolution outcomes
+    for the same wake-word + language inputs. Asymmetry would be
+    operator-visible drift ("toggle works at boot but fails in
+    dashboard, or vice-versa").
+
     Args:
         data_dir: Sovyx data directory; pretrained pool is
             ``<data_dir>/wake_word_models/pretrained/``.
         wake_word: The mind's effective wake word (typically
             ``MindConfig.effective_wake_word``).
+        voice_language: BCP-47 language code for espeak-ng phoneme
+            generation when phonetic fallback is enabled. Defaults to
+            ``"en"`` to match :class:`MindConfig.voice_language`'s
+            default.
         phonetic_max_distance: Maximum Levenshtein distance for
             phonetic matching.
+        phonetic_fallback_enabled: Kill-switch for the
+            :class:`PhoneticMatcher`. ``True`` default + auto-detect
+            via ``espeak-ng on PATH`` semantics. See
+            :func:`build_wake_word_router_for_enabled_minds` for
+            full discussion.
 
     Returns:
         Resolved ``.onnx`` path on the EXACT or PHONETIC strategy.
@@ -212,9 +248,14 @@ def resolve_wake_word_model_for_mind(
     """
     pretrained_dir = data_dir / "wake_word_models" / "pretrained"
     registry = PretrainedModelRegistry(models_dir=pretrained_dir)
+    matcher = (
+        PhoneticMatcher(language=voice_language, enabled=None)
+        if phonetic_fallback_enabled
+        else None
+    )
     resolver = WakeWordModelResolver(
         registry=registry,
-        phonetic_matcher=None,
+        phonetic_matcher=matcher,
         max_phoneme_distance=phonetic_max_distance,
     )
     resolution = resolver.resolve(wake_word)
@@ -231,20 +272,27 @@ def resolve_wake_word_model_for_mind(
     return resolution.model_path
 
 
-def _enumerate_enabled_minds(data_dir: Path) -> list[tuple[str, str]]:
-    """Yield ``(mind_id, effective_wake_word)`` for every enabled mind on disk.
+def _enumerate_enabled_minds(data_dir: Path) -> list[tuple[str, str, str]]:
+    """Yield ``(mind_id, effective_wake_word, voice_language)`` per enabled mind.
 
     Filesystem enumeration (NOT MindManager.get_active_minds()): R1
-    of the mission established that MindManager is a thin
-    registration sink and ``get_active_minds()`` returns only
-    currently-loaded minds, which is not the same set as
-    "minds-with-wake-word-enabled-on-disk".
+    of the wake-word-runtime-wireup mission established that
+    MindManager is a thin registration sink and
+    ``get_active_minds()`` returns only currently-loaded minds, which
+    is not the same set as "minds-with-wake-word-enabled-on-disk".
+
+    The ``voice_language`` field is added by T3 of the
+    pre-wake-word-ui-hardening mission so the per-mind PhoneticMatcher
+    can speak the right espeak-ng language code (phonemic similarity
+    is language-specific — "Lúcia" phonemes differ in pt-BR vs en-US).
+    Default ``"en"`` mirrors :class:`MindConfig.voice_language`'s
+    default.
 
     Best-effort: a malformed ``mind.yaml`` is logged and skipped
     (`MindConfigError`), so one bad mind does not block the daemon
     from starting voice for the rest.
     """
-    enabled: list[tuple[str, str]] = []
+    enabled: list[tuple[str, str, str]] = []
     for entry in sorted(data_dir.iterdir()):
         if not entry.is_dir():
             continue
@@ -264,5 +312,9 @@ def _enumerate_enabled_minds(data_dir: Path) -> list[tuple[str, str]]:
             continue
         if not config.wake_word_enabled:
             continue
-        enabled.append((entry.name, config.effective_wake_word))
+        # voice_language defaults to "en" inside MindConfig (validated
+        # by pydantic). Reading via attribute access is safe — the
+        # field is required-with-default.
+        language = config.voice_language or "en"
+        enabled.append((entry.name, config.effective_wake_word, language))
     return enabled
