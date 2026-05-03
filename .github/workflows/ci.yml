@@ -224,6 +224,26 @@ jobs:
     runs-on: sovyx-4core
     needs: metrics-cardinality-gate
     timeout-minutes: 10
+    # CLAUDE.md anti-pattern #31 root-cause fix (2026-05-03):
+    # On tag pushes, both the standalone ``CI`` workflow (push to
+    # main) and ``Publish to PyPI / CI Gate`` (workflow_call from
+    # publish.yml on the matching tag push) fire near-simultaneously
+    # on the same ``sovyx-4core`` self-hosted pool. When both perf
+    # gates land on the same physical host the async benchmark gets
+    # CPU-steal / context-switching from the parallel run, which
+    # produces the bimodal async p99 distribution that even
+    # median-of-5 cannot survive (3 of 5 runs noisy → median is the
+    # 540 µs noisy sample → 3.19× ratio fails the 2.0× budget).
+    # Bumping ``_DEFAULT_REPEATS`` further would just gamble on the
+    # percentile-noise budget; the enterprise fix is to eliminate
+    # the parallelism with a global concurrency group so the second
+    # workflow's perf gate waits for the first to finish before
+    # starting. ``cancel-in-progress: false`` because BOTH runs are
+    # required gates — the second one runs against an idle host
+    # after the first releases it.
+    concurrency:
+      group: perf-regression-gate-global
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
