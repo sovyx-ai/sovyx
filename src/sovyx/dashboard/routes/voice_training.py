@@ -1,10 +1,15 @@
 """Voice wake-word training dashboard endpoints — Phase 8 / T8.13.
 
-Read-only observability + cancellation surface for the wake-word
-training pipeline (the CLI ``sovyx voice train-wake-word`` runs the
-actual training; this module surfaces job state to dashboards).
-
 Endpoints (all under ``/api/voice/training``, auth required):
+
+* ``POST /jobs/start`` — start a new training job (Mission
+  ``MISSION-v0.30.0-single-mind-ga-2026-05-03.md`` §T1.1 D1). Returns
+  HTTP 202 Accepted with ``{"job_id": ..., "stream_url": ...}``;
+  spawns the orchestrator via ``sovyx.observability.tasks.spawn`` —
+  the same fire-and-forget pattern ``brain/consolidation.py:550``
+  uses for ``consolidation-scheduler``. Idempotency via slugified
+  ``job_id`` (re-submit while a job is in flight returns HTTP 409
+  Conflict). Fail-fast on missing trainer backend (HTTP 503).
 
 * ``GET /jobs`` — list every job in the training root with its
   latest state. Operators see all in-flight + historical jobs.
@@ -19,15 +24,15 @@ Endpoints (all under ``/api/voice/training``, auth required):
   already-complete job is a no-op (file creation is idempotent;
   terminal states ignore the signal).
 
-Why no ``POST /jobs`` (start-from-dashboard):
-  Training takes 30-60 minutes. A POST request that runs for that
-  long would tie up the dashboard's worker, block the operator's
-  UI from receiving updates, and blow past every reasonable HTTP
-  timeout. The CLI ``sovyx voice train-wake-word`` is the
-  job-creation surface — operators run it from a terminal session
-  + observe via dashboard. Dashboard-side job-creation requires a
-  background-job queue (Celery / RQ / similar) that doesn't yet
-  exist in Sovyx + isn't worth pulling in for one feature.
+Pre-v0.30.0 historical note (resolved by T1.1 above): an earlier
+docstring explained "no POST /jobs" by claiming dashboard-side
+creation needed a background-job queue (Celery / RQ / similar) that
+"doesn't yet exist in Sovyx + isn't worth pulling in for one feature".
+v0.30.0 closes that gap WITHOUT pulling in a job-queue framework —
+``observability.tasks.spawn`` provides the fire-and-forget primitive
+already proven by ConsolidationScheduler + DreamScheduler. Single-
+process Sovyx; one async task per training job; cancellation via
+the existing ``.cancel`` filesystem signal.
 
 Reference: master mission ``MISSION-voice-final-skype-grade-2026.md``
 §Phase 8 / T8.13 + T8.14.
@@ -41,8 +46,10 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.status import (
+    HTTP_202_ACCEPTED,
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
+    HTTP_409_CONFLICT,
     HTTP_503_SERVICE_UNAVAILABLE,
 )
 
@@ -195,7 +202,354 @@ class CancelJobResponse(BaseModel):
     )
 
 
+class StartTrainingRequest(BaseModel):
+    """Body for ``POST /api/voice/training/jobs/start``.
+
+    Mission ``MISSION-v0.30.0-single-mind-ga-2026-05-03.md`` §T1.1
+    (D1). Mirrors the CLI's ``TrainingRequest`` shape so dashboard
+    + CLI produce bit-exact training jobs for the same inputs.
+    """
+
+    wake_word: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description=(
+            "The wake word to train. Diacritics preserved for audit "
+            "logs; synthesizer + backend handle ASCII-folding. The "
+            'slugified form derives the ``job_id`` (e.g., "Lúcia" → '
+            '"lucia").'
+        ),
+    )
+    mind_id: str = Field(
+        ...,
+        max_length=64,
+        description=(
+            "Mind that owns the resulting model. Empty string is "
+            "permitted for unattached training. On COMPLETE the "
+            "model is hot-reloaded into ``WakeWordRouter.register_mind"
+            "(mind_id)`` if the daemon is running."
+        ),
+    )
+    language: str = Field(
+        default="en",
+        max_length=16,
+        description=(
+            'BCP-47 language tag (e.g., ``"en"``, ``"pt-BR"``). '
+            "Threaded through to Kokoro synthesizer + backend "
+            "phoneme tables."
+        ),
+    )
+    target_samples: int = Field(
+        default=200,
+        ge=100,
+        le=10000,
+        description=(
+            "How many positive samples the synthesizer produces. "
+            "200 is the conservative minimum per OpenWakeWord docs; "
+            "scales linearly with training time (~30-60 min for 200, "
+            "~3-5h for 1000+)."
+        ),
+    )
+    voices: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Override Kokoro voice catalogue. Empty list uses the "
+            "synthesizer's per-language defaults."
+        ),
+    )
+    variants: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Phrases to render. Empty list uses the default variant "
+            'set ``[wake_word, f"hey {wake_word}"]`` matching the '
+            "CLI behavior."
+        ),
+    )
+    negatives_dir: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Filesystem path to operator-provided non-wake-word audio. "
+            "Backend reads ``*.wav`` files from here. Operators MUST "
+            "populate this before invoking; the orchestrator does NOT "
+            "generate negative samples."
+        ),
+    )
+
+
+class StartTrainingResponse(BaseModel):
+    """Response for ``POST /api/voice/training/jobs/start``.
+
+    HTTP 202 Accepted: the job has been spawned in the background;
+    poll ``GET /jobs/{job_id}`` for state OR open the WebSocket at
+    ``stream_url`` for live snapshots.
+    """
+
+    job_id: str = Field(
+        ...,
+        description=(
+            "Filesystem-safe slug derived from ``wake_word``. "
+            "Matches the directory name under "
+            "``<data_dir>/wake_word_training/``."
+        ),
+    )
+    stream_url: str = Field(
+        ...,
+        description=(
+            "Relative path of the WebSocket stream for live progress "
+            "(e.g., ``/api/voice/training/jobs/lucia/stream``). "
+            "Frontend opens ``new WebSocket(host + stream_url + "
+            '"?token=" + token)`` to subscribe.'
+        ),
+    )
+
+
+# ── Helpers (T1.1 — D1) ─────────────────────────────────────────────
+
+
+_TERMINAL_STATUSES = {"complete", "failed", "cancelled"}
+"""Status values that indicate the orchestrator has exited the job
+(no further state transitions). Used by T1.1's 409 Conflict check
+to distinguish "job exists but ended" (re-submit OK) from "job in
+flight" (reject with 409)."""
+
+
+def _slugify_for_filesystem(text: str) -> str:
+    """ASCII-fold + alnum-only normalisation for job-id derivation.
+
+    Mirrors :func:`sovyx.cli.commands.voice._slugify_for_filesystem`
+    bit-exactly so CLI and dashboard produce identical ``job_id`` for
+    the same ``wake_word``. Defensive copy here (rather than import
+    from CLI) keeps the dashboard route layer free of CLI-package
+    coupling.
+    """
+    import unicodedata  # noqa: PLC0415
+
+    decomposed = unicodedata.normalize("NFKD", text)
+    folded = "".join(c for c in decomposed if not unicodedata.combining(c)).lower()
+    return "".join(c if (c.isascii() and c.isalnum()) else "_" for c in folded)[:48]
+
+
+def _job_in_flight(job_dir: Path) -> bool:
+    """Return ``True`` when the job directory has a non-terminal
+    most-recent state (orchestrator is still running OR the daemon
+    crashed mid-training without writing a terminal state).
+
+    ``False`` when:
+    * The job directory does not exist (no prior job — fresh start).
+    * ``progress.jsonl`` does not exist (incomplete artifact —
+      caller can overwrite).
+    * Most-recent state is in :data:`_TERMINAL_STATUSES` (job ended;
+      caller may re-submit to retrain).
+    """
+    if not job_dir.is_dir():
+        return False
+    progress_path = job_dir / "progress.jsonl"
+    if not progress_path.is_file():
+        return False
+    tracker = ProgressTracker(progress_path)
+    latest = tracker.latest()
+    if latest is None:
+        return False
+    return latest.status.value not in _TERMINAL_STATUSES
+
+
 # ── Endpoints ───────────────────────────────────────────────────────
+
+
+@router.post(
+    "/jobs/start",
+    response_model=StartTrainingResponse,
+    status_code=HTTP_202_ACCEPTED,
+)
+async def start_training_job(
+    request: Request,
+    body: StartTrainingRequest,
+) -> StartTrainingResponse:
+    """Spawn a new wake-word training job in the background.
+
+    Mission ``MISSION-v0.30.0-single-mind-ga-2026-05-03.md`` §T1.1
+    (D1). Returns HTTP 202 Accepted with the ``job_id`` + WebSocket
+    ``stream_url`` for live progress; the orchestrator runs as an
+    async task via :func:`sovyx.observability.tasks.spawn` (the same
+    fire-and-forget primitive ``brain/consolidation.py:550`` uses).
+
+    Idempotency contract:
+      * Slugified ``wake_word`` derives the ``job_id`` (matches the
+        CLI's :func:`_slugify_for_filesystem` 1:1).
+      * Re-submitting while a job with the same ``job_id`` is in
+        flight (most-recent state non-terminal) returns HTTP 409
+        Conflict. Operator must explicitly cancel + retry.
+      * Re-submitting after a job completes / fails / cancels is
+        permitted and overwrites the prior ``progress.jsonl`` —
+        operator's intent to retrain is the signal.
+
+    Failure modes:
+      * 409 Conflict — job_id already in flight (see idempotency).
+      * 422 Unprocessable Content — body validation (pydantic).
+      * 503 Service Unavailable — trainer backend not registered
+        (operator hasn't installed the extras OR called
+        :func:`register_default_backend`). Detail carries the
+        registration command.
+      * 500 Internal Server Error — orchestrator construction failed
+        (Kokoro model missing, etc.). Detail carries the underlying
+        exception text.
+
+    Returns:
+        :class:`StartTrainingResponse` with ``job_id`` + ``stream_url``.
+
+    Raises:
+        HTTPException: see failure modes above.
+    """
+    # ── 1. Resolve trainer backend (fail-fast UX — same as CLI 384-389)
+    try:
+        from sovyx.voice.wake_word_training import (  # noqa: PLC0415
+            resolve_default_backend,
+        )
+
+        backend = resolve_default_backend()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "voice.training.start.backend_unavailable",
+            **{"voice.training.error": str(exc)},
+        )
+        raise HTTPException(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Trainer backend unavailable: {exc}. Install the "
+                f"trainer extras + register a backend via "
+                f"``register_default_backend()``. See Phase 8 / T8.13 "
+                f"docs for the pluggable Protocol contract."
+            ),
+        ) from None
+
+    # ── 2. Resolve job_dir + idempotency check
+    training_root = _resolve_training_root(request)
+    job_id = _slugify_for_filesystem(body.wake_word)
+    if not any(c.isascii() and c.isalnum() for c in job_id):
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail=(
+                "wake_word produced no ASCII alphanumeric characters "
+                "after fold (e.g. Chinese-only / Cyrillic-only input). "
+                "Use ASCII characters or romanise the name "
+                "(e.g. 'Ni hao' instead of '你好')."
+            ),
+        )
+
+    job_dir = training_root / job_id
+    if _job_in_flight(job_dir):
+        raise HTTPException(
+            status_code=HTTP_409_CONFLICT,
+            detail=(
+                f"A training job for '{body.wake_word}' (job_id='{job_id}') "
+                f"is already in flight. Cancel it via "
+                f"``POST /api/voice/training/jobs/{job_id}/cancel`` before "
+                f"submitting a new one, OR wait for it to finish."
+            ),
+        )
+
+    # ── 3. Validate negatives_dir exists (operator-actionable error
+    # at 400 rather than failing 5 minutes into synthesis)
+    negatives_path = Path(body.negatives_dir)
+    if not negatives_path.is_dir():
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail=(
+                f"negatives_dir does not exist or is not a directory: "
+                f"{negatives_path}. Provide a directory containing "
+                f"``*.wav`` files of non-wake-word audio (your own "
+                f"speech recordings, common-voice samples, ambient "
+                f"audio)."
+            ),
+        )
+
+    # ── 4. Build TrainingRequest (mirrors CLI lines 440-449)
+    from sovyx.voice.wake_word_training import (  # noqa: PLC0415
+        TrainingRequest,
+    )
+
+    voice_tuple = tuple(body.voices)
+    if body.variants:
+        variant_tuple = tuple(body.variants)
+    else:
+        variant_tuple = (body.wake_word, f"hey {body.wake_word}")
+
+    # Default output path mirrors the CLI: writes to the pretrained
+    # pool so the next pipeline boot picks it up via PretrainedModelRegistry
+    # (or hot-reloads via on_complete callback when the daemon is running).
+    engine_config = _resolve_engine_config(request)
+    data_dir = engine_config.data_dir if engine_config is not None else Path.home() / ".sovyx"
+    output_path = data_dir / "wake_word_models" / "pretrained" / f"{job_id}.onnx"
+
+    training_req = TrainingRequest(
+        wake_word=body.wake_word,
+        mind_id=body.mind_id,
+        language=body.language,
+        target_positive_samples=body.target_samples,
+        synthesizer_voices=voice_tuple,
+        synthesizer_variants=variant_tuple,
+        negative_samples_dir=negatives_path,
+        output_path=output_path,
+    )
+
+    # ── 5. Build orchestrator (mirrors CLI lines 463-488)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from sovyx.voice.tts_kokoro import KokoroTTS  # noqa: PLC0415
+        from sovyx.voice.wake_word_training import (  # noqa: PLC0415
+            KokoroSampleSynthesizer,
+            TrainingOrchestrator,
+        )
+
+        kokoro_model_dir = data_dir / "models" / "voice"
+        kokoro = KokoroTTS(model_dir=kokoro_model_dir)
+        synthesizer = KokoroSampleSynthesizer(tts=kokoro)
+        progress_tracker = ProgressTracker(job_dir / "progress.jsonl")
+        orchestrator = TrainingOrchestrator(
+            synthesizer=synthesizer,
+            backend=backend,
+            progress_tracker=progress_tracker,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "voice.training.start.orchestrator_init_failed",
+            **{"voice.training.job_id": job_id},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"orchestrator construction failed: {exc}",
+        ) from exc
+
+    # ── 6. Spawn fire-and-forget task (the consolidation-scheduler
+    # pattern; per D1, the right shape for single-process Sovyx).
+    # The orchestrator handles cancellation via the existing
+    # ``<job_dir>/.cancel`` filesystem-signal path; no need for a
+    # separate cancel_check callable.
+    from sovyx.observability.tasks import spawn  # noqa: PLC0415
+
+    spawn(
+        orchestrator.run(training_req, job_dir=job_dir),
+        name=f"training-{job_id}",
+    )
+
+    logger.info(
+        "voice.training.start.spawned",
+        **{
+            "voice.training.job_id": job_id,
+            "voice.training.wake_word": body.wake_word,
+            "voice.training.mind_id": body.mind_id,
+            "voice.training.language": body.language,
+            "voice.training.target_samples": body.target_samples,
+            "voice.training.backend": backend.name,
+        },
+    )
+
+    return StartTrainingResponse(
+        job_id=job_id,
+        stream_url=f"/api/voice/training/jobs/{job_id}/stream",
+    )
 
 
 @router.get("/jobs", response_model=TrainingJobsResponse)
@@ -412,6 +766,8 @@ async def cancel_training_job(
 
 __all__ = [
     "CancelJobResponse",
+    "StartTrainingRequest",
+    "StartTrainingResponse",
     "TrainingJobDetailResponse",
     "TrainingJobSummary",
     "TrainingJobsResponse",
