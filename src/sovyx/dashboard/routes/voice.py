@@ -1767,6 +1767,13 @@ async def enable_voice(request: Request) -> JSONResponse:
     # pipeline bootable on a fresh install before mind.yaml exists.
     mind_language = "en"
     mind_voice_id = ""
+    # T07 (Mission pre-wake-word-hardening 2026-05-02): wake_word_enabled
+    # is now per-mind config (``MindConfig.wake_word_enabled``) instead
+    # of being hardcoded False in this route. Default False preserves
+    # the v0.27.x always-listening UX (no behaviour change for existing
+    # operators); operators opt in to wake-word gating per mind via
+    # ``mind.yaml: wake_word_enabled: true``.
+    mind_wake_word_enabled = False
     mind_device_name = ""
     mind_device_host_api = ""
     mind_config_obj = getattr(request.app.state, "mind_config", None)
@@ -1775,6 +1782,7 @@ async def enable_voice(request: Request) -> JSONResponse:
         mind_voice_id = getattr(mind_config_obj, "voice_id", "") or ""
         mind_device_name = getattr(mind_config_obj, "voice_input_device_name", "") or ""
         mind_device_host_api = getattr(mind_config_obj, "voice_input_device_host_api", "") or ""
+        mind_wake_word_enabled = bool(getattr(mind_config_obj, "wake_word_enabled", False))
 
     effective_language = request_language or mind_language
     effective_voice_id = request_voice_id if request_voice_id is not None else mind_voice_id
@@ -1790,7 +1798,7 @@ async def enable_voice(request: Request) -> JSONResponse:
             on_perception=on_perception_cb,
             language=effective_language,
             voice_id=effective_voice_id,
-            wake_word_enabled=False,
+            wake_word_enabled=mind_wake_word_enabled,
             mind_id=getattr(request.app.state, "mind_id", "default"),
             input_device=input_device,
             input_device_name=effective_device_name,

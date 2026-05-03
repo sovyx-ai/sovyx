@@ -560,6 +560,25 @@ class MindConfig(BaseModel):
         ),
         max_length=16,
     )
+    wake_word_enabled: bool = Field(
+        default=False,
+        description=(
+            "Whether this mind requires the wake word to be spoken "
+            "before voice input is processed. Default False matches "
+            "v0.27.x backward-compat: voice mode listens directly via "
+            "VAD onset, no 'Hey Sovyx' / 'Hey Lúcia' gating required. "
+            "Set to True when the operator wants Siri-style activation "
+            "(privacy-first: no transcription happens until the wake "
+            "word fires; CPU-friendly: STT only runs after wake event). "
+            "Per-mind: each mind can choose independently — e.g. "
+            "'Lúcia' might gate on wake word while 'Sovyx' stays "
+            "always-listening. Hot-reload supported via existing "
+            "``wake_word.register_mind`` RPC. T07 of "
+            "``MISSION-pre-wake-word-hardening-2026-05-02`` (2026-05-02) "
+            "made this config-driven; previously hardcoded ``False`` "
+            "in ``dashboard/routes/voice.py:1793``."
+        ),
+    )
     voice_accent: str = Field(
         default="",
         description=(
