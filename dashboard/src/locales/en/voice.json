@@ -78,6 +78,26 @@
     "dismiss": "Dismiss",
     "phoneticMatch": "Matched as {{file}} (distance: {{distance}})"
   },
+  "training": {
+    "button": "Train this wake word",
+    "modal": {
+      "title": "Train wake word",
+      "subtitle": "Synthesise samples and train an ONNX model for {{wake_word}}.",
+      "close": "Close",
+      "wakeWord": "Wake word",
+      "mindId": "Mind",
+      "language": "Language",
+      "targetSamples": "Target samples: {{count}}",
+      "targetSamplesHint": "200 is the conservative minimum (~30-60 min). Higher = slower, more accurate.",
+      "negativesDir": "Negatives directory",
+      "negativesDirHint": "Filesystem path with .wav files of non-wake-word audio (your speech, ambient noise, common-voice samples).",
+      "voices": "Kokoro voices (optional, comma-separated)",
+      "variants": "Variants (optional, comma-separated)",
+      "cancel": "Cancel",
+      "startButton": "Start training",
+      "starting": "Starting…"
+    }
+  },
   "wyoming": {
     "connected": "Connected",
     "disconnected": "Disconnected",

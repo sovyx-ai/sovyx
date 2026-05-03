@@ -30,6 +30,7 @@ import { api, isAbortError } from "@/lib/api";
 import { VoiceSetupModal } from "@/components/setup-wizard";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { VoiceQualityPanel } from "@/components/voice/VoiceQualityPanel";
+import { TrainWakeWordModal } from "@/components/training/TrainWakeWordModal";
 import { useDashboardStore } from "@/stores/dashboard";
 import type { WakeWordPerMindStatus } from "@/types/api";
 
@@ -292,6 +293,13 @@ function PerMindWakeWordCard({
   onToggle: (mindId: string, enabled: boolean) => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
+  // Mission v0.30.0 §T1.4 (D3): broken-state minds get a "Train this
+  // wake word" button. Local state drives modal open/close. On
+  // successful start, subscribe to the stream so the panel reflects
+  // live progress.
+  const [trainModalOpen, setTrainModalOpen] = useState(false);
+  const subscribeToTrainingJob = useDashboardStore((s) => s.subscribeToTrainingJob);
+
   // Three pill states (D3): registered (green), not-registered (yellow),
   // error (red). Stale-config + NONE-strategy minds get the red error
   // pill; configured-but-cold-start minds get yellow.
@@ -307,6 +315,8 @@ function PerMindWakeWordCard({
     pillKey = "notRegistered";
     pillTone = "warn";
   }
+  const showTrainButton =
+    entry.resolution_strategy === "none" && entry.wake_word_enabled;
 
   const pillBgClass = {
     ok: "bg-[var(--svx-color-success-soft)] text-[var(--svx-color-success)]",
@@ -370,6 +380,31 @@ function PerMindWakeWordCard({
           </pre>
         </details>
       )}
+
+      {/* Mission v0.30.0 §T1.4 (D3): Train Wake Word button — visible
+          ONLY when the mind is in the broken-state path (configured
+          but no model resolved). Click opens the training modal;
+          on Start, the page subscribes to the live progress stream. */}
+      {showTrainButton && (
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setTrainModalOpen(true)}
+            className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-accent)] bg-[var(--svx-color-accent-soft)] px-3 py-1 text-xs font-medium text-[var(--svx-color-accent)] hover:bg-[var(--svx-color-accent)] hover:text-white"
+          >
+            {t("training.button")}
+          </button>
+        </div>
+      )}
+
+      <TrainWakeWordModal
+        entry={entry}
+        open={trainModalOpen}
+        onClose={() => setTrainModalOpen(false)}
+        onStarted={(jobId) => {
+          subscribeToTrainingJob(jobId);
+        }}
+      />
     </div>
   );
 }

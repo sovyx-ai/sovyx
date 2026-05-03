@@ -447,6 +447,30 @@ describe("VoicePage — per-mind wake-word section", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the Train this wake word button for NONE-strategy minds (Mission v0.30.0 §T1.4)", async () => {
+    // The broken-state mind (lucia in the default fixture) has
+    // wake_word_enabled=true + resolution_strategy=none → button shows.
+    setupMockSuccess();
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("Train this wake word")).toBeInTheDocument();
+    });
+  });
+
+  it("does NOT render the Train button for healthy or disabled minds", async () => {
+    // Filter to only the healthy + disabled cases (no NONE-strategy mind).
+    setupMockSuccess({
+      minds: [PER_MIND_WAKE_WORD_HEALTHY, PER_MIND_WAKE_WORD_DISABLED],
+    });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("aria")).toBeInTheDocument();
+    });
+    // Train button should NOT appear because no mind matches the
+    // broken-state predicate.
+    expect(screen.queryByText("Train this wake word")).toBeNull();
+  });
+
   it("renders the phonetic-match disclosure for PHONETIC strategy entries", async () => {
     // Mission MISSION-v0.29.1-tightening §T1: PHONETIC matches
     // surface "Matched as <file>.onnx (distance: N)" so operators
