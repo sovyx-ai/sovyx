@@ -737,9 +737,7 @@ async def create_voice_pipeline(
                 build_wake_word_router_for_enabled_minds,
                 data_dir=data_dir,
                 phonetic_max_distance=_tuning_for_router.wake_word_phonetic_max_distance,
-                phonetic_fallback_enabled=(
-                    _tuning_for_router.wake_word_phonetic_fallback_enabled
-                ),
+                phonetic_fallback_enabled=(_tuning_for_router.wake_word_phonetic_fallback_enabled),
             )
         except VoiceError as exc:
             logger.error(

@@ -6,7 +6,96 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.28.2 below)
+(none — every shipped delta is in 0.28.3 below)
+
+## [0.28.3] — 2026-05-03
+
+### Pre-wake-word-UI hardening
+
+Operator's 2026-05-03 enterprise-grade review of the v0.28.2 ship
+surfaced **1 CRITICAL regression** + **2 HIGH-priority gaps** + **1
+MEDIUM tech-debt** that should be addressed BEFORE the v0.29.0
+wake-word UI mission. Mission spec at
+``docs-internal/missions/MISSION-pre-wake-word-ui-hardening-2026-05-03.md``
+(gitignored). 4 fix commits + 1 closure = 5 commits total.
+
+The v0.29.0 wake-word UI mission can now start with zero arquitetural
+blockers — every persisted state is recoverable; every endpoint has
+full type safety; every operator failure mode produces actionable
+diagnostics.
+
+### Fixed
+
+- **T1 — Refuse-to-persist on wake-word toggle when ONNX missing**
+  (`2bbe9ef`). Closes the v0.28.2 footgun where
+  ``POST /api/mind/{id}/wake-word/toggle`` with ``enabled=true``
+  persisted ``wake_word_enabled: true`` to ``mind.yaml`` even when
+  no pretrained ONNX resolved. Next daemon boot would fire
+  ``VoiceError`` from ``build_wake_word_router_for_enabled_minds``
+  and brick the entire voice subsystem. Pre-validates the resolution
+  BEFORE persist; returns HTTP 422 with the resolver's full
+  remediation message (train via ``sovyx voice train-wake-word`` /
+  drop ONNX into the pool / set false). The yaml is NOT touched.
+  Disable path skips pre-validate (nothing to resolve when
+  disabling). Test contract updated per D5: the v0.28.2 test that
+  asserted the broken behavior was renamed + assertions inverted in
+  the same commit (no silent regression). Three new sibling tests
+  cover the symmetric disable case, the malformed-yaml 500 path, and
+  the happy-path pin.
+- **T2 — Factory boot tolerates stale wake-word config**
+  (`7bb247e`). Defense-in-depth pair to T1. T1 prevents NEW bricked
+  configs; T2 catches OLD bricked configs that already exist on
+  disk (operators upgrading from v0.28.2.0 → v0.28.3 may have
+  pre-existing ``wake_word_enabled: true`` without a model). The
+  factory call site at ``voice/factory/__init__.py`` wraps the
+  helper in ``try/except VoiceError``: on raise, logs the structured
+  ERROR ``voice.factory.wake_word_router_init_failed`` with
+  remediation text + degrades to ``wake_word_router=None`` (same
+  backward-compat path operators with zero opted-in minds use).
+  Catching ``VoiceError`` only (not blanket ``Exception``)
+  preserves loud-failure for genuine helper bugs.
+
+### Changed
+
+- **T3 — Phonetic matcher auto-detect with kill-switch** (`3facd98`).
+  Stop hardcoding ``phonetic_matcher=None`` in the wake-word factory
+  helper. Build a per-mind :class:`PhoneticMatcher(language=mind.voice_language,
+  enabled=None)` so operators on Linux/macOS with espeak-ng installed
+  get the PHONETIC fallback strategy fired (``"Lúcia"`` matches
+  ``lucia.onnx`` via espeak-ng phoneme similarity). Auto-detect via
+  ``enabled=None`` semantics inside ``PhoneticMatcher.__init__``
+  handles the espeak-ng-absent case without raising — Windows hosts
+  without espeak-ng manually installed get ``is_available=False`` →
+  graceful degrade to EXACT-only (bit-exact match v0.28.2 behavior).
+  Per-mind matcher (not shared) because espeak-ng phonemes are
+  language-specific; ``"Lúcia"`` phonemes differ in pt-BR vs en-US.
+  Kill-switch via ``EngineConfig.tuning.voice.wake_word_phonetic_fallback_enabled``
+  (default ``True``; reuses the existing knob — no schema addition).
+  Both call sites updated symmetrically: boot-time builder AND
+  dashboard hot-apply path. Asymmetry would have surfaced as
+  operator-visible drift between toggle-time and boot-time
+  resolution.
+
+### Added
+
+- **T4 — Frontend types + zod for wake-word toggle endpoint**
+  (`28fe599`). The v0.28.2 backend shipped
+  ``POST /api/mind/{id}/wake-word/toggle`` but the frontend had no
+  TypeScript types or zod schemas. T4 closes that drift atomically:
+  ``WakeWordToggleRequest`` + ``WakeWordToggleResponse`` interfaces
+  in ``api.ts`` (strict 1:1 mirror of the pydantic models) + paired
+  zod schemas in ``schemas.ts`` with ``.nullable()`` on
+  ``hot_apply_detail`` matching the pydantic ``str | None``
+  default-None. 8 new vitest cases pin the contract.
+
+### Validation
+
+- All quality gates green: ruff lint + format, mypy strict
+  (475 source files), bandit zero issues, pytest (existing tests +
+  3 new test files: 6 + 4 + 6 = 16 new Python tests; +8 vitest
+  cases). Zero regressions in the 6,576-test sweep
+  (tests/unit/voice/ + tests/dashboard/) AND the 1,018-test vitest
+  sweep.
 
 ## [0.28.2] — 2026-05-03
 
