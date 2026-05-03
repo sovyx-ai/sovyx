@@ -368,7 +368,16 @@ describe("VoicePlatformDiagnosticsPage — refresh", () => {
       expect(screen.getByTestId("platform-diagnostics-page")).toBeInTheDocument();
     });
     // 1 platform-diagnostics + 1 bypass-tier-status mount-time fetch.
-    expect(mockGet).toHaveBeenCalledTimes(2);
+    //
+    // Wrap the count assertion in ``waitFor`` because BypassTierStatusCard's
+    // mount-time fetch fires AFTER the parent page renders (its useEffect
+    // queues asynchronously). A bare assertion races the second fetch
+    // and intermittently fails under CI test-pool contention. Mission
+    // ``MISSION-v0.29.1-tightening-2026-05-03.md`` §T2 sweep — matches
+    // the line-243-245 fix pattern for the analogous race at line 236.
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledTimes(2);
+    });
     fireEvent.click(screen.getByTestId("platform-refresh"));
     await waitFor(() => {
       // Only the platform endpoint refetches (the refresh button is
