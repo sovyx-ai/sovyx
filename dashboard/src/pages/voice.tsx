@@ -30,6 +30,8 @@ import { api, isAbortError } from "@/lib/api";
 import { VoiceSetupModal } from "@/components/setup-wizard";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { VoiceQualityPanel } from "@/components/voice/VoiceQualityPanel";
+import { useDashboardStore } from "@/stores/dashboard";
+import type { WakeWordPerMindStatus } from "@/types/api";
 
 /* ── Types ── */
 
@@ -279,6 +281,82 @@ function ModelMatrix({
   );
 }
 
+/* ── Per-mind wake-word card (Mission MISSION-wake-word-ui §T4) ── */
+
+function PerMindWakeWordCard({
+  entry,
+  onToggle,
+  t,
+}: {
+  entry: WakeWordPerMindStatus;
+  onToggle: (mindId: string, enabled: boolean) => void;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+}) {
+  // Three pill states (D3): registered (green), not-registered (yellow),
+  // error (red). Stale-config + NONE-strategy minds get the red error
+  // pill; configured-but-cold-start minds get yellow.
+  let pillKey: "registered" | "notRegistered" | "error";
+  let pillTone: "ok" | "warn" | "danger";
+  if (entry.resolution_strategy === "none" && entry.wake_word_enabled) {
+    pillKey = "error";
+    pillTone = "danger";
+  } else if (entry.runtime_registered) {
+    pillKey = "registered";
+    pillTone = "ok";
+  } else {
+    pillKey = "notRegistered";
+    pillTone = "warn";
+  }
+
+  const pillBgClass = {
+    ok: "bg-[var(--svx-color-success-soft)] text-[var(--svx-color-success)]",
+    warn: "bg-[var(--svx-color-warning-soft)] text-[var(--svx-color-warning)]",
+    danger: "bg-[var(--svx-color-danger-soft)] text-[var(--svx-color-danger)]",
+  }[pillTone];
+
+  return (
+    <div className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-[var(--svx-color-text-primary)]">
+            {entry.mind_id}
+          </div>
+          <div className="font-mono text-xs text-[var(--svx-color-text-tertiary)]">
+            {entry.wake_word}
+            {entry.voice_language ? ` · ${entry.voice_language}` : ""}
+          </div>
+        </div>
+
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${pillBgClass}`}>
+          {t(`perMindWakeWord.${pillKey}`)}
+        </span>
+
+        <label className="inline-flex cursor-pointer items-center gap-2">
+          <span className="sr-only">{t("perMindWakeWord.toggleLabel")}</span>
+          <input
+            type="checkbox"
+            role="switch"
+            checked={entry.wake_word_enabled}
+            onChange={(e) => onToggle(entry.mind_id, e.target.checked)}
+            className="h-4 w-7 cursor-pointer appearance-none rounded-full bg-[var(--svx-color-surface-tertiary)] transition-colors checked:bg-[var(--svx-color-accent)] relative after:absolute after:left-0.5 after:top-0.5 after:h-3 after:w-3 after:rounded-full after:bg-white after:transition-transform checked:after:translate-x-3"
+          />
+        </label>
+      </div>
+
+      {entry.last_error !== null && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-[var(--svx-color-danger)]">
+            {t("perMindWakeWord.viewDetails")}
+          </summary>
+          <pre className="mt-1.5 whitespace-pre-wrap break-words rounded bg-[var(--svx-color-surface-tertiary)] p-2 font-mono text-xs text-[var(--svx-color-text-secondary)]">
+            {entry.last_error}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 /* ── Main page ── */
 
 export default function VoicePage() {
@@ -287,6 +365,15 @@ export default function VoicePage() {
   const [models, setModels] = useState<VoiceModels | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Per-mind wake-word state (Mission MISSION-wake-word-ui §T3+T4).
+  // Selectors are individual to keep referential stability (avoid re-
+  // render cascade when other slices' fields change).
+  const perMindStatus = useDashboardStore((s) => s.perMindStatus);
+  const wakeWordError = useDashboardStore((s) => s.wakeWordError);
+  const fetchPerMindStatus = useDashboardStore((s) => s.fetchPerMindStatus);
+  const toggleMind = useDashboardStore((s) => s.toggleMind);
+  const clearWakeWordError = useDashboardStore((s) => s.clearWakeWordError);
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -312,6 +399,14 @@ export default function VoicePage() {
     void fetchData(controller.signal);
     return () => controller.abort();
   }, [fetchData]);
+
+  // Mission MISSION-wake-word-ui §T4 — fetch per-mind wake-word status
+  // on mount. The slice handles loading/error state internally; the
+  // page just kicks off the fetch and consumes the result via the
+  // selectors above.
+  useEffect(() => {
+    void fetchPerMindStatus();
+  }, [fetchPerMindStatus]);
 
   // While the pipeline is running, poll /api/voice/status at ~2 Hz so
   // the VU-meter reflects live capture RMS. A fast fetch avoids the
@@ -538,6 +633,44 @@ export default function VoicePage() {
           </div>
           {status.wake_word.phrase && (
             <InfoRow label={t("wakeWord.phrase")} value={status.wake_word.phrase} mono />
+          )}
+        </Section>
+
+        {/* Per-mind wake word — Mission MISSION-wake-word-ui §T4 ── */}
+        <Section
+          icon={<MicIcon className="size-4" />}
+          title={t("perMindWakeWord.title")}
+        >
+          {wakeWordError !== null && (
+            <div
+              role="alert"
+              className="mb-2 flex items-start justify-between gap-2 rounded border border-[var(--svx-color-danger)] bg-[var(--svx-color-danger-soft)] p-2 text-xs text-[var(--svx-color-danger)]"
+            >
+              <span className="break-words">{wakeWordError}</span>
+              <button
+                type="button"
+                onClick={clearWakeWordError}
+                className="shrink-0 underline"
+              >
+                {t("perMindWakeWord.dismiss")}
+              </button>
+            </div>
+          )}
+          {perMindStatus.length === 0 ? (
+            <div className="py-2 text-sm text-[var(--svx-color-text-tertiary)]">
+              {t("perMindWakeWord.empty")}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {perMindStatus.map((entry) => (
+                <PerMindWakeWordCard
+                  key={entry.mind_id}
+                  entry={entry}
+                  onToggle={(mindId, enabled) => void toggleMind(mindId, enabled)}
+                  t={t}
+                />
+              ))}
+            </div>
           )}
         </Section>
 
