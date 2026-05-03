@@ -6,7 +6,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.28.3 below)
+(none — every shipped delta is in 0.29.0 below)
+
+## [0.29.0] — 2026-05-03
+
+### Wake-word UI
+
+Closes the v0.28.3 silent-degradation observability gap + ships the
+first user-facing wake-word management UI. Mission spec at
+``docs-internal/missions/MISSION-wake-word-ui-2026-05-03.md``
+(gitignored). 5 fix commits + 1 closure = 6 commits total.
+
+The v0.29.0 release ALSO establishes the per-mind dashboard mutation
+pattern (Zustand slice + optimistic update + zod runtime validation
++ React component) that future missions will reuse for migrating
+``/api/mind/{id}/forget`` and ``/api/mind/{id}/retention/prune`` to
+the same UX shape.
+
+### Added
+
+- **T1 — Per-mind wake-word status endpoint** (`5d840f8`). New
+  ``GET /api/voice/wake-word/status`` returns per-mind health
+  snapshot via re-run resolution + cross-reference with the live
+  ``WakeWordRouter``. Idempotent + stateless. Closes the v0.28.3 T2
+  silent-degrade gap: an operator who persisted
+  ``wake_word_enabled: true`` for a mind whose ONNX is missing now
+  sees ``runtime_registered=false`` + ``last_error=<remediation>``
+  in the dashboard. New ``query_per_mind_wake_word_status`` helper
+  in ``voice/factory/_wake_word_wire_up.py`` + ``WakeWordPerMindStatusEntry``
+  frozen+slotted dataclass + pydantic ``WakeWordPerMindStatusItem``
+  + ``WakeWordPerMindStatusResponse`` wire-format models. 18 new
+  Python tests (10 helper + 8 endpoint).
+- **T2 — Frontend types + zod schemas** (`bfe3518`). Strict 1:1
+  mirror of the backend pydantic models in ``api.ts`` +
+  ``schemas.ts``. New ``WakeWordResolutionStrategy`` discriminated
+  union (``z.enum()`` for runtime rejection of unknown strategies).
+  9 new vitest cases in ``schemas.test.ts``.
+- **T3 — Zustand wakeWord slice** (`4859948`). New
+  ``slices/wakeWord.ts`` with ``perMindStatus`` + ``wakeWordLoading``
+  + ``wakeWordError`` state and ``fetchPerMindStatus`` +
+  ``toggleMind`` (optimistic update + 422/500 rollback) actions.
+  Wired into ``DashboardState`` master type. The ``_extractToggleError``
+  helper preserves the resolver's full remediation text from
+  ``ApiError.body.detail`` so operators see the same diagnostic
+  the backend logs would have shown. 9 new vitest cases.
+- **T4 — Per-mind wake-word section + toggle UI** (`e8efc36`). New
+  ``<PerMindWakeWordCard>`` sub-component in ``voice.tsx`` rendered
+  inside a new ``<Section>`` block immediately after the existing
+  global "Wake Word" section. Three-state status pill (registered /
+  not-registered / error), toggle switch with optimistic update,
+  error-details disclosure with resolver remediation text, top-
+  level error banner with dismiss button, empty-state placeholder.
+  Reuses existing visual primitives (no new components).
+- **T5 — i18n + component vitest tests** (`7224b1b`). New
+  ``perMindWakeWord`` namespace in ``en/voice.json`` (8 strings).
+  ``aria-label`` on the toggle input (a11y compliance). 5 new
+  vitest cases pinning the rendered states.
+
+### Documentation correction
+
+- The v0.28.3 release notes claimed "16 new Python tests" via the
+  math ``6 + 4 + 6 = 16`` for T1+T2+T3 of that mission. The actual
+  net delta was 12 tests: T1 added +2 net (3 new in
+  ``TestT1PreValidateContract`` + 1 inverted-rename + 1 placeholder
+  removal = +2 net), T2 added +4 net, T3 added +6 net. The math in
+  the original CHANGELOG entry double-counted T1's pre-existing
+  tests as "new". This is strictly release-notes accounting hygiene
+  — no code regressions; all 16 tests are present and passing.
+
+### Validation
+
+- All quality gates green: ruff lint + format, mypy strict (475
+  source files), bandit zero issues, pytest (existing 13,774+ + 18
+  new Python tests = 13,792 passing), ``npx tsc -b`` zero new
+  errors, ``npx vitest run`` 1,041 tests pass (+23 net from
+  T2+T3+T5: 9 schemas + 9 slice + 5 component).
+- Operator-facing acceptance: dashboard ``/voice`` page renders
+  per-mind wake-word section with toggle + status pill + error
+  disclosure; ``GET /api/voice/wake-word/status`` returns per-mind
+  health; ``POST /api/mind/{id}/wake-word/toggle`` with optimistic
+  rollback on 422/500.
 
 ## [0.28.3] — 2026-05-03
 
