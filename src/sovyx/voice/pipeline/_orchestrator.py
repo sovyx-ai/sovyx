@@ -1461,6 +1461,24 @@ class VoicePipeline:
                         "voice.score": round(ww_event.score, 4),
                     },
                 )
+                # T04 of pre-wake-word-hardening mission (2026-05-02):
+                # also record the dispatch latency as an OTel histogram
+                # with the matched mind_id attribute. This makes the
+                # T8.10 ≤50 ms SLA contract operator-verifiable in
+                # dashboards (previously log-only — required parsing
+                # ``voice.dispatch_ms`` out of structured logs).
+                from sovyx.observability.metrics import get_metrics
+
+                histogram = getattr(
+                    get_metrics(),
+                    "voice_wake_word_router_dispatch_latency",
+                    None,
+                )
+                if histogram is not None:
+                    histogram.record(
+                        dispatch_ms,
+                        attributes={"mind_id": matched_mind_id or "unknown"},
+                    )
             # T8.10 — switch the per-turn mind context. Downstream
             # WakeWordDetectedEvent + STT + perception path emissions
             # carry this mind_id; reset to config.mind_id at the IDLE

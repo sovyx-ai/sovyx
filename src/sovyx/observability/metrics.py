@@ -604,6 +604,27 @@ class MetricsRegistry:
             "overhead. The v0.30.0 GA promotion gate target is p95 "
             "≤ 500 ms (Alexa/Google/Siri parity).",
         )
+        # Phase 8 / T8.10 — multi-mind dispatch-latency histogram (T04
+        # of pre-wake-word-hardening mission, 2026-05-02). Wall-clock
+        # from the WakeWordRouter detector firing to mind-context load
+        # completion. The contract documented in master mission and
+        # README §11 is ≤50 ms; this histogram makes it operator-
+        # verifiable in dashboards (previously logged-only at
+        # ``voice/pipeline/_orchestrator.py:1454-1463``, with no
+        # aggregation surface). Labels: mind_id (low cardinality —
+        # operators have <10 minds typical). Wider attributes
+        # rejected to avoid cardinality explosion without operational
+        # value.
+        self.voice_wake_word_router_dispatch_latency = self._histogram(
+            "sovyx.voice.wake_word.router.dispatch_latency",
+            "Multi-mind WakeWordRouter dispatch latency in ms. "
+            "Wall-clock from detector firing to ``self._current_mind_id`` "
+            "switch completion. Only emitted when the multi-mind router "
+            "is wired (single-detector backward-compat path doesn't "
+            "have a dispatch concept). Promotion gate target: p95 ≤ "
+            "50 ms (master mission §T8.10). Labels: mind_id (the "
+            "matched mind).",
+        )
         # Phase 7 / T7.6 — confidence histogram per CONFIRMED detection.
         # Distinct from the per-frame ``voice.wake_word.score`` log
         # event (which fires every 80 ms for every frame regardless

@@ -1161,7 +1161,7 @@ Latency targets (operator-visible, telemetry-tracked):
 | Stage | Target | Where measured |
 |-------|--------|----------------|
 | Wake → first audio out | < 300 ms perceived (filler-injected) | Filler kicks in after 800 ms LLM silence |
-| Mind dispatch (multi-mind) | ≤ 50 ms | `voice.wake_word.router.dispatch_latency` (logged, no histogram at HEAD) |
+| Mind dispatch (multi-mind) | ≤ 50 ms | `sovyx.voice.wake_word.router.dispatch_latency` Histogram (mind_id label) — log + histogram both emit since v0.28.1 (T04 fix) |
 | ONNX wake detection | ~80 ms | varies per ONNX runtime EP |
 | STT-fallback wake detection | ~500 ms | Moonshine round-trip |
 | TTS first chunk | ≤ 1 s | `sovyx.voice.tts.synthesis_latency` |
