@@ -336,6 +336,7 @@ function PerMindWakeWordCard({
           <input
             type="checkbox"
             role="switch"
+            aria-label={t("perMindWakeWord.toggleLabel")}
             checked={entry.wake_word_enabled}
             onChange={(e) => onToggle(entry.mind_id, e.target.checked)}
             className="h-4 w-7 cursor-pointer appearance-none rounded-full bg-[var(--svx-color-surface-tertiary)] transition-colors checked:bg-[var(--svx-color-accent)] relative after:absolute after:left-0.5 after:top-0.5 after:h-3 after:w-3 after:rounded-full after:bg-white after:transition-transform checked:after:translate-x-3"

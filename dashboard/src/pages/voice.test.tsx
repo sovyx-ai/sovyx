@@ -60,7 +60,43 @@ const VOICE_MODELS = {
   },
 };
 
-function setupMockSuccess() {
+/* ── Per-mind wake-word fixtures (Mission MISSION-wake-word-ui §T5) ── */
+
+const PER_MIND_WAKE_WORD_HEALTHY = {
+  mind_id: "aria",
+  wake_word: "Aria",
+  voice_language: "en",
+  wake_word_enabled: true,
+  runtime_registered: true,
+  model_path: "/data/wake_word_models/pretrained/aria.onnx",
+  resolution_strategy: "exact" as const,
+  last_error: null,
+};
+
+const PER_MIND_WAKE_WORD_BROKEN = {
+  mind_id: "lucia",
+  wake_word: "Lucia",
+  voice_language: "pt-BR",
+  wake_word_enabled: true,
+  runtime_registered: false,
+  model_path: null,
+  resolution_strategy: "none" as const,
+  last_error:
+    "No ONNX model resolved for wake word 'Lucia' ... train via `sovyx voice train-wake-word`",
+};
+
+const PER_MIND_WAKE_WORD_DISABLED = {
+  mind_id: "joao",
+  wake_word: "Joao",
+  voice_language: "en",
+  wake_word_enabled: false,
+  runtime_registered: false,
+  model_path: null,
+  resolution_strategy: null,
+  last_error: null,
+};
+
+function setupMockSuccess(perMindOverride?: unknown) {
   mockGet.mockImplementation((path: string) => {
     if (path === "/api/voice/status") return Promise.resolve(VOICE_STATUS);
     if (path === "/api/voice/models") return Promise.resolve(VOICE_MODELS);
@@ -76,6 +112,17 @@ function setupMockSuccess() {
         saturation_ratio_ceiling: 0.5,
         reset_enabled_by_default: true,
       });
+    }
+    if (path === "/api/voice/wake-word/status") {
+      return Promise.resolve(
+        perMindOverride ?? {
+          minds: [
+            PER_MIND_WAKE_WORD_HEALTHY,
+            PER_MIND_WAKE_WORD_BROKEN,
+            PER_MIND_WAKE_WORD_DISABLED,
+          ],
+        },
+      );
     }
     return Promise.reject(new Error("unknown path"));
   });
@@ -312,5 +359,72 @@ describe("VoicePage", () => {
         container.querySelector('[data-testid="linux-mic-gain-card"]'),
       ).toBeNull();
     });
+  });
+});
+
+/* ── Mission MISSION-wake-word-ui §T5 — per-mind section ── */
+
+import { useDashboardStore } from "@/stores/dashboard";
+
+describe("VoicePage — per-mind wake-word section", () => {
+  beforeEach(() => {
+    mockGet.mockReset();
+    // Reset the Zustand slice between tests so per-mind status from
+    // a prior test doesn't leak into the next render.
+    useDashboardStore.setState({
+      perMindStatus: [],
+      wakeWordLoading: false,
+      wakeWordError: null,
+    });
+  });
+
+  it("renders the empty state when no minds are on disk", async () => {
+    setupMockSuccess({ minds: [] });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("Per-Mind Wake Word")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/No minds yet/)).toBeInTheDocument();
+  });
+
+  it("renders one card per mind in the response", async () => {
+    setupMockSuccess();
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("aria")).toBeInTheDocument();
+    });
+    expect(screen.getByText("lucia")).toBeInTheDocument();
+    expect(screen.getByText("joao")).toBeInTheDocument();
+  });
+
+  it("renders the registered status pill for healthy minds", async () => {
+    setupMockSuccess();
+    render(<VoicePage />);
+    await waitFor(() => {
+      // aria is the only mind with runtime_registered=true.
+      expect(screen.getByText("Registered")).toBeInTheDocument();
+    });
+  });
+
+  it("renders the error pill for NONE-strategy minds", async () => {
+    setupMockSuccess();
+    render(<VoicePage />);
+    await waitFor(() => {
+      // lucia has resolution_strategy=none + wake_word_enabled=true.
+      expect(screen.getByText("Configuration error")).toBeInTheDocument();
+    });
+  });
+
+  it("expands the error-details disclosure with the resolver remediation", async () => {
+    setupMockSuccess();
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("View error details")).toBeInTheDocument();
+    });
+    // The remediation text is inside a <details> element — present in
+    // the DOM even before the disclosure is expanded.
+    expect(
+      screen.getByText(/train via .sovyx voice train-wake-word./),
+    ).toBeInTheDocument();
   });
 });

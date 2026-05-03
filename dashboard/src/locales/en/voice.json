@@ -67,6 +67,16 @@
     "disabled": "Disabled",
     "phrase": "Phrase"
   },
+  "perMindWakeWord": {
+    "title": "Per-Mind Wake Word",
+    "registered": "Registered",
+    "notRegistered": "Not registered",
+    "error": "Configuration error",
+    "toggleLabel": "Wake word enabled",
+    "viewDetails": "View error details",
+    "empty": "No minds yet — onboard a mind to manage its wake word here.",
+    "dismiss": "Dismiss"
+  },
   "wyoming": {
     "connected": "Connected",
     "disconnected": "Disconnected",
