@@ -24,7 +24,7 @@ from sovyx.observability.metrics import get_metrics
 from sovyx.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Mapping, Sequence
 
     from sovyx.engine.events import EventBus
     from sovyx.engine.protocols import LLMProvider
@@ -139,26 +139,79 @@ def classify_complexity(signals: ComplexitySignals) -> ComplexityLevel:
     return ComplexityLevel.MODERATE
 
 
-def extract_signals(messages: Sequence[dict[str, str]]) -> ComplexitySignals:
+_TOOL_USE_WINDOW = 5
+"""Number of trailing messages to scan for tool-use signals.
+
+A ReAct cycle produces 3–5 messages (assistant with ``tool_calls`` +
+N tool results + the operator's next user turn). A window of 5 catches
+the previous cycle, so a follow-up assistant turn routes to a
+tool-capable provider. Wider windows risk false-positives across topic
+switches; narrower windows miss multi-call cycles. Verified 2026-05-02
+against ``cognitive/act.py:390-403`` ReAct loop shape.
+"""
+
+
+def extract_signals(messages: Sequence[Mapping[str, object]]) -> ComplexitySignals:
     """Extract complexity signals from a message list.
 
     Args:
-        messages: Chat messages (role + content).
+        messages: Chat messages (role + content + optional tool fields).
+            Standard OpenAI/Anthropic shape: assistant messages may carry
+            a ``tool_calls`` list; tool-result messages carry
+            ``role="tool"`` + ``tool_call_id``.
 
     Returns:
-        Extracted signals.
+        Extracted signals — including ``has_tool_use`` derived from a
+        sliding window of the last ``_TOOL_USE_WINDOW`` messages
+        (T03 fix 2026-05-02).
     """
-    total_length = sum(len(m.get("content", "")) for m in messages)
+    total_length = sum(len(_str_content(m.get("content"))) for m in messages)
     turn_count = sum(1 for m in messages if m.get("role") in ("user", "assistant"))
     has_code = any(
-        "```" in m.get("content", "") or "def " in m.get("content", "") for m in messages
+        "```" in _str_content(m.get("content")) or "def " in _str_content(m.get("content"))
+        for m in messages
     )
+
+    # T03 has_tool_use heuristic — sliding window over the trailing
+    # messages. Any one of these signals trips the flag:
+    #   1. role=="tool" (a tool result, definitely in tool-use mode)
+    #   2. assistant message carries a non-empty tool_calls list
+    #      (assistant called a tool in this turn)
+    # Window of 5 catches a typical ReAct cycle without false-positives
+    # across topic switches.
+    window = messages[-_TOOL_USE_WINDOW:] if messages else ()
+    has_tool_use = any(m.get("role") == "tool" or _has_nonempty_tool_calls(m) for m in window)
 
     return ComplexitySignals(
         message_length=total_length,
         turn_count=turn_count,
+        has_tool_use=has_tool_use,
         has_code=has_code,
     )
+
+
+def _str_content(value: object) -> str:
+    """Coerce a message ``content`` field to ``str`` defensively.
+
+    Some providers (e.g. Anthropic with tool-use) carry a list of
+    content blocks instead of a plain string. We don't try to flatten;
+    we just treat non-strings as empty for length / code detection
+    purposes — those signals are already lossy heuristics.
+    """
+    return value if isinstance(value, str) else ""
+
+
+def _has_nonempty_tool_calls(message: Mapping[str, object]) -> bool:
+    """Return True if the message is an assistant turn with tool calls.
+
+    Tolerates both ``tool_calls`` as a list (OpenAI / OpenAI-compat)
+    and ``tool_use`` blocks inside content (Anthropic). The Sovyx
+    cognitive Act phase uses the OpenAI shape (verified at
+    ``cognitive/act.py:380-403``); other providers normalise to the
+    same shape via the OpenAI-compat layer.
+    """
+    raw = message.get("tool_calls")
+    return isinstance(raw, list) and len(raw) > 0
 
 
 def select_model_for_complexity(
