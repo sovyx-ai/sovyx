@@ -233,7 +233,16 @@ describe("VoicePlatformDiagnosticsPage — boot states", () => {
     // 1 reject (initial mount) + 1 retry (refresh click) on the platform
     // endpoint, plus 1 mount-time fetch from the embedded
     // BypassTierStatusCard once the page renders successfully.
-    expect(mockGet).toHaveBeenCalledTimes(3);
+    //
+    // Wrap the count assertion in ``waitFor`` because BypassTierStatusCard's
+    // mount-time fetch fires AFTER the parent page renders (its useEffect
+    // queues asynchronously). A bare assertion races the third fetch
+    // and intermittently fails under CI test-pool contention. The
+    // identical assertion at line 367 of this file already uses the
+    // ``waitFor`` pattern; this matches it for consistency.
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledTimes(3);
+    });
   });
 });
 
