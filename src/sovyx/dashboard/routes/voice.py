@@ -2212,6 +2212,35 @@ class WakeWordPerMindStatusItem(BaseModel):
             "``wake_word_enabled`` is False."
         ),
     )
+    matched_name: str | None = Field(
+        default=None,
+        description=(
+            "Registry name that matched. For ``EXACT``, the ASCII-"
+            "folded wake word (typically same as the file stem in "
+            "lowercase). For ``PHONETIC``, the actual matched-file "
+            'name (e.g., ``"lucia"`` for a wake_word ``"Lúcia"``). '
+            "``None`` on NONE strategy or when resolution was skipped "
+            "(disabled mind). Mission "
+            "``MISSION-v0.29.1-tightening-2026-05-03.md`` §T1 surfaces "
+            "this signal that was log-only pre-v0.29.1 — the dashboard "
+            "renders it for PHONETIC matches so operators can see "
+            "which file matched their diacritic / phonetic wake word."
+        ),
+    )
+    phoneme_distance: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Levenshtein-on-phonemes distance for PHONETIC matches. "
+            "``0`` for EXACT (no phonetic step ran). ``None`` on NONE "
+            "strategy or when resolution was skipped. The resolver's "
+            "internal ``-1`` sentinel is converted to ``None`` at the "
+            "dataclass boundary so the wire format only carries non-"
+            "negative int | None values (the frontend's zod "
+            "``nonnegative().nullable()`` schema rejects negatives "
+            "explicitly)."
+        ),
+    )
     last_error: str | None = Field(
         default=None,
         description=(
@@ -2311,6 +2340,8 @@ async def get_wake_word_per_mind_status(
             runtime_registered=entry.runtime_registered,
             model_path=str(entry.model_path) if entry.model_path is not None else None,
             resolution_strategy=entry.resolution_strategy,  # type: ignore[arg-type]
+            matched_name=entry.matched_name,
+            phoneme_distance=entry.phoneme_distance,
             last_error=entry.last_error,
         )
         for entry in entries

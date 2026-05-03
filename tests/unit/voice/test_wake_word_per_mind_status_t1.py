@@ -115,6 +115,10 @@ class TestDisabledMindsRendered:
         assert entry.model_path is None
         assert entry.resolution_strategy is None
         assert entry.last_error is None  # not an error — just disabled
+        # T1 of v0.29.1: disabled mind has both new fields = None
+        # (resolution skipped, no matched-name or distance to surface).
+        assert entry.matched_name is None
+        assert entry.phoneme_distance is None
 
     def test_disabled_mind_resolution_not_called(self, tmp_path: Path) -> None:
         """Resolution skip is observable: patching
@@ -150,6 +154,10 @@ class TestEnabledHealthyMinds:
         assert entry.model_path is not None
         assert entry.model_path.name == "aria.onnx"
         assert entry.last_error is None
+        # T1 of v0.29.1: EXACT populates matched_name with ASCII-folded
+        # wake word + phoneme_distance=0 (no phonetic step ran).
+        assert entry.matched_name == "aria"
+        assert entry.phoneme_distance == 0
 
     def test_runtime_registered_when_router_has_mind(self, tmp_path: Path) -> None:
         """``runtime_registered=True`` when the live router has the mind."""
@@ -192,6 +200,11 @@ class TestNoneStrategyReporting:
         assert entry.last_error is not None
         assert "train-wake-word" in entry.last_error
         assert "aria" in entry.last_error.lower()
+        # T1 of v0.29.1: NONE strategy has both new fields = None — the
+        # resolver's ``-1`` sentinel for phoneme_distance is converted
+        # at the dataclass boundary so the wire format never carries it.
+        assert entry.matched_name is None
+        assert entry.phoneme_distance is None
 
     def test_silent_degrade_observable(self, tmp_path: Path) -> None:
         """Closes the v0.28.3 T2 silent-degradation gap: when an
@@ -214,6 +227,94 @@ class TestNoneStrategyReporting:
         assert entry.runtime_registered is False
         assert entry.resolution_strategy == "none"
         assert entry.last_error is not None  # operator-actionable signal
+
+
+# ── PHONETIC strategy + matched_name + phoneme_distance (T1 of v0.29.1) ──
+
+
+class TestPhoneticStrategyEntry:
+    """Mission ``MISSION-v0.29.1-tightening-2026-05-03.md`` §T1 (D1):
+    when the resolver returns PHONETIC, ``matched_name`` carries the
+    actual matched-file name (e.g., ``"lucia"`` for a wake_word
+    ``"Lúcia"``) and ``phoneme_distance`` carries the Levenshtein
+    distance. Pre-v0.29.1, both signals were log-only; the dashboard
+    couldn't surface them. This test pins the contract so a future
+    refactor doesn't regress the wire format.
+
+    The PHONETIC path requires espeak-ng on PATH which CI doesn't
+    have, so we patch the resolver's ``WakeWordModelResolver`` to
+    return a synthetic PHONETIC ``WakeWordResolution`` and verify
+    ``query_per_mind_wake_word_status`` populates the dataclass
+    correctly. The resolver-level test (``test_wake_word_resolver_t812.py``)
+    covers the espeak-ng integration end-to-end.
+    """
+
+    def test_phonetic_match_populates_matched_name_and_distance(self, tmp_path: Path) -> None:
+        from sovyx.voice._wake_word_resolver import (  # noqa: PLC0415
+            WakeWordResolution,
+            WakeWordResolutionStrategy,
+        )
+
+        _write_mind_yaml(tmp_path, "aria", wake_word="Lúcia", wake_word_enabled=True)
+        _write_pretrained_model(tmp_path, "lucia")
+
+        # Patch resolver to return a synthetic PHONETIC outcome —
+        # mirrors what the resolver would produce on a host with
+        # espeak-ng installed + a "Lúcia" → "lucia" match at distance 0.
+        synthetic_resolution = WakeWordResolution(
+            strategy=WakeWordResolutionStrategy.PHONETIC,
+            model_path=tmp_path / "wake_word_models" / "pretrained" / "lucia.onnx",
+            matched_name="lucia",
+            phoneme_distance=0,
+        )
+
+        with patch(
+            "sovyx.voice.factory._wake_word_wire_up.WakeWordModelResolver"
+        ) as mock_resolver_cls:
+            mock_resolver = MagicMock()
+            mock_resolver.resolve = MagicMock(return_value=synthetic_resolution)
+            mock_resolver_cls.return_value = mock_resolver
+            result = query_per_mind_wake_word_status(data_dir=tmp_path, router=None)
+
+        assert len(result) == 1
+        entry = result[0]
+        assert entry.resolution_strategy == "phonetic"
+        assert entry.matched_name == "lucia"
+        assert entry.phoneme_distance == 0
+        assert entry.model_path is not None
+        assert entry.model_path.name == "lucia.onnx"
+
+    def test_phonetic_with_nonzero_distance(self, tmp_path: Path) -> None:
+        """Distance 2 example — mirrors the docstring case
+        ('Jhonatan' → 'Jonny' distance ~= 2 per the resolver's
+        ``wake_word_phonetic_max_distance`` field doc)."""
+        from sovyx.voice._wake_word_resolver import (  # noqa: PLC0415
+            WakeWordResolution,
+            WakeWordResolutionStrategy,
+        )
+
+        _write_mind_yaml(tmp_path, "jhonatan", wake_word="Jhonatan", wake_word_enabled=True)
+        _write_pretrained_model(tmp_path, "jonny")
+
+        synthetic_resolution = WakeWordResolution(
+            strategy=WakeWordResolutionStrategy.PHONETIC,
+            model_path=tmp_path / "wake_word_models" / "pretrained" / "jonny.onnx",
+            matched_name="jonny",
+            phoneme_distance=2,
+        )
+
+        with patch(
+            "sovyx.voice.factory._wake_word_wire_up.WakeWordModelResolver"
+        ) as mock_resolver_cls:
+            mock_resolver = MagicMock()
+            mock_resolver.resolve = MagicMock(return_value=synthetic_resolution)
+            mock_resolver_cls.return_value = mock_resolver
+            result = query_per_mind_wake_word_status(data_dir=tmp_path, router=None)
+
+        assert len(result) == 1
+        entry = result[0]
+        assert entry.matched_name == "jonny"
+        assert entry.phoneme_distance == 2
 
 
 # ── Mixed list: enabled healthy + enabled broken + disabled ──────────
@@ -274,6 +375,7 @@ class TestEntryDataclassContract:
         entry = result[0]
         assert isinstance(entry, WakeWordPerMindStatusEntry)
         # Field set is the contract — adding/removing changes the API.
+        # T1 of v0.29.1 added matched_name + phoneme_distance.
         expected_fields = {
             "mind_id",
             "wake_word",
@@ -282,6 +384,8 @@ class TestEntryDataclassContract:
             "runtime_registered",
             "model_path",
             "resolution_strategy",
+            "matched_name",
+            "phoneme_distance",
             "last_error",
         }
         actual_fields = {f for f in entry.__slots__}

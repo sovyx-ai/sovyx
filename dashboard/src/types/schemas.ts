@@ -1340,6 +1340,21 @@ export const WakeWordPerMindStatusSchema = z.object({
   runtime_registered: z.boolean(),
   model_path: z.string().nullable(),
   resolution_strategy: WakeWordResolutionStrategySchema.nullable(),
+  /**
+   * T1 of MISSION-v0.29.1-tightening-2026-05-03 §T1 (D1): registry
+   * name that matched the wake word. For EXACT, the ASCII-folded
+   * wake word; for PHONETIC, the actual matched-file name; null on
+   * NONE / disabled. Frontend renders only when strategy is
+   * "phonetic" (EXACT case is redundant with the file name).
+   */
+  matched_name: z.string().nullable(),
+  /**
+   * Levenshtein-on-phonemes distance for PHONETIC matches. ``0`` for
+   * EXACT. Null on NONE / disabled. Non-negative integer or null
+   * (the backend converts the resolver's ``-1`` sentinel at the
+   * dataclass boundary so this field never carries negatives).
+   */
+  phoneme_distance: z.number().int().nonnegative().nullable(),
   last_error: z.string().nullable(),
 });
 

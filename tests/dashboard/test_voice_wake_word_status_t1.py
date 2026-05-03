@@ -287,6 +287,7 @@ class TestResponseShape:
         assert isinstance(body["minds"], list)
         entry = body["minds"][0]
         # Exact field set — adding / removing changes the API.
+        # T1 of v0.29.1 added matched_name + phoneme_distance.
         expected_fields = {
             "mind_id",
             "wake_word",
@@ -295,6 +296,8 @@ class TestResponseShape:
             "runtime_registered",
             "model_path",
             "resolution_strategy",
+            "matched_name",
+            "phoneme_distance",
             "last_error",
         }
         assert set(entry.keys()) == expected_fields

@@ -1688,6 +1688,25 @@ export interface WakeWordPerMindStatus {
    */
   resolution_strategy: WakeWordResolutionStrategy | null;
   /**
+   * Registry name that matched. For EXACT, the ASCII-folded wake
+   * word (typically same as the file stem in lowercase). For
+   * PHONETIC, the actual matched-file name (e.g., ``"lucia"`` for a
+   * wake_word ``"Lúcia"``). Null on NONE strategy or when
+   * resolution was skipped (disabled mind). Mission
+   * ``MISSION-v0.29.1-tightening-2026-05-03.md`` §T1: surfaces the
+   * resolver's matched-name signal so operators can see WHICH file
+   * matched their diacritic / phonetic wake word.
+   */
+  matched_name: string | null;
+  /**
+   * Levenshtein-on-phonemes distance for PHONETIC matches. ``0``
+   * for EXACT (no phonetic step ran). Null on NONE strategy or
+   * when resolution was skipped. The backend converts the
+   * resolver's ``-1`` sentinel to null at the boundary so this
+   * field only carries non-negative ``number | null``.
+   */
+  phoneme_distance: number | null;
+  /**
    * Operator-facing remediation text when ``resolution_strategy ===
    * "none"``. Null on the happy path. Surface directly to operators
    * via the dashboard error-details disclosure.

@@ -96,6 +96,19 @@ class WakeWordPerMindStatusEntry:
     * ``resolution_strategy`` — string-valued discriminated union:
       ``"exact"`` | ``"phonetic"`` | ``"none"``. ``None`` when
       ``wake_word_enabled`` is False (resolution skipped).
+    * ``matched_name`` — registry name that matched. For ``EXACT``,
+      the ASCII-folded wake word (typically same as the file stem
+      lowercase). For ``PHONETIC``, the actual matched-file name
+      (e.g., ``"lucia"`` for a wake_word ``"Lúcia"``). ``None`` on
+      NONE strategy or when resolution was skipped. Mission
+      ``MISSION-v0.29.1-tightening-2026-05-03.md`` §T1: surfaces the
+      resolver's matched-name signal that was log-only pre-v0.29.1.
+    * ``phoneme_distance`` — Levenshtein-on-phonemes distance for
+      PHONETIC matches. ``0`` for EXACT (no phonetic step ran).
+      ``None`` on NONE strategy or when resolution was skipped — the
+      resolver's internal sentinel ``-1`` is converted at the
+      dataclass boundary so the wire format only carries non-negative
+      ``int | None`` values.
     * ``last_error`` — operator-facing remediation message when
       ``resolution_strategy == "none"``; ``None`` when healthy or
       when resolution was skipped (disabled mind).
@@ -113,6 +126,8 @@ class WakeWordPerMindStatusEntry:
     runtime_registered: bool
     model_path: Path | None
     resolution_strategy: str | None
+    matched_name: str | None
+    phoneme_distance: int | None
     last_error: str | None
 
 
@@ -455,6 +470,8 @@ def query_per_mind_wake_word_status(
                     runtime_registered=False,
                     model_path=None,
                     resolution_strategy=None,
+                    matched_name=None,
+                    phoneme_distance=None,
                     last_error=None,
                 )
             )
@@ -495,12 +512,21 @@ def query_per_mind_wake_word_status(
                     runtime_registered=mind_id in registered_minds,
                     model_path=None,
                     resolution_strategy="none",
+                    matched_name=None,
+                    phoneme_distance=None,
                     last_error=last_error,
                 )
             )
             continue
 
-        # EXACT or PHONETIC — model_path is non-None.
+        # EXACT or PHONETIC — model_path is non-None. Convert the
+        # resolver's ``-1`` sentinel for ``phoneme_distance`` to ``None``
+        # at this boundary so the wire format only carries non-negative
+        # int | None values (avoids leaking a sentinel into the
+        # frontend's ``z.number().int().nonnegative().nullable()`` schema).
+        phoneme_distance: int | None = (
+            resolution.phoneme_distance if resolution.phoneme_distance >= 0 else None
+        )
         entries.append(
             WakeWordPerMindStatusEntry(
                 mind_id=mind_id,
@@ -510,6 +536,8 @@ def query_per_mind_wake_word_status(
                 runtime_registered=mind_id in registered_minds,
                 model_path=resolution.model_path,
                 resolution_strategy=resolution.strategy.value,
+                matched_name=resolution.matched_name or None,
+                phoneme_distance=phoneme_distance,
                 last_error=None,
             )
         )

@@ -70,6 +70,21 @@ const PER_MIND_WAKE_WORD_HEALTHY = {
   runtime_registered: true,
   model_path: "/data/wake_word_models/pretrained/aria.onnx",
   resolution_strategy: "exact" as const,
+  matched_name: "aria",
+  phoneme_distance: 0,
+  last_error: null,
+};
+
+const PER_MIND_WAKE_WORD_PHONETIC = {
+  mind_id: "lucia",
+  wake_word: "Lúcia",
+  voice_language: "pt-BR",
+  wake_word_enabled: true,
+  runtime_registered: true,
+  model_path: "/data/wake_word_models/pretrained/lucia.onnx",
+  resolution_strategy: "phonetic" as const,
+  matched_name: "lucia",
+  phoneme_distance: 0,
   last_error: null,
 };
 
@@ -81,6 +96,8 @@ const PER_MIND_WAKE_WORD_BROKEN = {
   runtime_registered: false,
   model_path: null,
   resolution_strategy: "none" as const,
+  matched_name: null,
+  phoneme_distance: null,
   last_error:
     "No ONNX model resolved for wake word 'Lucia' ... train via `sovyx voice train-wake-word`",
 };
@@ -93,6 +110,8 @@ const PER_MIND_WAKE_WORD_DISABLED = {
   runtime_registered: false,
   model_path: null,
   resolution_strategy: null,
+  matched_name: null,
+  phoneme_distance: null,
   last_error: null,
 };
 
@@ -426,5 +445,31 @@ describe("VoicePage — per-mind wake-word section", () => {
     expect(
       screen.getByText(/train via .sovyx voice train-wake-word./),
     ).toBeInTheDocument();
+  });
+
+  it("renders the phonetic-match disclosure for PHONETIC strategy entries", async () => {
+    // Mission MISSION-v0.29.1-tightening §T1: PHONETIC matches
+    // surface "Matched as <file>.onnx (distance: N)" so operators
+    // see WHICH file matched their diacritic / phonetic wake word.
+    setupMockSuccess({
+      minds: [PER_MIND_WAKE_WORD_PHONETIC, PER_MIND_WAKE_WORD_DISABLED],
+    });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("lucia")).toBeInTheDocument();
+    });
+    // i18n template populated with file = "lucia.onnx" + distance = 0.
+    expect(screen.getByText(/Matched as lucia\.onnx/)).toBeInTheDocument();
+    expect(screen.getByText(/distance: 0/)).toBeInTheDocument();
+  });
+
+  it("does NOT render the phonetic-match disclosure for EXACT strategy entries", async () => {
+    setupMockSuccess({ minds: [PER_MIND_WAKE_WORD_HEALTHY] });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("aria")).toBeInTheDocument();
+    });
+    // EXACT case is redundant with file name; disclosure should NOT render.
+    expect(screen.queryByText(/Matched as/)).toBeNull();
   });
 });

@@ -344,6 +344,22 @@ function PerMindWakeWordCard({
         </label>
       </div>
 
+      {/* PHONETIC match disclosure (Mission MISSION-v0.29.1-tightening §T1).
+          Only render when the resolver took the phonetic path —
+          EXACT case is redundant with the file name. Operator sees
+          "Matched as <file>.onnx (distance: N)" so a future
+          wake_word edit doesn't silently drift to a different match. */}
+      {entry.resolution_strategy === "phonetic" &&
+        entry.matched_name !== null &&
+        entry.phoneme_distance !== null && (
+          <div className="mt-1.5 text-xs text-[var(--svx-color-text-tertiary)]">
+            {t("perMindWakeWord.phoneticMatch", {
+              file: `${entry.matched_name}.onnx`,
+              distance: entry.phoneme_distance,
+            })}
+          </div>
+        )}
+
       {entry.last_error !== null && (
         <details className="mt-2">
           <summary className="cursor-pointer text-xs text-[var(--svx-color-danger)]">

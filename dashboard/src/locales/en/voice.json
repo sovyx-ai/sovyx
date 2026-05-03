@@ -75,7 +75,8 @@
     "toggleLabel": "Wake word enabled",
     "viewDetails": "View error details",
     "empty": "No minds yet — onboard a mind to manage its wake word here.",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "phoneticMatch": "Matched as {{file}} (distance: {{distance}})"
   },
   "wyoming": {
     "connected": "Connected",

@@ -479,6 +479,8 @@ describe("WakeWordPerMindStatusSchema", () => {
     runtime_registered: true,
     model_path: "/data/wake_word_models/pretrained/aria.onnx",
     resolution_strategy: "exact",
+    matched_name: "aria",
+    phoneme_distance: 0,
     last_error: null,
   };
 
@@ -487,17 +489,24 @@ describe("WakeWordPerMindStatusSchema", () => {
     expect(parsed.runtime_registered).toBe(true);
     expect(parsed.resolution_strategy).toBe("exact");
     expect(parsed.last_error).toBeNull();
+    // T1 of v0.29.1: EXACT populates matched_name + phoneme_distance=0.
+    expect(parsed.matched_name).toBe("aria");
+    expect(parsed.phoneme_distance).toBe(0);
   });
 
-  it("parses a PHONETIC-match entry", () => {
+  it("parses a PHONETIC-match entry with non-zero distance", () => {
     const parsed = WakeWordPerMindStatusSchema.parse({
       ...healthyExact,
       wake_word: "Lúcia",
       voice_language: "pt-BR",
       resolution_strategy: "phonetic",
       model_path: "/data/wake_word_models/pretrained/lucia.onnx",
+      matched_name: "lucia",
+      phoneme_distance: 0,
     });
     expect(parsed.resolution_strategy).toBe("phonetic");
+    expect(parsed.matched_name).toBe("lucia");
+    expect(parsed.phoneme_distance).toBe(0);
   });
 
   it("parses a NONE-strategy entry with last_error remediation", () => {
@@ -506,12 +515,17 @@ describe("WakeWordPerMindStatusSchema", () => {
       runtime_registered: false,
       model_path: null,
       resolution_strategy: "none",
+      matched_name: null,
+      phoneme_distance: null,
       last_error:
         "No ONNX model resolved for wake word 'Aria' ... train via `sovyx voice train-wake-word`",
     });
     expect(parsed.runtime_registered).toBe(false);
     expect(parsed.resolution_strategy).toBe("none");
     expect(parsed.last_error).toContain("train-wake-word");
+    // T1 of v0.29.1: NONE has both new fields = null (no match to surface).
+    expect(parsed.matched_name).toBeNull();
+    expect(parsed.phoneme_distance).toBeNull();
   });
 
   it("parses a disabled-mind entry (resolution skipped)", () => {
@@ -523,10 +537,14 @@ describe("WakeWordPerMindStatusSchema", () => {
       runtime_registered: false,
       model_path: null,
       resolution_strategy: null,
+      matched_name: null,
+      phoneme_distance: null,
       last_error: null,
     });
     expect(parsed.wake_word_enabled).toBe(false);
     expect(parsed.resolution_strategy).toBeNull();
+    expect(parsed.matched_name).toBeNull();
+    expect(parsed.phoneme_distance).toBeNull();
   });
 
   it("rejects invalid resolution_strategy values", () => {
@@ -534,6 +552,24 @@ describe("WakeWordPerMindStatusSchema", () => {
       WakeWordPerMindStatusSchema.parse({
         ...healthyExact,
         resolution_strategy: "fuzzy",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects negative phoneme_distance (resolver -1 sentinel must be converted at backend)", () => {
+    expect(() =>
+      WakeWordPerMindStatusSchema.parse({
+        ...healthyExact,
+        phoneme_distance: -1,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects non-integer phoneme_distance", () => {
+    expect(() =>
+      WakeWordPerMindStatusSchema.parse({
+        ...healthyExact,
+        phoneme_distance: 0.5,
       }),
     ).toThrow();
   });
@@ -562,6 +598,8 @@ describe("WakeWordPerMindStatusResponseSchema", () => {
           runtime_registered: true,
           model_path: "/data/wake_word_models/pretrained/aria.onnx",
           resolution_strategy: "exact",
+          matched_name: "aria",
+          phoneme_distance: 0,
           last_error: null,
         },
         {
@@ -572,6 +610,8 @@ describe("WakeWordPerMindStatusResponseSchema", () => {
           runtime_registered: false,
           model_path: null,
           resolution_strategy: "none",
+          matched_name: null,
+          phoneme_distance: null,
           last_error: "No ONNX model resolved ...",
         },
         {
@@ -582,6 +622,8 @@ describe("WakeWordPerMindStatusResponseSchema", () => {
           runtime_registered: false,
           model_path: null,
           resolution_strategy: null,
+          matched_name: null,
+          phoneme_distance: null,
           last_error: null,
         },
       ],
