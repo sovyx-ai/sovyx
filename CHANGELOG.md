@@ -6,7 +6,129 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.29.1 below)
+(none — every shipped delta is in 0.30.0 below)
+
+## [0.30.0] — 2026-05-03
+
+### Single-mind production GA + Train Wake Word UI
+
+This minor release closes the last code-side gaps between v0.29.1
+and the master mission's "single-mind production GA" criterion
+(``MISSION-voice-final-skype-grade-2026.md`` §Two-Tier GA Strategy
+352-359). Five tracks (12 fix commits + 1 closure = 13 commits)
+covering the full v0.30.0 mission scope:
+
+* **T1 — Train Wake Word UI (D23)** — closes the operator workflow
+  gap surfaced in the v0.29.0 review. Operators on the dashboard
+  can now train a wake-word ONNX model end-to-end without dropping
+  to the CLI: click "Train this wake word" on a NONE-strategy mind
+  card → modal with adjustable target_samples / voices / variants /
+  negatives_dir → submit fires HTTP 202 spawn → live progress via
+  WebSocket → cancel mid-flight or Use-this-model on success.
+* **T2 — Phase 7 Wizard React Frontend (T7.25-T7.30)** — closes the
+  Phase 7 GA gate. 5-step microphone setup wizard (devices → record
+  → results → save → done) accessible via voice.tsx as a
+  collapsible Section.
+* **T3 — T27 Tier 1 RAW deprecation (D5)** — formalizes the
+  architectural deferral with explicit DEPRECATED-PENDING-PHASE-3-
+  TELEMETRY status + re-activation triggers. Code + ADR + ROADMAP
+  in lockstep.
+* **T4 — Cleanup folds (D6)** — drops the unnecessary
+  ``asyncio.to_thread`` wrapper on ``_create_wake_word_stub`` (the
+  stub does no async work) + consolidates duplicate
+  ``VoiceTuningConfig()`` env-reads in the factory. ~5-7 ms boot
+  savings per pipeline construction.
+
+Mission spec: ``docs-internal/missions/MISSION-v0.30.0-single-mind-ga-2026-05-03.md``
+(gitignored).
+
+### Added
+
+* **T1.1 — `POST /api/voice/training/jobs/start` endpoint**
+  (`e73de80`). HTTP 202 Accepted with ``{job_id, stream_url}``;
+  spawns the orchestrator via ``observability.tasks.spawn`` (same
+  primitive used by ``brain/consolidation.py::consolidation-scheduler``).
+  Idempotency via slugified ``job_id`` (re-submit while in flight
+  returns 409 Conflict). Fail-fast on missing trainer backend (503
+  with operator remediation in detail). 11 new endpoint tests.
+* **T1.2 — `WS /api/voice/training/jobs/{id}/stream`** (`9179b5b`).
+  Live progress streaming via WebSocket — auth via query-param
+  token (logs.py pattern). Tail-based JSONL push at 0.5 s with
+  discriminated-union messages (``snapshot`` / ``terminal`` /
+  ``error``). Frontend race-tolerance: connecting right after
+  POST 202 supported. 10 new WS tests.
+* **T1.3 — Frontend training types + zod + Zustand slice**
+  (`6ad58e6`). New ``WakeWordPerMindStatus``-style additions:
+  ``StartTrainingRequest`` + ``StartTrainingResponse`` +
+  ``TrainingJobStreamMessage`` (discriminated union). Slice with
+  ``startTraining`` (returns job_id on 202) + ``cancelTrainingJob``
+  + ``subscribeToTrainingJob`` (manages WS lifecycle) +
+  ``unsubscribeFromTrainingJob`` (idempotent close). 24 new vitest
+  cases (12 schema + 12 slice).
+* **T1.4 — TrainWakeWordButton + Modal in PerMindWakeWordCard**
+  (`0355eec`). Conditional rendering — button visible ONLY when
+  ``resolution_strategy === "none"`` AND ``wake_word_enabled === true``.
+  Modal pre-fills wake_word/mind_id/language from the entry; operator
+  adjusts target_samples (slider 100-10000) + voices/variants CSV +
+  required negatives_dir. Optimistic submit; on 202 modal closes +
+  page subscribes to live stream. 2 new render-conditional tests.
+* **T1.5 — TrainingJobsPanel for live progress + cancel**
+  (`6c56573`). Pure observer of slice state. UI states: in-flight
+  (progress bar + samples counter + Cancel button), terminal
+  (pill + output_path + Use-this-model OR error_summary disclosure
+  + Dismiss button). a11y: ``role="progressbar"`` with valuenow/min/max.
+  i18n: 15 new strings under ``training.panel.*``.
+* **T1.6 — Component vitest tests** (`67a9bac`). 15 new cases
+  pinning the modal + panel contracts (render conditions, prefill,
+  close behavior, error display, terminal-state UIs, cancel flow,
+  Dismiss action clears slice state).
+* **T2 — VoiceSetupWizard 5-step component** (`ad2cdd7`). React
+  frontend for the Phase 7 backend (T7.21-T7.24 already shipped).
+  ``useReducer`` state machine with discriminated-union steps.
+  Mounted in voice.tsx as a collapsible Section. 6 new vitest
+  cases covering devices fetch + record + results + retry + save +
+  done end-to-end.
+
+### Changed
+
+* **T3 — Tier 1 RAW marked DEPRECATED-PENDING-PHASE-3-TELEMETRY**
+  (`fedabbc`). Per anti-pattern #21, Tier 3 (``voice_clarity_autofix
+  =True``) is THE durable fix; Tier 1 RAW is performance optimization
+  only. v0.30.0 ships with the placeholder strategy + flag intact;
+  re-activation triggers documented in code + ADR + ROADMAP A5
+  (telemetry showing Tier 3 covers <99%, engagement_denied rate
+  ≥ 5%, or explicit operator ask). ABANDON trigger documented for
+  the future archive-as-superseded path.
+* **T4 — Factory boot perf cleanup** (`bdd360a`). ``_create_wake_word_stub``
+  no longer goes through ``asyncio.to_thread`` (pure-Python class
+  instantiation; the thread-spawn was theatrical). ``VoiceTuningConfig()``
+  consolidated to one read in ``create_voice_pipeline`` instead of
+  two (the wake-word router block + the device-resolution block now
+  share one frozen instance). Saves ~5-7 ms per pipeline boot.
+
+### Validation
+
+* All quality gates green: ruff lint + format, mypy strict (475
+  source files), bandit zero issues, pytest (6,617 voice + dashboard
+  tests pass with zero regressions; +21 net from T1.1+T1.2),
+  ``npx tsc -b`` zero new errors, ``npx vitest run`` 1,092 tests
+  pass (was 1,045 pre-v0.30.0; +47 net from T1.3+T1.4+T1.5+T1.6+T2).
+
+### Operator-only follow-ups (T6 / D22)
+
+The mission's operator-pendency map (PART 6 of the mission spec)
+identifies ~14h of operator-only work still owed for the v0.31.0
+multi-mind FINAL GA cycle. Top priority post-v0.30.0:
+
+1. **D22 browser pilot** (~30-45 min) — validate v0.29.0 wake-word
+   UI + v0.29.1 matched_name disclosure + v0.30.0 Train UI + Setup
+   Wizard end-to-end in a browser.
+2. **D2 / D3 / D1 telemetry pilots** (~3h total) — Phase 4 AEC ERLE
+   + DNSMOS extras + Phase 3 telemetry inspection. Unblocks the
+   default-flip cycle.
+3. **D5 voice 100pct pilots** (~2-3h) — B7/C5/E3 harness runs.
+4. **D10 — pretrained pool decision** (~1h decision + GPU-hours per
+   chosen path) — sole remaining v0.31.0 multi-mind FINAL GA blocker.
 
 ## [0.29.1] — 2026-05-03
 
