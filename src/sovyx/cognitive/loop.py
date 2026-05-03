@@ -6,7 +6,9 @@ Orchestrates all phases, manages state machine, emits events.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import time
 from typing import TYPE_CHECKING
 
 from sovyx.cognitive.act import ActionResult
@@ -17,8 +19,30 @@ from sovyx.observability.metrics import MetricsRegistry, get_metrics
 from sovyx.observability.saga import trace_saga
 from sovyx.observability.tracing import SovyxTracer, get_tracer
 
+
+@contextlib.contextmanager
+def _measure_phase_latency(phase: CognitivePhase) -> Iterator[None]:
+    """T06 helper — record the elapsed wall-clock to the
+    ``sovyx.cognitive.phase_latency`` Histogram with ``phase`` attribute.
+
+    Wraps each phase invocation in the cognitive loop. Defensive:
+    silently no-ops when the registry is missing the attribute (e.g.
+    in tests with a bare registry). Companion to the existing
+    ``t.start_cognitive_span(...)`` tracing — spans are sampled;
+    this histogram aggregates without sampling for SLO dashboards.
+    """
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        elapsed_ms = (time.monotonic() - t0) * 1000.0
+        instrument = getattr(get_metrics(), "cognitive_phase_latency", None)
+        if instrument is not None:
+            instrument.record(elapsed_ms, attributes={"phase": phase.value})
+
+
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
 
     from sovyx.brain.service import BrainService
     from sovyx.cognitive.act import ActPhase
@@ -172,12 +196,18 @@ class CognitiveLoop:
         try:
             # ── PERCEIVE ──
             self._state.transition(CognitivePhase.PERCEIVING)
-            with t.start_cognitive_span("perceive", mind_id=str(request.mind_id)):
+            with (
+                t.start_cognitive_span("perceive", mind_id=str(request.mind_id)),
+                _measure_phase_latency(CognitivePhase.PERCEIVING),
+            ):
                 perception = await self._perceive.process(request.perception)
 
             # ── ATTEND ──
             self._state.transition(CognitivePhase.ATTENDING)
-            with t.start_cognitive_span("attend"):
+            with (
+                t.start_cognitive_span("attend"),
+                _measure_phase_latency(CognitivePhase.ATTENDING),
+            ):
                 should_process = await self._attend.process(perception)
 
             if not should_process:
@@ -193,7 +223,10 @@ class CognitiveLoop:
 
             # ── THINK ──
             self._state.transition(CognitivePhase.THINKING)
-            with t.start_cognitive_span("think"):
+            with (
+                t.start_cognitive_span("think"),
+                _measure_phase_latency(CognitivePhase.THINKING),
+            ):
                 llm_response, assembled_msgs = await self._think.process(
                     perception=perception,
                     mind_id=request.mind_id,
@@ -203,7 +236,10 @@ class CognitiveLoop:
 
             # ── ACT ──
             self._state.transition(CognitivePhase.ACTING)
-            with t.start_cognitive_span("act"):
+            with (
+                t.start_cognitive_span("act"),
+                _measure_phase_latency(CognitivePhase.ACTING),
+            ):
                 action_result = await self._act.process(
                     llm_response,
                     assembled_msgs,
@@ -220,7 +256,10 @@ class CognitiveLoop:
 
             # ── REFLECT ──
             self._state.transition(CognitivePhase.REFLECTING)
-            with t.start_cognitive_span("reflect"):
+            with (
+                t.start_cognitive_span("reflect"),
+                _measure_phase_latency(CognitivePhase.REFLECTING),
+            ):
                 try:
                     await self._reflect.process(
                         perception=perception,
@@ -291,13 +330,19 @@ class CognitiveLoop:
             # ── PERCEIVE ──
             self._state.transition(CognitivePhase.PERCEIVING)
             await _emit_phase("perceiving")
-            with t.start_cognitive_span("perceive", mind_id=str(request.mind_id)):
+            with (
+                t.start_cognitive_span("perceive", mind_id=str(request.mind_id)),
+                _measure_phase_latency(CognitivePhase.PERCEIVING),
+            ):
                 perception = await self._perceive.process(request.perception)
 
             # ── ATTEND ──
             self._state.transition(CognitivePhase.ATTENDING)
             await _emit_phase("attending", "checking safety")
-            with t.start_cognitive_span("attend"):
+            with (
+                t.start_cognitive_span("attend"),
+                _measure_phase_latency(CognitivePhase.ATTENDING),
+            ):
                 should_process = await self._attend.process(perception)
 
             if not should_process:
@@ -310,7 +355,10 @@ class CognitiveLoop:
             # ── THINK (streaming) ──
             self._state.transition(CognitivePhase.THINKING)
             await _emit_phase("thinking")
-            with t.start_cognitive_span("think"):
+            with (
+                t.start_cognitive_span("think"),
+                _measure_phase_latency(CognitivePhase.THINKING),
+            ):
                 chunk_iter, assembled_msgs = await self._think.process_streaming(
                     perception=perception,
                     mind_id=request.mind_id,
@@ -394,7 +442,10 @@ class CognitiveLoop:
                 tool_names = [tc.function_name.split(".", 1)[0] for tc in tool_calls]
                 tool_detail = f"using {', '.join(tool_names)}"
             await _emit_phase("acting", tool_detail)
-            with t.start_cognitive_span("act"):
+            with (
+                t.start_cognitive_span("act"),
+                _measure_phase_latency(CognitivePhase.ACTING),
+            ):
                 action_result = await self._act.process(
                     llm_response,
                     assembled_msgs,
@@ -410,7 +461,10 @@ class CognitiveLoop:
             # ── REFLECT ──
             self._state.transition(CognitivePhase.REFLECTING)
             await _emit_phase("reflecting")
-            with t.start_cognitive_span("reflect"):
+            with (
+                t.start_cognitive_span("reflect"),
+                _measure_phase_latency(CognitivePhase.REFLECTING),
+            ):
                 try:
                     await self._reflect.process(
                         perception=perception,

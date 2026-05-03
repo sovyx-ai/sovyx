@@ -671,6 +671,26 @@ class MetricsRegistry:
             "shows up in time-series dashboards alongside the other 3 "
             "plugin metrics.",
         )
+        # T06 of pre-wake-word-hardening mission (2026-05-02). The
+        # existing ``cognitive.latency`` histogram measures the FULL
+        # loop end-to-end. When latency regresses, operators couldn't
+        # see WHERE in the loop the time was being spent (Perceive /
+        # Attend / Think / Act / Reflect). This per-phase histogram
+        # closes that gap. Cardinality: ``phase`` is closed-set
+        # (5 values from ``CognitivePhase`` StrEnum). Co-exists with
+        # the existing tracing spans (spans are sampled; this
+        # histogram aggregates without sampling for SLO dashboards).
+        self.cognitive_phase_latency = self._histogram(
+            "sovyx.cognitive.phase_latency",
+            "Per-phase cognitive-loop latency in ms. Labels: phase "
+            "(``perceiving`` | ``attending`` | ``thinking`` | "
+            "``acting`` | ``reflecting``). Recorded for every loop "
+            "iteration that reaches each phase (Attend short-circuits "
+            "skip Think+Act+Reflect; the histogram simply has no "
+            "samples for skipped phases that turn). Use this to "
+            "decompose the existing ``cognitive.latency`` full-loop "
+            "histogram when investigating latency regressions.",
+        )
         # Phase 7 / T7.6 — confidence histogram per CONFIRMED detection.
         # Distinct from the per-frame ``voice.wake_word.score`` log
         # event (which fires every 80 ms for every frame regardless

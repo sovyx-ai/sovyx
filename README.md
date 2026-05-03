@@ -1056,7 +1056,7 @@ Async logging via `AsyncQueueHandler` + `BackgroundLogWriter` (`observability/as
 |--------|-------|----------|
 | Voice | ~60 | `voice.wake_word.detection_method{onnx\|stt_fallback}`, `voice.wake_word.false_fire_count{mind_id}`, `voice.health.bypass_strategy.verdicts`, `voice.health.deaf.warnings_total`, `voice.probe.cold_silence_rejected{mode}`, `voice.aec.erle_db`, `voice.codec.{sbc,aac,aptx,ldac}` |
 | Brain | 3 | retrieval latency, recall hit rate, dream patterns extracted |
-| Cognitive | 2 | `sovyx.cognitive.latency` (full-loop), `sovyx.safety.filter.latency` |
+| Cognitive | 3 | `sovyx.cognitive.latency` (full-loop), `sovyx.cognitive.phase_latency{phase}` (per-phase, 5 closed-set values; added v0.28.1 T06), `sovyx.safety.filter.latency` |
 | Safety | 5 | PII, injection, output-guard, financial-gate counters |
 | LLM | 4 | per-provider latency, cost-cap-hit, circuit-open, failover-engaged |
 | Bridge | 2 | per-channel ingress, response-sent |
