@@ -6,7 +6,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.29.0 below)
+(none — every shipped delta is in 0.29.1 below)
+
+## [0.29.1] — 2026-05-03
+
+### Tightening pass
+
+Operator's 2026-05-03 enterprise-grade review of the v0.29.0 ship
+surfaced **2 HIGH-priority items** + **1 documentation hygiene item**.
+None are critical / regressions; all are residual gaps from v0.29.0
+that should be tightened before expanding scope into a v0.30.0 with
+substantive new features. Mission spec at
+``docs-internal/missions/MISSION-v0.29.1-tightening-2026-05-03.md``
+(gitignored). 2 fix commits + 1 closure = 3 git commits total
+(T3 is a docs regen in gitignored `docs-internal/`).
+
+### Added
+
+- **T1 — `matched_name` + `phoneme_distance` surface for PHONETIC
+  strategy** (`c5f868b`). The v0.29.0 per-mind status endpoint
+  returned ``model_path`` + ``resolution_strategy`` only. The
+  resolver knew more: for PHONETIC matches, ``matched_name`` carries
+  the actual matched-file name (e.g., ``"lucia"`` for a
+  ``wake_word: "Lúcia"``) + ``phoneme_distance`` carries the
+  Levenshtein-on-phonemes value. Pre-v0.29.1, both signals were
+  log-only at ``voice/_wake_word_resolver.py:216-228``; the dashboard
+  reading them from logs would have required log-grep. T1 surfaces
+  both fields end-to-end (backend dataclass + pydantic + TypeScript
+  + zod + i18n + UI), with the frontend rendering the disclosure
+  ONLY when ``resolution_strategy === "phonetic"`` (EXACT case is
+  redundant with the file name; EXACT renders no extra line). The
+  dashboard now shows: "Matched as `lucia.onnx` (distance: 0)" for
+  diacritic / phonetic matches. Drift-prevention motivation: an
+  operator who edits ``wake_word`` later sees the matched-file +
+  distance and can catch unintended cross-matches before they ship.
+  Resolver's ``-1`` sentinel for ``phoneme_distance`` is converted
+  to ``None`` at the dataclass boundary so the wire format only
+  carries non-negative ``int | None`` (the zod
+  ``nonnegative().nullable()`` schema rejects negatives explicitly).
+  4 new vitest cases + 4 new Python test cases.
+
+### Fixed
+
+- **T2 — Bare-assertion sweep + line 371 fix** (`56feccf`). Companion
+  to the line-236 fix in `fbbfae2` (v0.29.0 closure). Re-grep at
+  HEAD found one remaining bare ``expect(...).toHaveBeenCalledTimes(2)``
+  outside ``waitFor`` at
+  ``voice-platform-diagnostics.test.tsx:371`` — same race as line
+  236 (BypassTierStatusCard's mount-time fetch fires async AFTER
+  the page DOM renders; bare assertion races the second fetch).
+  Pre-existing pattern; not yet flaking but inevitable under
+  contention. Sweep audited every other dashboard
+  ``toHaveBeenCalledTimes(N>=2)`` and confirmed all siblings are
+  already correctly wrapped (brain.test.tsx:127/175/200,
+  use-voice-catalog.test.ts:139, plugins.test.ts:280,
+  api.test.ts:191/208/236). Per ``feedback_enterprise_only``,
+  closing the anti-pattern instances completely beats fix-and-forget.
+
+### Documentation
+
+- **T3 — Operator debt master regeneration** (gitignored;
+  ``docs-internal/OPERATOR-DEBT-MASTER-2026-05-03.md``). The
+  predecessor file was dated v0.28.0 (HEAD `7ce681f`); the repo
+  shipped v0.28.1, v0.28.2, v0.28.3, v0.29.0 since. T3 ships a
+  current-truth status overlay: per-debt status pills updated
+  (D1-D8, D10-D16, D20-D21 STILL OPEN; D19 PARTIAL — 5 of ~7 tags
+  shipped; D22 PARTIAL — wake-word UI shipped + browser-validation
+  owed); new D23 added (Train Wake Word dashboard button, deferred
+  to v0.30.0 mission); cross-references to v0.28.1+ commit SHAs
+  cite-anchored throughout. Predecessor file retained as the
+  authoritative DEEP SPEC for D1-D22 operator-action recipes
+  (PART 2-4 unchanged); supersede pointers added to both files for
+  audit trail.
+
+### Validation
+
+- All quality gates green: ruff lint + format, mypy strict (475
+  source files), bandit zero issues, pytest (6,596 voice + dashboard
+  tests pass), ``npx tsc -b`` zero new errors,
+  ``npx vitest run`` 1,045 tests pass (+4 net from T1; -0 from T2
+  test-hardening commit).
 
 ## [0.29.0] — 2026-05-03
 
