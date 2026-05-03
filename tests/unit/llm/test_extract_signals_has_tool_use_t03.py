@@ -110,7 +110,7 @@ class TestHasToolUseTrueOnRecentToolCall:
         )
         assert signals.has_tool_use is True
 
-    def test_assistant_with_empty_tool_calls_list_is_NOT_tool_use(self) -> None:
+    def test_assistant_with_empty_tool_calls_list_is_not_tool_use(self) -> None:
         """Edge case: tool_calls=[] is falsy; should NOT trigger has_tool_use."""
         signals = extract_signals(
             [
