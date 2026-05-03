@@ -121,13 +121,14 @@ class TestRouterConstruction:
 
     def test_unregister_is_idempotent(self) -> None:
         router = _make_router_with_mind("aria", [0.1])
-        router.unregister_mind(MindId("aria"))
+        # First unregister actually removes — returns True.
+        assert router.unregister_mind(MindId("aria")) is True
         assert len(router) == 0
-        # Second unregister is a no-op.
-        router.unregister_mind(MindId("aria"))
+        # Second unregister is a no-op — returns False.
+        assert router.unregister_mind(MindId("aria")) is False
         assert len(router) == 0
-        # Unregistering an unknown mind is also a no-op.
-        router.unregister_mind(MindId("never-existed"))
+        # Unregistering an unknown mind is also a no-op — returns False.
+        assert router.unregister_mind(MindId("never-existed")) is False
         assert len(router) == 0
 
 

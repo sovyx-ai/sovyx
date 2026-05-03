@@ -866,6 +866,49 @@ class VoicePipeline:
             config=config,
         )
 
+    def unregister_mind_wake_word(self, mind_id: MindId) -> bool:
+        """Remove a mind's wake-word detector from the live router.
+
+        Mission ``MISSION-wake-word-runtime-wireup-2026-05-03.md`` §T2
+        — the symmetric inverse of :meth:`register_mind_wake_word`.
+        Wires the ``wake_word.unregister_mind`` RPC handler to the
+        live :class:`~sovyx.voice._wake_word_router.WakeWordRouter`
+        owned by this pipeline.
+
+        Use case: the operator flips
+        :attr:`MindConfig.wake_word_enabled` from ``True`` to ``False``
+        in the dashboard. T3's toggle endpoint persists the YAML +
+        calls this method so the running pipeline drops the detector
+        without a daemon restart. Idempotent on unknown mind_ids
+        (the router itself is idempotent — see
+        :meth:`WakeWordRouter.unregister_mind`).
+
+        Args:
+            mind_id: Stable mind identifier (matches MindConfig.id).
+
+        Returns:
+            ``True`` when the mind was previously registered and got
+            removed; ``False`` when no detector existed for this id
+            (idempotent no-op — caller can ignore or surface it).
+
+        Raises:
+            VoiceError: When the multi-mind ``WakeWordRouter`` is not
+                configured (single-mind mode). Message includes a
+                remediation hint mirroring
+                :meth:`register_mind_wake_word`.
+        """
+        from sovyx.engine.errors import VoiceError  # noqa: PLC0415
+
+        if self._wake_word_router is None:
+            msg = (
+                "wake-word router not configured (single-mind mode); "
+                "unregister_mind requires multi-mind setup. The "
+                "single-mind pipeline owns one detector via the legacy "
+                "wake_word slot, not via the router."
+            )
+            raise VoiceError(msg)
+        return self._wake_word_router.unregister_mind(mind_id)
+
     @property
     def vad_inference_timeout_count(self) -> int:
         """Lifetime count of VAD inferences that exceeded

@@ -274,23 +274,34 @@ class WakeWordRouter:
             },
         )
 
-    def unregister_mind(self, mind_id: MindId) -> None:
+    def unregister_mind(self, mind_id: MindId) -> bool:
         """Remove a mind's detector from the router.
 
         Idempotent: unregistering an unknown mind_id is a no-op.
         Use case: mind disabled at runtime (operator toggled it
         off in MindRegistry).
+
+        Returns:
+            ``True`` when the mind had a registered detector that was
+            removed; ``False`` when no detector existed for this id
+            (idempotent no-op). Mission
+            ``MISSION-wake-word-runtime-wireup-2026-05-03.md`` §T2
+            wires the dashboard toggle through this method and uses
+            the bool to distinguish "actually disabled" from
+            "already disabled" in the response.
         """
         detector = self._detectors.pop(mind_id, None)
-        if detector is not None:
-            detector.reset()
-            logger.info(
-                "voice.wake_word.router.mind_unregistered",
-                **{
-                    "voice.mind_id": str(mind_id),
-                    "voice.remaining_count": len(self._detectors),
-                },
-            )
+        if detector is None:
+            return False
+        detector.reset()
+        logger.info(
+            "voice.wake_word.router.mind_unregistered",
+            **{
+                "voice.mind_id": str(mind_id),
+                "voice.remaining_count": len(self._detectors),
+            },
+        )
+        return True
 
     def reset_all(self) -> None:
         """Reset every registered detector to IDLE.

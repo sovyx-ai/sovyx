@@ -408,10 +408,67 @@ def register_cli_handlers(
             "hot_reload_succeeded": True,
         }
 
+    async def _wake_word_unregister_mind(mind_id: str) -> dict[str, Any]:
+        """Drop a mind's wake-word detector from the live router.
+
+        Mission ``MISSION-wake-word-runtime-wireup-2026-05-03.md`` §T2/T4
+        — the symmetric inverse of ``wake_word.register_mind``. Surfaces
+        :meth:`sovyx.voice.pipeline._orchestrator.VoicePipeline.unregister_mind_wake_word`
+        as a daemon RPC so the dashboard's per-mind wake-word toggle
+        endpoint (T3) can disable a mind without restarting the daemon.
+
+        Idempotent: unregistering an unknown ``mind_id`` is a no-op.
+        The return payload distinguishes "actually disabled" from
+        "already disabled" via the ``unregistered`` boolean so the
+        caller can surface the right status to operators.
+
+        Args:
+            mind_id: Target mind. Empty/whitespace rejected.
+
+        Returns:
+            ``{"mind_id": ..., "unregistered": bool}`` — ``True`` when
+            a detector was removed, ``False`` when no detector existed
+            (idempotent no-op).
+
+        Raises:
+            ValueError: Empty mind_id.
+            VoiceError: Voice pipeline not registered, OR pipeline
+                lacks a multi-mind WakeWordRouter (single-mind mode).
+        """
+        from sovyx.engine.errors import VoiceError  # noqa: PLC0415
+        from sovyx.engine.types import MindId  # noqa: PLC0415
+        from sovyx.voice.pipeline._orchestrator import (  # noqa: PLC0415
+            VoicePipeline,
+        )
+
+        if not mind_id.strip():
+            msg = "mind_id must be a non-empty string"
+            raise ValueError(msg)
+
+        if not registry.is_registered(VoicePipeline):
+            msg = (
+                "voice subsystem not enabled (VoicePipeline not "
+                "registered); enable voice in the dashboard first"
+            )
+            raise VoiceError(msg)
+
+        pipeline = await registry.resolve(VoicePipeline)
+        unregistered = pipeline.unregister_mind_wake_word(MindId(mind_id))
+
+        logger.info(
+            "voice.wake_word.rpc.unregister_mind_succeeded",
+            **{
+                "voice.mind_id": mind_id,
+                "voice.unregistered": unregistered,
+            },
+        )
+        return {"mind_id": mind_id, "unregistered": unregistered}
+
     rpc.register_method("chat", _chat)
     rpc.register_method("mind.list", _mind_list)
     rpc.register_method("mind.forget", _mind_forget)
     rpc.register_method("mind.retention.prune", _mind_retention_prune)
     rpc.register_method("config.get", _config_get)
     rpc.register_method("wake_word.register_mind", _wake_word_register_mind)
-    logger.debug("cli_rpc_handlers_registered", count=6)
+    rpc.register_method("wake_word.unregister_mind", _wake_word_unregister_mind)
+    logger.debug("cli_rpc_handlers_registered", count=7)

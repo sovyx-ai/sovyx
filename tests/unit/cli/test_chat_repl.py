@@ -332,6 +332,7 @@ class TestRpcHandlerRegistration:
             "mind.retention.prune",
             "config.get",
             "wake_word.register_mind",
+            "wake_word.unregister_mind",
         } <= registered
 
 
