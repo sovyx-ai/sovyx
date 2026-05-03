@@ -11,6 +11,8 @@ import {
   TrainingJobSummarySchema,
   VoiceBypassTierStatusResponseSchema,
   VoiceRestartHistoryResponseSchema,
+  WakeWordToggleRequestSchema,
+  WakeWordToggleResponseSchema,
   WizardDevicesResponseSchema,
   WizardDiagnosticResponseSchema,
   WizardTestResultResponseSchema,
@@ -380,6 +382,87 @@ describe("PruneRetentionResponseSchema", () => {
   it("rejects payloads missing cutoff_utc", () => {
     const { cutoff_utc: _omit, ...withoutCutoff } = valid;
     expect(() => PruneRetentionResponseSchema.parse(withoutCutoff)).toThrow();
+  });
+});
+
+// ── MISSION-pre-wake-word-ui-hardening §T4 — wake-word toggle ──
+
+describe("WakeWordToggleRequestSchema", () => {
+  it("parses an enable request", () => {
+    expect(WakeWordToggleRequestSchema.parse({ enabled: true }).enabled).toBe(
+      true,
+    );
+  });
+
+  it("parses a disable request", () => {
+    expect(WakeWordToggleRequestSchema.parse({ enabled: false }).enabled).toBe(
+      false,
+    );
+  });
+
+  it("rejects payloads missing the enabled field", () => {
+    expect(() => WakeWordToggleRequestSchema.parse({})).toThrow();
+  });
+
+  it("rejects non-boolean enabled values", () => {
+    expect(() =>
+      WakeWordToggleRequestSchema.parse({ enabled: "true" }),
+    ).toThrow();
+    expect(() => WakeWordToggleRequestSchema.parse({ enabled: 1 })).toThrow();
+  });
+});
+
+describe("WakeWordToggleResponseSchema", () => {
+  const happyPath = {
+    mind_id: "aria",
+    enabled: true,
+    persisted: true,
+    applied_immediately: true,
+    hot_apply_detail: null,
+  };
+
+  it("parses the happy-path payload (applied_immediately=true, detail=null)", () => {
+    const parsed = WakeWordToggleResponseSchema.parse(happyPath);
+    expect(parsed.applied_immediately).toBe(true);
+    expect(parsed.hot_apply_detail).toBeNull();
+  });
+
+  it("parses the cold-start payload (applied_immediately=false with detail)", () => {
+    const coldStart = {
+      ...happyPath,
+      applied_immediately: false,
+      hot_apply_detail:
+        "voice subsystem not running — change persisted; will apply on next boot",
+    };
+    const parsed = WakeWordToggleResponseSchema.parse(coldStart);
+    expect(parsed.applied_immediately).toBe(false);
+    expect(parsed.hot_apply_detail).toContain("next boot");
+  });
+
+  it("parses the disable payload", () => {
+    const disable = {
+      mind_id: "lucia",
+      enabled: false,
+      persisted: true,
+      applied_immediately: true,
+      hot_apply_detail: null,
+    };
+    expect(WakeWordToggleResponseSchema.parse(disable).enabled).toBe(false);
+  });
+
+  it("rejects payloads missing required fields", () => {
+    expect(() => WakeWordToggleResponseSchema.parse({})).toThrow();
+    const { mind_id: _omit, ...withoutMindId } = happyPath;
+    expect(() => WakeWordToggleResponseSchema.parse(withoutMindId)).toThrow();
+  });
+
+  it("rejects non-string hot_apply_detail (must be string | null)", () => {
+    expect(() =>
+      WakeWordToggleResponseSchema.parse({
+        ...happyPath,
+        hot_apply_detail: 42,
+      }),
+    ).toThrow();
   });
 });
 

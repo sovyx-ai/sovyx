@@ -1278,6 +1278,38 @@ export const PruneRetentionResponseSchema = z.object({
   dry_run: z.boolean(),
 });
 
+/* ── Mind wake-word toggle runtime schemas ──
+ *
+ * Mission ``MISSION-pre-wake-word-ui-hardening-2026-05-03.md`` §T4
+ * paired with ``api.ts``'s ``WakeWordToggleRequest/Response``.
+ *
+ * ``hot_apply_detail`` uses ``.nullable()`` to match the pydantic
+ * ``str | None`` default-None semantics — present on the response
+ * but always-null on the happy path.
+ *
+ * Pass ``{ schema: WakeWordToggleResponseSchema }`` to ``api.post``
+ * so a backend shape change surfaces as a runtime safeParse warning
+ * + the dashboard logs the mismatch instead of silently rendering
+ * stale fields.
+ */
+
+export const WakeWordToggleRequestSchema = z.object({
+  enabled: z.boolean(),
+});
+
+export const WakeWordToggleResponseSchema = z.object({
+  mind_id: z.string(),
+  enabled: z.boolean(),
+  persisted: z.boolean(),
+  applied_immediately: z.boolean(),
+  /**
+   * String when ``applied_immediately === false`` (operator-facing
+   * remediation); null on the happy path. Matches the pydantic
+   * ``Field(default=None)``.
+   */
+  hot_apply_detail: z.string().nullable(),
+});
+
 /* ── Voice setup wizard runtime schemas — Phase 7 / T7.21-T7.24 ── */
 
 export const WizardDeviceInfoSchema = z.object({

@@ -1588,6 +1588,58 @@ export interface PruneRetentionResponse {
   dry_run: boolean;
 }
 
+/* ── Mind wake-word toggle — POST /api/mind/{mind_id}/wake-word/toggle ──
+ *
+ * Mission ``MISSION-wake-word-runtime-wireup-2026-05-03.md`` §T3
+ * shipped the endpoint in v0.28.2. Mission
+ * ``MISSION-pre-wake-word-ui-hardening-2026-05-03.md`` §T1 added
+ * pre-validate semantics for the v0.28.3 patch (refuse-to-persist
+ * on NONE strategy → HTTP 422). T4 surfaces these types so dashboard
+ * callers get compile-time safety + zod runtime validation (paired
+ * schemas in ``schemas.ts``).
+ *
+ * Three-phase backend contract:
+ *   1. Pre-validate (only when enabled=true): resolve the wake-word
+ *      ONNX before persist. Returns 422 + remediation on NONE.
+ *   2. Persist ``wake_word_enabled`` to ``mind.yaml`` atomically.
+ *   3. Hot-apply on the live pipeline — best-effort. When the voice
+ *      subsystem isn't running, ``applied_immediately=false`` and
+ *      ``hot_apply_detail`` carries the cold-start reason.
+ *
+ * The next pipeline boot picks up the persisted YAML automatically.
+ */
+
+export interface WakeWordToggleRequest {
+  /** Whether this mind requires the wake word before voice input is processed. */
+  enabled: boolean;
+}
+
+export interface WakeWordToggleResponse {
+  mind_id: string;
+  enabled: boolean;
+  /**
+   * True when ``mind.yaml`` was successfully updated. Distinct from
+   * ``applied_immediately``: persist is durable; hot-apply is
+   * runtime-only.
+   */
+  persisted: boolean;
+  /**
+   * True when the live pipeline accepted the change (register or
+   * unregister succeeded). False when (a) voice subsystem isn't
+   * running yet — next boot picks up the YAML — or (b) single-mind
+   * mode with no router. See ``hot_apply_detail`` when false.
+   */
+  applied_immediately: boolean;
+  /**
+   * Free-form diagnostic when ``applied_immediately`` is false.
+   * Null on the happy path. Surface this directly to operators when
+   * non-null — the backend produces actionable remediation text
+   * (e.g. "voice subsystem not running — change persisted; will
+   * apply on next boot").
+   */
+  hot_apply_detail: string | null;
+}
+
 /* ── Voice setup wizard — Phase 7 / T7.21-T7.24 ──────────────
  *
  *   GET  /api/voice/wizard/devices
