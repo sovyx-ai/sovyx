@@ -691,6 +691,32 @@ class MetricsRegistry:
             "decompose the existing ``cognitive.latency`` full-loop "
             "histogram when investigating latency regressions.",
         )
+        # T5 of MISSION-wake-word-runtime-wireup-2026-05-03 — per-state
+        # dwell-time histogram. Records the ms a turn spends in each
+        # VoicePipelineState before transitioning out, attributed by the
+        # FROM state (the one being exited). Cardinality bound: 6 states
+        # (IDLE, WAKE_DETECTED, RECORDING, TRANSCRIBING, THINKING,
+        # SPEAKING) — closed StrEnum, no operator-controlled values.
+        # Recorded inside :meth:`PipelineStateMachine.record_transition`
+        # so every state mutation produces one sample. Self-loops are
+        # ALSO recorded (same FROM/TO state) — they reset the dwell
+        # clock and the canonical table allows IDLE/THINKING/SPEAKING
+        # self-loops, so dropping them would skew the percentile of
+        # those states upward. Use this to decompose the full-turn
+        # latency budget per state when investigating regressions
+        # (e.g. THINKING dwell ≫ p95 → cognitive loop is the suspect;
+        # TRANSCRIBING dwell ≫ p95 → STT is the suspect).
+        self.voice_pipeline_state_dwell = self._histogram(
+            "sovyx.voice.pipeline.state_dwell",
+            "Voice pipeline per-state dwell time in ms, attributed by "
+            "the state being exited (``IDLE`` | ``WAKE_DETECTED`` | "
+            "``RECORDING`` | ``TRANSCRIBING`` | ``THINKING`` | "
+            "``SPEAKING``). One sample per state mutation in "
+            "``PipelineStateMachine.record_transition``. Self-loops "
+            "produce a sample for the FROM state (= TO state). "
+            "Decomposes the per-turn latency budget for regression "
+            "attribution.",
+        )
         # Phase 7 / T7.6 — confidence histogram per CONFIRMED detection.
         # Distinct from the per-frame ``voice.wake_word.score`` log
         # event (which fires every 80 ms for every frame regardless

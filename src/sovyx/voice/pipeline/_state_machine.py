@@ -422,6 +422,14 @@ class PipelineStateMachine:
             valid=valid,
         )
         with self._lock:
+            # Compute dwell-in-prior-state BEFORE we overwrite
+            # ``entered_monotonic``. Mission T5: per-state dwell
+            # histogram attributed by the FROM state (the one we just
+            # exited). Self-loops record the prior dwell of the same
+            # state, which is correct — the canonical table allows
+            # IDLE/THINKING/SPEAKING self-loops and dropping their
+            # samples would bias the per-state percentile.
+            dwell_s = max(0.0, now - self._state.entered_monotonic)
             self._state.current = to_state
             self._state.entered_monotonic = now
             self._state.transition_count += 1
@@ -432,6 +440,21 @@ class PipelineStateMachine:
                 self._state.history = self._state.history[-self._history_capacity :]
             if not valid:
                 self._state.invalid_transition_count += 1
+
+        # Record outside the lock — metrics emit can be heavy and the
+        # lock only protects ``_state``. ``get_metrics`` returns a
+        # cached registry; the histogram lookup is a getattr. Defensive
+        # ``getattr(...)`` matches the pattern at
+        # ``_orchestrator.py:1515-1519`` so a metrics-init race during
+        # boot can't take down state recording.
+        from sovyx.observability.metrics import get_metrics  # noqa: PLC0415
+
+        histogram = getattr(get_metrics(), "voice_pipeline_state_dwell", None)
+        if histogram is not None:
+            histogram.record(
+                dwell_s * 1000.0,
+                attributes={"state": from_state.name},
+            )
 
         if not valid:
             allowed = _CANONICAL_TRANSITIONS[from_state]
