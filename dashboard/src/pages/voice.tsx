@@ -30,6 +30,7 @@ import { api, isAbortError } from "@/lib/api";
 import { VoiceSetupModal } from "@/components/setup-wizard";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { VoiceQualityPanel } from "@/components/voice/VoiceQualityPanel";
+import { VoiceSetupWizard } from "@/components/setup-wizard/VoiceSetupWizard";
 import { TrainingJobsPanel } from "@/components/training/TrainingJobsPanel";
 import { TrainWakeWordModal } from "@/components/training/TrainWakeWordModal";
 import { useDashboardStore } from "@/stores/dashboard";
@@ -430,6 +431,8 @@ export default function VoicePage() {
   // T1.5 of v0.30.0 mission: training-panel visibility flag — needed
   // hoisted to component-top because hooks can't be called inside JSX.
   const hasActiveTraining = useDashboardStore((s) => s.currentTrainingJob !== null);
+  // T2.1 of v0.30.0 mission: setup wizard collapsible state.
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -742,6 +745,34 @@ export default function VoicePage() {
           {!hasActiveTraining && (
             <div className="py-2 text-sm text-[var(--svx-color-text-tertiary)]">
               {t("training.panel.empty")}
+            </div>
+          )}
+        </Section>
+
+        {/* Voice Setup Wizard — Mission v0.30.0 §T2 (Phase 7 / T7.25-T7.30).
+            Collapsible: operator clicks "Open Setup Wizard" → 5-step
+            mic selection + test recording + APO diagnostic flow. */}
+        <Section
+          icon={<MicIcon className="size-4" />}
+          title={t("wizard.title")}
+        >
+          {wizardOpen ? (
+            <VoiceSetupWizard
+              onComplete={() => setWizardOpen(false)}
+              onCancel={() => setWizardOpen(false)}
+            />
+          ) : (
+            <div className="flex items-center justify-between py-1.5">
+              <span className="text-sm text-[var(--svx-color-text-secondary)]">
+                {t("wizard.openHint")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setWizardOpen(true)}
+                className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-accent)] bg-[var(--svx-color-accent-soft)] px-3 py-1 text-xs font-medium text-[var(--svx-color-accent)] hover:bg-[var(--svx-color-accent)] hover:text-white"
+              >
+                {t("wizard.openButton")}
+              </button>
             </div>
           )}
         </Section>

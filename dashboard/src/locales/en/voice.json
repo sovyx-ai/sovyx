@@ -78,6 +78,57 @@
     "dismiss": "Dismiss",
     "phoneticMatch": "Matched as {{file}} (distance: {{distance}})"
   },
+  "wizard": {
+    "title": "Voice Setup Wizard",
+    "openHint": "Walk through 4 steps to pick + test your microphone.",
+    "openButton": "Open Setup Wizard",
+    "cancel": "Cancel",
+    "steps": {
+      "devices": "Step 1 of 4 — Select microphone",
+      "record": "Step 2 of 4 — Test recording",
+      "results": "Step 3 of 4 — Review results",
+      "save": "Step 4 of 4 — Save selection",
+      "done": "Done"
+    },
+    "devices": {
+      "loading": "Detecting microphones…",
+      "empty": "No input devices found. Plug in a microphone and try again.",
+      "intro": "Pick the microphone you want Sovyx to use for voice input."
+    },
+    "record": {
+      "intro": "We'll record 3 seconds of audio to check signal quality and warn about issues.",
+      "selected": "Selected device:",
+      "start": "Start 3-second recording",
+      "recording": "Recording…"
+    },
+    "results": {
+      "rms": "RMS",
+      "peak": "Peak",
+      "snr": "SNR",
+      "clipping": "Clipping",
+      "yes": "Yes",
+      "no": "No",
+      "recommendations": "Capture-APO recommendations",
+      "retry": "Try again",
+      "advance": "Save selection",
+      "diagnosis": {
+        "ok": "Recording looks good.",
+        "low_signal": "Signal too low — speak louder or move closer to the mic.",
+        "clipping": "Signal is clipping — reduce input gain.",
+        "no_audio": "No audio captured — verify the device is unmuted.",
+        "noisy": "High background noise detected — consider quieter environment.",
+        "device_error": "Recording failed at the device — check OS-level permissions."
+      }
+    },
+    "save": {
+      "intro": "Save this microphone as the Sovyx voice input device.",
+      "button": "Save"
+    },
+    "done": {
+      "message": "All set! Your microphone is configured.",
+      "close": "Close"
+    }
+  },
   "training": {
     "button": "Train this wake word",
     "modal": {
