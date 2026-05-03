@@ -51,6 +51,7 @@ Backward-compat
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import MindConfigError, VoiceError
@@ -67,6 +68,53 @@ from sovyx.voice._wake_word_router import WakeWordRouter
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+@dataclass(frozen=True, slots=True)
+class WakeWordPerMindStatusEntry:
+    """One mind's wake-word health snapshot for the status endpoint.
+
+    Mission ``MISSION-wake-word-ui-2026-05-03.md`` §T1 (D1+D2).
+    Computed by :func:`query_per_mind_wake_word_status` via re-run
+    resolution + cross-reference with the live router; idempotent
+    + stateless (no global cache).
+
+    Field semantics:
+
+    * ``mind_id`` — filesystem mind directory name.
+    * ``wake_word`` — the mind's effective wake word (``MindConfig.effective_wake_word``).
+    * ``voice_language`` — BCP-47 code threaded into the resolver's
+      :class:`PhoneticMatcher` for diacritic / phonetic matching.
+    * ``wake_word_enabled`` — what ``mind.yaml`` says (operator's intent).
+    * ``runtime_registered`` — whether a detector for this mind is
+      currently in the live :class:`WakeWordRouter`. Always ``False``
+      when the router is None (no minds opted in OR factory boot
+      caught a stale-config VoiceError per v0.28.3 T2).
+    * ``model_path`` — resolved ``.onnx`` path on EXACT/PHONETIC
+      strategy; ``None`` on NONE strategy or when ``wake_word_enabled``
+      is False (resolution skipped to save cost).
+    * ``resolution_strategy`` — string-valued discriminated union:
+      ``"exact"`` | ``"phonetic"`` | ``"none"``. ``None`` when
+      ``wake_word_enabled`` is False (resolution skipped).
+    * ``last_error`` — operator-facing remediation message when
+      ``resolution_strategy == "none"``; ``None`` when healthy or
+      when resolution was skipped (disabled mind).
+
+    The dataclass is frozen + slotted to match the existing
+    :class:`WakeWordResolution` / :class:`WakeWordRouterEvent`
+    ergonomics. Wire-format conversion to JSON happens at the
+    pydantic boundary in the dashboard route.
+    """
+
+    mind_id: str
+    wake_word: str
+    voice_language: str
+    wake_word_enabled: bool
+    runtime_registered: bool
+    model_path: Path | None
+    resolution_strategy: str | None
+    last_error: str | None
+
 
 logger = get_logger(__name__)
 
@@ -272,27 +320,29 @@ def resolve_wake_word_model_for_mind(
     return resolution.model_path
 
 
-def _enumerate_enabled_minds(data_dir: Path) -> list[tuple[str, str, str]]:
-    """Yield ``(mind_id, effective_wake_word, voice_language)`` per enabled mind.
+def _enumerate_all_minds(data_dir: Path) -> list[tuple[str, str, str, bool]]:
+    """Yield ``(mind_id, effective_wake_word, voice_language, wake_word_enabled)``
+    per mind on disk (regardless of opt-in).
+
+    The dashboard's per-mind status surface (T1 of
+    ``MISSION-wake-word-ui-2026-05-03.md``) needs ALL minds — disabled
+    minds are still rendered so operators can toggle them ON without
+    leaving the page. The boot-time builder
+    (:func:`build_wake_word_router_for_enabled_minds`) only consumes
+    the enabled subset via :func:`_enumerate_enabled_minds` (a thin
+    filter wrapper around this function).
 
     Filesystem enumeration (NOT MindManager.get_active_minds()): R1
     of the wake-word-runtime-wireup mission established that
     MindManager is a thin registration sink and
     ``get_active_minds()`` returns only currently-loaded minds, which
-    is not the same set as "minds-with-wake-word-enabled-on-disk".
-
-    The ``voice_language`` field is added by T3 of the
-    pre-wake-word-ui-hardening mission so the per-mind PhoneticMatcher
-    can speak the right espeak-ng language code (phonemic similarity
-    is language-specific — "Lúcia" phonemes differ in pt-BR vs en-US).
-    Default ``"en"`` mirrors :class:`MindConfig.voice_language`'s
-    default.
+    is not the same set as "minds-on-disk".
 
     Best-effort: a malformed ``mind.yaml`` is logged and skipped
     (`MindConfigError`), so one bad mind does not block the daemon
     from starting voice for the rest.
     """
-    enabled: list[tuple[str, str, str]] = []
+    minds: list[tuple[str, str, str, bool]] = []
     for entry in sorted(data_dir.iterdir()):
         if not entry.is_dir():
             continue
@@ -310,11 +360,158 @@ def _enumerate_enabled_minds(data_dir: Path) -> list[tuple[str, str, str]]:
                 },
             )
             continue
-        if not config.wake_word_enabled:
-            continue
         # voice_language defaults to "en" inside MindConfig (validated
         # by pydantic). Reading via attribute access is safe — the
         # field is required-with-default.
         language = config.voice_language or "en"
-        enabled.append((entry.name, config.effective_wake_word, language))
-    return enabled
+        minds.append(
+            (
+                entry.name,
+                config.effective_wake_word,
+                language,
+                bool(config.wake_word_enabled),
+            )
+        )
+    return minds
+
+
+def _enumerate_enabled_minds(data_dir: Path) -> list[tuple[str, str, str]]:
+    """Yield ``(mind_id, effective_wake_word, voice_language)`` per enabled mind.
+
+    Thin wrapper around :func:`_enumerate_all_minds` — filters to
+    ``wake_word_enabled=True`` minds and drops the trailing flag
+    so the existing boot-time call sites
+    (:func:`build_wake_word_router_for_enabled_minds`) keep their
+    3-tuple return contract from v0.28.3 T3.
+    """
+    return [
+        (mind_id, wake_word, language)
+        for mind_id, wake_word, language, enabled in _enumerate_all_minds(data_dir)
+        if enabled
+    ]
+
+
+def query_per_mind_wake_word_status(
+    *,
+    data_dir: Path,
+    router: WakeWordRouter | None,
+    phonetic_max_distance: int = 3,
+    phonetic_fallback_enabled: bool = True,
+) -> list[WakeWordPerMindStatusEntry]:
+    """Compute per-mind wake-word health for the dashboard status endpoint.
+
+    Mission ``MISSION-wake-word-ui-2026-05-03.md`` §T1 (D1).
+
+    Idempotent + stateless: enumerates filesystem, re-runs the
+    resolver per ``wake_word_enabled=True`` mind (~5 ms each), and
+    cross-references with the live :class:`WakeWordRouter`. No global
+    state, no cache, no boot-time eager fetch. The resolver is the
+    SAME code path the boot helper uses, so dashboard-time and
+    boot-time outcomes are bit-exact for the same inputs — operators
+    get "if it's broken on the dashboard, it'll be broken at boot"
+    parity (the v0.28.3 T2 silent-degrade observability gap closed).
+
+    Resolution is SKIPPED for disabled minds (``wake_word_enabled=False``)
+    — they appear in the result list with ``model_path=None`` and
+    ``resolution_strategy=None`` so the dashboard can render them as
+    "OFF, click to enable". This saves the ~5 ms resolver cost per
+    disabled mind.
+
+    Args:
+        data_dir: Sovyx data directory.
+        router: Live :class:`WakeWordRouter` from
+            :class:`VoicePipeline`. ``None`` when the voice subsystem
+            isn't running OR when the v0.28.3 T2 boot tolerance
+            caught a stale-config VoiceError. Either way, every entry
+            has ``runtime_registered=False``.
+        phonetic_max_distance: Mirrors the same boot-time parameter.
+        phonetic_fallback_enabled: Mirrors the same boot-time
+            parameter (kill-switch via
+            ``EngineConfig.tuning.voice.wake_word_phonetic_fallback_enabled``).
+
+    Returns:
+        One :class:`WakeWordPerMindStatusEntry` per mind on disk
+        (enabled + disabled). Empty list when ``data_dir`` is missing
+        OR has no mind directories.
+    """
+    if not data_dir.is_dir():
+        return []
+
+    pretrained_dir = data_dir / "wake_word_models" / "pretrained"
+    pool_registry = PretrainedModelRegistry(models_dir=pretrained_dir)
+    registered_minds = set(router.registered_minds) if router is not None else set()
+
+    entries: list[WakeWordPerMindStatusEntry] = []
+    for mind_id, wake_word, language, wake_word_enabled in _enumerate_all_minds(data_dir):
+        # Skip resolution for disabled minds — they render as OFF cards
+        # in the dashboard, no resolution needed (saves ~5ms each).
+        if not wake_word_enabled:
+            entries.append(
+                WakeWordPerMindStatusEntry(
+                    mind_id=mind_id,
+                    wake_word=wake_word,
+                    voice_language=language,
+                    wake_word_enabled=False,
+                    runtime_registered=False,
+                    model_path=None,
+                    resolution_strategy=None,
+                    last_error=None,
+                )
+            )
+            continue
+
+        # Enabled mind — re-run resolution to get current strategy.
+        # Per-mind matcher (espeak-ng phonemes are language-specific);
+        # mirrors the boot-time builder's per-mind matcher pattern.
+        matcher = (
+            PhoneticMatcher(language=language, enabled=None) if phonetic_fallback_enabled else None
+        )
+        resolver = WakeWordModelResolver(
+            registry=pool_registry,
+            phonetic_matcher=matcher,
+            max_phoneme_distance=phonetic_max_distance,
+        )
+        resolution = resolver.resolve(wake_word)
+
+        if resolution.strategy is WakeWordResolutionStrategy.NONE:
+            # Dashboard renders ``last_error`` directly to operators.
+            # Mirror the boot helper's full remediation text so the
+            # error message is identical between surfaces.
+            last_error = (
+                f"No ONNX model resolved for wake word '{wake_word}' in "
+                f"{pretrained_dir}. Remediation: train via `sovyx voice "
+                f"train-wake-word --mind {mind_id}` (Phase 8 / T8.13), "
+                f"drop <wake_word>.onnx into the pretrained pool, or set "
+                f"wake_word_enabled: false in mind.yaml. STT-fallback for "
+                f"this case is deferred (mission "
+                f"`MISSION-wake-word-stt-fallback-2026-05-XX`)."
+            )
+            entries.append(
+                WakeWordPerMindStatusEntry(
+                    mind_id=mind_id,
+                    wake_word=wake_word,
+                    voice_language=language,
+                    wake_word_enabled=True,
+                    runtime_registered=mind_id in registered_minds,
+                    model_path=None,
+                    resolution_strategy="none",
+                    last_error=last_error,
+                )
+            )
+            continue
+
+        # EXACT or PHONETIC — model_path is non-None.
+        entries.append(
+            WakeWordPerMindStatusEntry(
+                mind_id=mind_id,
+                wake_word=wake_word,
+                voice_language=language,
+                wake_word_enabled=True,
+                runtime_registered=mind_id in registered_minds,
+                model_path=resolution.model_path,
+                resolution_strategy=resolution.strategy.value,
+                last_error=None,
+            )
+        )
+
+    return entries

@@ -2163,3 +2163,156 @@ async def disable_voice(request: Request) -> JSONResponse:
         {"ok": False, "error": "No mind.yaml path available"},
         status_code=503,
     )
+
+
+# ── Per-mind wake-word status — MISSION-wake-word-ui-2026-05-03 §T1 ──
+
+
+class WakeWordPerMindStatusItem(BaseModel):
+    """One mind's wake-word health snapshot.
+
+    Mission ``MISSION-wake-word-ui-2026-05-03.md`` §T1 (D2). Mirrors
+    :class:`sovyx.voice.factory._wake_word_wire_up.WakeWordPerMindStatusEntry`
+    1:1; rendered by the dashboard's per-mind wake-word section
+    (``dashboard/src/pages/voice.tsx``).
+    """
+
+    mind_id: str
+    wake_word: str
+    voice_language: str
+    wake_word_enabled: bool = Field(
+        description=(
+            "What ``mind.yaml`` says (operator's persisted intent). "
+            "Distinct from ``runtime_registered`` — operators can be "
+            "in a 'configured but not registered' state when the "
+            "v0.28.3 T2 boot tolerance caught a stale-config error."
+        ),
+    )
+    runtime_registered: bool = Field(
+        description=(
+            "Whether a detector for this mind is currently in the "
+            "live ``WakeWordRouter``. Always ``False`` when the "
+            "voice subsystem is not running OR when the v0.28.3 T2 "
+            "boot tolerance degraded to ``router=None``."
+        ),
+    )
+    model_path: str | None = Field(
+        default=None,
+        description=(
+            "Resolved ``.onnx`` path on EXACT/PHONETIC strategy. "
+            "``None`` on NONE strategy or when ``wake_word_enabled`` "
+            "is False (resolution skipped to save ~5ms cost)."
+        ),
+    )
+    resolution_strategy: Literal["exact", "phonetic", "none"] | None = Field(
+        default=None,
+        description=(
+            "Discriminated union from "
+            ":class:`WakeWordResolutionStrategy`. ``None`` when "
+            "``wake_word_enabled`` is False."
+        ),
+    )
+    last_error: str | None = Field(
+        default=None,
+        description=(
+            "Operator-facing remediation text when "
+            "``resolution_strategy == 'none'``. ``None`` on the "
+            "happy path. Surfaced directly to the dashboard "
+            "error-details disclosure."
+        ),
+    )
+
+
+class WakeWordPerMindStatusResponse(BaseModel):
+    """Response for ``GET /api/voice/wake-word/status``."""
+
+    minds: list[WakeWordPerMindStatusItem] = Field(
+        description=(
+            "One entry per mind on disk (enabled + disabled). Empty "
+            "list when no mind directories exist OR the daemon is "
+            "still booting (registry not ready)."
+        ),
+    )
+
+
+@router.get("/wake-word/status", response_model=WakeWordPerMindStatusResponse)
+async def get_wake_word_per_mind_status(
+    request: Request,
+) -> WakeWordPerMindStatusResponse:
+    """Return per-mind wake-word health for the dashboard.
+
+    Mission ``MISSION-wake-word-ui-2026-05-03.md`` §T1 (D1+D2).
+
+    Idempotent + stateless: the endpoint runs the wake-word resolver
+    on demand for each ``wake_word_enabled=True`` mind and
+    cross-references with the live :class:`WakeWordRouter`. Disabled
+    minds are still returned (with ``model_path=None``,
+    ``resolution_strategy=None``) so the dashboard can render them as
+    "OFF, click to enable" cards. The resolver is the SAME code path
+    the boot helper uses, so dashboard-time and boot-time outcomes
+    are bit-exact for the same inputs.
+
+    Response shape: ``{"minds": [...]}``. Empty list when (a) the
+    daemon is still booting (registry / engine_config not ready),
+    (b) no mind directories exist on disk.
+
+    Closes the v0.28.3 silent-degradation observability gap: an
+    operator who persisted ``wake_word_enabled: true`` for a mind
+    whose ONNX is missing now sees ``runtime_registered=false``
+    + ``last_error=<remediation>`` even when the v0.28.3 T2 factory
+    boot tolerance degraded to ``router=None``.
+
+    Auth: existing ``verify_token`` dependency on the router prefix.
+    """
+    from sovyx.voice.factory._wake_word_wire_up import (  # noqa: PLC0415
+        query_per_mind_wake_word_status,
+    )
+    from sovyx.voice.pipeline._orchestrator import (  # noqa: PLC0415
+        VoicePipeline,
+    )
+
+    engine_config = _resolve_engine_config(request)
+    if engine_config is None:
+        # Daemon still booting (engine_config not on app.state yet) —
+        # return empty list with 200 instead of 503 so the dashboard
+        # can render the "no minds yet" state cleanly.
+        return WakeWordPerMindStatusResponse(minds=[])
+
+    data_dir = engine_config.database.data_dir
+
+    # Resolve the live router via the registry. When the voice
+    # subsystem isn't running OR the T2 boot tolerance degraded to
+    # router=None, the helper still returns per-mind entries; just
+    # all with ``runtime_registered=False``.
+    router_obj: object | None = None
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None and registry.is_registered(VoicePipeline):
+        try:
+            pipeline = await registry.resolve(VoicePipeline)
+            router_obj = pipeline._wake_word_router  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            logger.debug("voice.wake_word.status.pipeline_resolve_failed")
+
+    voice_tuning = engine_config.tuning.voice
+    entries = await asyncio.to_thread(
+        query_per_mind_wake_word_status,
+        data_dir=data_dir,
+        router=router_obj,  # type: ignore[arg-type]
+        phonetic_max_distance=voice_tuning.wake_word_phonetic_max_distance,
+        phonetic_fallback_enabled=voice_tuning.wake_word_phonetic_fallback_enabled,
+    )
+
+    items = [
+        WakeWordPerMindStatusItem(
+            mind_id=entry.mind_id,
+            wake_word=entry.wake_word,
+            voice_language=entry.voice_language,
+            wake_word_enabled=entry.wake_word_enabled,
+            runtime_registered=entry.runtime_registered,
+            model_path=str(entry.model_path) if entry.model_path is not None else None,
+            resolution_strategy=entry.resolution_strategy,  # type: ignore[arg-type]
+            last_error=entry.last_error,
+        )
+        for entry in entries
+    ]
+    return WakeWordPerMindStatusResponse(minds=items)
