@@ -176,6 +176,61 @@ def build_wake_word_router_for_enabled_minds(
     return router
 
 
+def resolve_wake_word_model_for_mind(
+    *,
+    data_dir: Path,
+    wake_word: str,
+    phonetic_max_distance: int = 3,
+) -> Path:
+    """Resolve a single mind's wake word to a pretrained ONNX path.
+
+    Mission ``MISSION-wake-word-runtime-wireup-2026-05-03.md`` §T3 —
+    the dashboard's wake-word toggle endpoint hot-applies the
+    "enabled=True" case by resolving the operator's wake word against
+    the pretrained pool and calling
+    :meth:`VoicePipeline.register_mind_wake_word`. This helper
+    encapsulates the resolution so the endpoint mirrors T1's
+    refuse-to-start contract: NONE strategy raises with a clear
+    remediation message instead of silently failing.
+
+    Args:
+        data_dir: Sovyx data directory; pretrained pool is
+            ``<data_dir>/wake_word_models/pretrained/``.
+        wake_word: The mind's effective wake word (typically
+            ``MindConfig.effective_wake_word``).
+        phonetic_max_distance: Maximum Levenshtein distance for
+            phonetic matching.
+
+    Returns:
+        Resolved ``.onnx`` path on the EXACT or PHONETIC strategy.
+
+    Raises:
+        VoiceError: When the resolver returns NONE — no model in the
+            pool matches this wake word. Message mirrors the
+            multi-mind builder's refuse-to-start text so operators get
+            consistent diagnostics from both surfaces.
+    """
+    pretrained_dir = data_dir / "wake_word_models" / "pretrained"
+    registry = PretrainedModelRegistry(models_dir=pretrained_dir)
+    resolver = WakeWordModelResolver(
+        registry=registry,
+        phonetic_matcher=None,
+        max_phoneme_distance=phonetic_max_distance,
+    )
+    resolution = resolver.resolve(wake_word)
+    if resolution.strategy is WakeWordResolutionStrategy.NONE or resolution.model_path is None:
+        msg = (
+            f"No ONNX model resolved for wake word '{wake_word}' in "
+            f"{pretrained_dir}. Remediation: train via `sovyx voice "
+            f"train-wake-word` (Phase 8 / T8.13), or drop "
+            f"<wake_word>.onnx into the pretrained pool. STT-fallback "
+            f"is deferred to v0.28.3 "
+            f"(mission `MISSION-wake-word-stt-fallback-2026-05-XX`)."
+        )
+        raise VoiceError(msg)
+    return resolution.model_path
+
+
 def _enumerate_enabled_minds(data_dir: Path) -> list[tuple[str, str]]:
     """Yield ``(mind_id, effective_wake_word)`` for every enabled mind on disk.
 

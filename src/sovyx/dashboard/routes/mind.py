@@ -414,3 +414,224 @@ async def post_mind_retention_prune(
         total_rows_purged=report.total_rows_purged,
         dry_run=report.dry_run,
     )
+
+
+# ── Wake-word toggle endpoint — T3 (Mission wake-word-runtime-wireup) ─
+
+
+class WakeWordToggleRequest(BaseModel):
+    """Body for ``POST /api/mind/{mind_id}/wake-word/toggle``."""
+
+    enabled: bool = Field(
+        ...,
+        description=(
+            "Whether this mind should require its wake word before "
+            "voice input is processed. Persists to "
+            "``<data_dir>/<mind_id>/mind.yaml`` and hot-applies on "
+            "the running voice pipeline (no daemon restart needed)."
+        ),
+    )
+
+
+class WakeWordToggleResponse(BaseModel):
+    """Response for ``POST /api/mind/{mind_id}/wake-word/toggle``."""
+
+    mind_id: str
+    enabled: bool
+    persisted: bool = Field(
+        description=(
+            "True when the mind.yaml write succeeded. False when the "
+            "yaml write failed (the response still reports the desired "
+            "value for UX consistency, but the operator must retry to "
+            "persist)."
+        ),
+    )
+    applied_immediately: bool = Field(
+        description=(
+            "True when the live voice pipeline accepted the change "
+            "(register or unregister succeeded). False when (a) voice "
+            "subsystem isn't running yet — the next pipeline boot will "
+            "pick up the persisted YAML automatically — or (b) the "
+            "pipeline is in single-mind mode (no router). When False, "
+            "see ``hot_apply_detail`` for the reason."
+        ),
+    )
+    hot_apply_detail: str | None = Field(
+        default=None,
+        description=(
+            "Free-form diagnostic when ``applied_immediately`` is "
+            "False. Empty / None on the happy path."
+        ),
+    )
+
+
+@router.post(
+    "/{mind_id}/wake-word/toggle",
+    response_model=WakeWordToggleResponse,
+)
+async def post_mind_wake_word_toggle(
+    request: Request,
+    mind_id: str,
+    body: WakeWordToggleRequest,
+) -> WakeWordToggleResponse:
+    """Toggle ``MindConfig.wake_word_enabled`` for a single mind.
+
+    Mission ``MISSION-wake-word-runtime-wireup-2026-05-03.md`` §T3.
+
+    Two-phase write:
+
+    1. **Persist** ``wake_word_enabled`` to
+       ``<data_dir>/<mind_id>/mind.yaml`` via
+       :class:`sovyx.engine.config_editor.ConfigEditor.set_scalar`
+       (atomic + per-path locked, comment-preserving).
+    2. **Hot-apply** to the running pipeline:
+       * ``enabled=True``: resolve the mind's wake word via
+         :func:`resolve_wake_word_model_for_mind`, then call
+         :meth:`VoicePipeline.register_mind_wake_word`.
+       * ``enabled=False``: call
+         :meth:`VoicePipeline.unregister_mind_wake_word`.
+
+    The persist step always runs; the hot-apply step is best-effort.
+    When the voice subsystem isn't registered yet (cold-start path)
+    or runs in single-mind mode, ``applied_immediately=False`` and
+    ``hot_apply_detail`` carries the reason. The next pipeline boot
+    picks up the persisted YAML automatically via T1's
+    :func:`build_wake_word_router_for_enabled_minds`.
+
+    Args:
+        mind_id: Target mind (path parameter).
+        body: ``{"enabled": bool}``.
+
+    Returns:
+        :class:`WakeWordToggleResponse` with the resulting state plus
+        diagnostic flags.
+
+    Raises:
+        HTTPException 400: ``mind_id`` is empty / whitespace.
+        HTTPException 404: ``<data_dir>/<mind_id>/mind.yaml`` doesn't
+            exist (the operator named a mind that hasn't been
+            onboarded). 404 mirrors ``/forget`` and ``/retention/prune``.
+        HTTPException 500: ``ConfigEditor.set_scalar`` raised — the
+            YAML write failed and the operator must retry.
+    """
+    if not mind_id.strip():
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail="mind_id must be a non-empty string",
+        )
+
+    data_dir = _resolve_data_dir(request)
+    mind_yaml = data_dir / mind_id / "mind.yaml"
+    if not mind_yaml.is_file():
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail=f"mind not found: {mind_id} (no mind.yaml at {mind_yaml})",
+        )
+
+    # ── 1. Persist ───────────────────────────────────────────────────
+    from sovyx.engine.config_editor import ConfigEditor  # noqa: PLC0415
+
+    persisted = False
+    try:
+        editor = ConfigEditor()
+        await editor.set_scalar(mind_yaml, "wake_word_enabled", body.enabled)
+        persisted = True
+    except Exception as exc:
+        logger.exception(
+            "mind.wake_word.persist_failed",
+            mind_id=mind_id,
+            mind_yaml=str(mind_yaml),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to persist wake_word_enabled: {exc}",
+        ) from exc
+
+    # ── 2. Hot-apply (best-effort) ───────────────────────────────────
+    applied_immediately, detail = await _hot_apply_wake_word_toggle(
+        request=request,
+        mind_id=mind_id,
+        mind_yaml=mind_yaml,
+        enabled=body.enabled,
+        data_dir=data_dir,
+    )
+
+    logger.info(
+        "mind.wake_word.toggled",
+        mind_id=mind_id,
+        **{
+            "mind.enabled": body.enabled,
+            "mind.persisted": persisted,
+            "mind.applied_immediately": applied_immediately,
+        },
+    )
+    return WakeWordToggleResponse(
+        mind_id=mind_id,
+        enabled=body.enabled,
+        persisted=persisted,
+        applied_immediately=applied_immediately,
+        hot_apply_detail=detail,
+    )
+
+
+async def _hot_apply_wake_word_toggle(
+    *,
+    request: Request,
+    mind_id: str,
+    mind_yaml: Path,
+    enabled: bool,
+    data_dir: Path,
+) -> tuple[bool, str | None]:
+    """Hot-apply the toggle to the running pipeline (best-effort).
+
+    Returns ``(applied_immediately, detail)``. ``detail`` is None on
+    success or carries the diagnostic when applied_immediately=False.
+    """
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return False, "engine registry not available — daemon still booting"
+
+    from sovyx.engine.errors import VoiceError  # noqa: PLC0415
+    from sovyx.engine.types import MindId  # noqa: PLC0415
+    from sovyx.voice.pipeline._orchestrator import VoicePipeline  # noqa: PLC0415
+
+    if not registry.is_registered(VoicePipeline):
+        return (
+            False,
+            "voice subsystem not running — change persisted; will apply on next boot",
+        )
+
+    pipeline = await registry.resolve(VoicePipeline)
+    mid = MindId(mind_id)
+
+    if not enabled:
+        try:
+            pipeline.unregister_mind_wake_word(mid)
+        except VoiceError as exc:
+            return False, str(exc)
+        return True, None
+
+    # enabled=True — resolve + register.
+    from sovyx.mind.config import load_mind_config  # noqa: PLC0415
+    from sovyx.voice.factory._wake_word_wire_up import (  # noqa: PLC0415
+        resolve_wake_word_model_for_mind,
+    )
+
+    try:
+        mind_config = load_mind_config(mind_yaml)
+    except Exception as exc:  # noqa: BLE001 — best-effort hot-apply
+        return False, f"mind.yaml load failed after persist: {exc}"
+
+    try:
+        model_path = resolve_wake_word_model_for_mind(
+            data_dir=data_dir,
+            wake_word=mind_config.effective_wake_word,
+        )
+    except VoiceError as exc:
+        return False, str(exc)
+
+    try:
+        pipeline.register_mind_wake_word(mid, model_path=model_path)
+    except VoiceError as exc:
+        return False, str(exc)
+    return True, None
