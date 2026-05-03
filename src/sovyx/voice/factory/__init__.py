@@ -692,7 +692,36 @@ async def create_voice_pipeline(
     )
 
     # ── 4. WakeWord (optional — skip if model absent) ────────
+    # The single-detector ``wake`` stub stays the legacy fallback for
+    # single-mind / no-router pipelines. The multi-mind
+    # :class:`WakeWordRouter` is built per filesystem-enabled minds
+    # below — when present, the orchestrator dispatches via the router
+    # and the stub is bypassed (see ``_orchestrator.py:1423``).
     wake = await asyncio.to_thread(_create_wake_word_stub)
+
+    # Mission `MISSION-wake-word-runtime-wireup-2026-05-03.md` §T1 —
+    # build a per-mind WakeWordRouter for every mind on disk that
+    # opted into ``wake_word_enabled=True``. ``None`` when zero minds
+    # opted in (backward-compat: bit-exact match v0.28.1).
+    from sovyx.voice.factory._wake_word_wire_up import (  # noqa: PLC0415
+        build_wake_word_router_for_enabled_minds,
+    )
+
+    wake_word_router = None
+    if data_dir is not None:
+        # VoiceTuningConfig is built below at "── 5. Resolve device" —
+        # we instantiate a transient one here only to read the phonetic
+        # threshold without re-ordering the existing factory steps. The
+        # value is identical to the one threaded through the rest of
+        # the factory (both come from EngineConfig.tuning.voice).
+        from sovyx.engine.config import VoiceTuningConfig  # noqa: PLC0415
+
+        _tuning_for_router = VoiceTuningConfig()
+        wake_word_router = await asyncio.to_thread(
+            build_wake_word_router_for_enabled_minds,
+            data_dir=data_dir,
+            phonetic_max_distance=_tuning_for_router.wake_word_phonetic_max_distance,
+        )
 
     # ── 5. Resolve device + detect capture APOs BEFORE the pipeline ──
     # The detector result (``voice_clarity_active``) is threaded into
@@ -813,6 +842,7 @@ async def create_voice_pipeline(
         config=config,
         vad=vad,
         wake_word=wake,
+        wake_word_router=wake_word_router,
         stt=stt,
         tts=tts,
         event_bus=event_bus,
