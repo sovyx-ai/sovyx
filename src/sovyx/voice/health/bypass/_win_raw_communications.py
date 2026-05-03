@@ -126,13 +126,67 @@ def _is_enabled() -> bool:
 class WindowsRawCommunicationsBypass:
     """Tier 1 — RAW + Communications bypass via ``IAudioClient3``.
 
+    .. note::
+
+        **Status (v0.30.0): DEPRECATED-PENDING-PHASE-3-TELEMETRY.**
+
+        Per anti-pattern #21 + master mission §Phase-3 evidence,
+        Tier 3 (``voice_clarity_autofix=True``) is THE durable fix
+        for Voice Clarity APO; Tier 1 RAW is **performance optimization,
+        not functional correction.** v0.30.0 single-mind GA does NOT
+        require Tier 1 RAW because Tier 3's auto-bypass already
+        handles every operator-reported APO case in production
+        telemetry collected to date.
+
+        **What this means in practice:**
+
+        * The placeholder strategy class + ``bypass_tier1_raw_enabled``
+          tuning flag stay in the codebase as-is. Default-OFF.
+        * The bypass-tier coordinator never engages this strategy
+          (eligibility blocks first).
+        * No new code-side work is planned for v0.30.x.
+        * The IAudioClient3 ctypes shim referenced as "v0.25.0 wire-up"
+          in earlier docstrings is **not** going to land via that
+          version path; if a future operator decision re-activates
+          implementation, it will go to v0.32.0+ via a new mission.
+
+        **Re-activation triggers** (any one fires):
+
+        1. Phase 3 telemetry shows Tier 3 covers <99% of cases →
+           operator decides to ship Tier 1 (option a) for the
+           uncovered remainder.
+        2. ``voice.bypass.tier3_wasapi_exclusive.outcome{verdict=
+           engagement_denied_other_app_holds_exclusive}`` ≥ 5 % of
+           attempts in production telemetry (Tier 3 unavailable
+           when other apps hold exclusive — Tier 1 covers this
+           subset).
+        3. Operator explicitly asks for Tier 1.
+
+        **ABANDON trigger** (archive as SUPERSEDED-BY-TIER3-COVERAGE):
+        Phases 3-6 telemetry shows Tier 3 covers ≥99 % of cases →
+        archive ADR + delete placeholder strategy class + remove
+        the ``bypass_tier1_raw_enabled`` flag in a follow-up mini-
+        mission.
+
+        See:
+
+        * ``docs-internal/ADR-voice-bypass-tier-system.md`` (full ADR)
+        * ``docs-internal/ROADMAP-POST-V0.31.0.md::A5`` (deprecation
+          status + decision matrix)
+        * ``docs-internal/missions/MISSION-v0.30.0-single-mind-ga-2026-05-03.md``
+          §T3 (the deprecation decision audit)
+        * Mission ``MISSION-voice-windows-paranoid-2026-04-26.md`` §T27
+          (the original implementation deferral)
+
     See module docstring for the full design + v0.24.0 placeholder
-    contract + v0.25.0 wire-up plan.
+    contract + v0.25.0 wire-up plan (now superseded by the deprecation
+    above).
 
     Eligibility:
         * ``platform_key != "win32"`` → ``not_win32_platform``
         * ``bypass_tier1_raw_enabled`` is ``False`` (foundation
-          default) → ``raw_communications_bypass_disabled_by_tuning``
+          default + permanent post-v0.30.0 deprecation) →
+          ``raw_communications_bypass_disabled_by_tuning``
         * v0.25.0+ also gates on
           ``System.Devices.AudioDevice.RawProcessingSupported`` per
           MMDevice; v0.24.0 stub does not query the property
