@@ -30,6 +30,7 @@ import { api, isAbortError } from "@/lib/api";
 import { VoiceSetupModal } from "@/components/setup-wizard";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { VoiceQualityPanel } from "@/components/voice/VoiceQualityPanel";
+import { TrainingJobsPanel } from "@/components/training/TrainingJobsPanel";
 import { TrainWakeWordModal } from "@/components/training/TrainWakeWordModal";
 import { useDashboardStore } from "@/stores/dashboard";
 import type { WakeWordPerMindStatus } from "@/types/api";
@@ -426,6 +427,9 @@ export default function VoicePage() {
   const fetchPerMindStatus = useDashboardStore((s) => s.fetchPerMindStatus);
   const toggleMind = useDashboardStore((s) => s.toggleMind);
   const clearWakeWordError = useDashboardStore((s) => s.clearWakeWordError);
+  // T1.5 of v0.30.0 mission: training-panel visibility flag — needed
+  // hoisted to component-top because hooks can't be called inside JSX.
+  const hasActiveTraining = useDashboardStore((s) => s.currentTrainingJob !== null);
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -722,6 +726,22 @@ export default function VoicePage() {
                   t={t}
                 />
               ))}
+            </div>
+          )}
+        </Section>
+
+        {/* Training Jobs Panel — Mission v0.30.0 §T1.5. Renders only
+            when an active training subscription exists; pure observer
+            of currentTrainingJob from the slice. */}
+        <Section
+          icon={<MicIcon className="size-4" />}
+          title={t("training.panel.title")}
+        >
+          <TrainingJobsPanel />
+          {/* Empty-state placeholder — no active training */}
+          {!hasActiveTraining && (
+            <div className="py-2 text-sm text-[var(--svx-color-text-tertiary)]">
+              {t("training.panel.empty")}
             </div>
           )}
         </Section>

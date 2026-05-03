@@ -96,6 +96,26 @@
       "cancel": "Cancel",
       "startButton": "Start training",
       "starting": "Starting…"
+    },
+    "panel": {
+      "title": "Wake-word Training",
+      "empty": "No active training. Click \"Train this wake word\" on a mind to start.",
+      "progressLabel": "Training progress",
+      "samplesProgress": "{{generated}} / {{total}} samples",
+      "viewError": "View error details",
+      "outputLabel": "Output model:",
+      "completeHint": "The trained model is now in the pretrained pool. Restart the daemon (or wait for hot-reload) to use it.",
+      "cancel": "Cancel training",
+      "cancelling": "Cancelling…",
+      "dismiss": "Dismiss",
+      "status": {
+        "pending": "Pending",
+        "synthesizing": "Synthesising",
+        "training": "Training",
+        "complete": "Complete",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      }
     }
   },
   "wyoming": {
