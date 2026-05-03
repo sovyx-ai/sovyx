@@ -691,13 +691,30 @@ async def create_voice_pipeline(
         },
     )
 
+    # T4.2 of v0.30.0 mission — single VoiceTuningConfig() read.
+    # Pre-v0.30.0 the factory instantiated this twice (once at line 720
+    # for the wake-word router's phonetic config, once at the original
+    # "── 5. Resolve device" block). Each instantiation re-read env
+    # vars via pydantic-settings (~2-3 ms each). Hoisted here so the
+    # wake-word router block + the device-resolution block share one
+    # frozen instance.
+    from sovyx.engine.config import VoiceTuningConfig  # noqa: PLC0415
+
+    tuning = VoiceTuningConfig()
+
     # ── 4. WakeWord (optional — skip if model absent) ────────
     # The single-detector ``wake`` stub stays the legacy fallback for
     # single-mind / no-router pipelines. The multi-mind
     # :class:`WakeWordRouter` is built per filesystem-enabled minds
     # below — when present, the orchestrator dispatches via the router
     # and the stub is bypassed (see ``_orchestrator.py:1423``).
-    wake = await asyncio.to_thread(_create_wake_word_stub)
+    #
+    # T4.1 of v0.30.0 mission: drop the ``asyncio.to_thread`` wrapper.
+    # ``_create_wake_word_stub`` is a 4-line pure-Python class instantiation
+    # with zero IO + zero ONNX session + zero async work. The thread-
+    # spawn overhead (~0.5ms per pipeline boot) was theatrical; calling
+    # it directly preserves identical behaviour with cheaper boot.
+    wake = _create_wake_word_stub()
 
     # Mission `MISSION-wake-word-runtime-wireup-2026-05-03.md` §T1 —
     # build a per-mind WakeWordRouter for every mind on disk that
@@ -709,15 +726,17 @@ async def create_voice_pipeline(
 
     wake_word_router = None
     if data_dir is not None:
-        # VoiceTuningConfig is built below at "── 5. Resolve device" —
-        # we instantiate a transient one here only to read the phonetic
-        # threshold without re-ordering the existing factory steps. The
-        # value is identical to the one threaded through the rest of
-        # the factory (both come from EngineConfig.tuning.voice).
-        from sovyx.engine.config import VoiceTuningConfig  # noqa: PLC0415
         from sovyx.engine.errors import VoiceError  # noqa: PLC0415
 
-        _tuning_for_router = VoiceTuningConfig()
+        # T4.2 of v0.30.0 mission: consolidate VoiceTuningConfig() reads.
+        # Pre-v0.30.0 this block instantiated a transient
+        # ``_tuning_for_router`` then "── 5. Resolve device" instantiated
+        # ``tuning`` again — two pydantic-settings env-reads (~4-6 ms
+        # cumulative). v0.30.0 hoists ``tuning`` to one read at the top
+        # of step 5 (line ~785) and we reach back for the same instance.
+        # Shared state is safe because VoiceTuningConfig is frozen
+        # (BaseSettings with no mutation paths).
+        _tuning_for_router = tuning
         # T2 of MISSION-pre-wake-word-ui-hardening (2026-05-03):
         # defense-in-depth pair to T1's refuse-to-persist. T1 prevents
         # NEW bricked configs from being written via the dashboard
@@ -761,7 +780,8 @@ async def create_voice_pipeline(
     # the orchestrator so the deaf-warning path can decide whether to
     # auto-trigger WASAPI exclusive mode. Resolving the device first
     # lets the detector match by canonical device name.
-    from sovyx.engine.config import VoiceTuningConfig
+    # (VoiceTuningConfig already instantiated above at T4.2 hoist —
+    # ``tuning`` is in scope from there.)
     from sovyx.voice._capture_task import AudioCaptureTask
     from sovyx.voice.device_enum import resolve_device
     from sovyx.voice.pipeline._config import VoicePipelineConfig
@@ -780,8 +800,6 @@ async def create_voice_pipeline(
     if resolved is not None:
         effective_index = resolved.index
         effective_host_api = resolved.host_api_name
-
-    tuning = VoiceTuningConfig()
 
     # ── 5b. VCHL boot cascade (§5.11 migration). Populates the
     # ComboStore on first boot so later boots hit the fast path.
