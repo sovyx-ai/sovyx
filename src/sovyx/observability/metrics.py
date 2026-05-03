@@ -625,6 +625,52 @@ class MetricsRegistry:
             "50 ms (master mission §T8.10). Labels: mind_id (the "
             "matched mind).",
         )
+        # Plugin observability instruments (T05 of pre-wake-word-hardening
+        # mission, 2026-05-02). Before T05, plugins had ZERO structured
+        # metrics — only log events. The voice → cognitive loop → tool
+        # call (plugin) → re-invoke pathway is the primary path post
+        # wake-word-UI rollout; without these instruments, operators
+        # cannot diagnose "which plugin is slow / failing / being denied"
+        # via dashboards. Cardinality: ``plugin`` is bounded (7 official
+        # + operator-installed; <50 typical); ``tool`` per plugin ~6
+        # avg; ``outcome`` / ``layer`` / ``reason`` are closed-set
+        # StrEnum-like.
+        self.plugins_tool_executed = self._counter(
+            "sovyx.plugins.tool_executed",
+            "Plugin tool execution count, per plugin × tool × outcome. "
+            "Labels: plugin (plugin name), tool (tool name within "
+            "plugin), outcome (``ok`` | ``error``). The tool_executed / "
+            "(tool_executed[outcome=error]) ratio shows which plugins "
+            "are reliable vs flaky.",
+        )
+        self.plugins_tool_latency_ms = self._histogram(
+            "sovyx.plugins.tool_latency_ms",
+            "Per-tool execution latency in ms. Labels: plugin, tool. "
+            "Recorded for every successful AND failed execution (the "
+            "outcome label distinguishes them on the count side; "
+            "latency aggregates apply across both for a complete view "
+            "of operator-perceived plugin responsiveness).",
+        )
+        self.plugins_sandbox_denial = self._counter(
+            "sovyx.plugins.sandbox_denial",
+            "Per-layer sandbox denial count — security visibility. "
+            "Labels: plugin, layer (``ast`` | ``import`` | ``http`` | "
+            "``fs`` | ``permission``). The 5 layers correspond to the "
+            "5-layer sandbox: AST scan rejection at install time "
+            "(static), runtime import guard, sandboxed HTTP allowlist "
+            "rejection, sandboxed FS path containment rejection, and "
+            "runtime permission enforcer. Operators tracking security "
+            "posture key on this metric for tuning + audit.",
+        )
+        self.plugins_auto_disabled = self._counter(
+            "sovyx.plugins.auto_disabled",
+            "Plugin auto-disable events. Labels: plugin, reason "
+            "(``consecutive_failures`` | ``permission_denials_exceeded`` "
+            "| other). Mirrors the existing ``_event_emitter.auto_disabled`` "
+            "lifecycle event as a metric so the auto-disable signal "
+            "shows up in time-series dashboards alongside the other 3 "
+            "plugin metrics.",
+        )
         # Phase 7 / T7.6 — confidence histogram per CONFIRMED detection.
         # Distinct from the per-frame ``voice.wake_word.score`` log
         # event (which fires every 80 ms for every frame regardless

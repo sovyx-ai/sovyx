@@ -239,6 +239,13 @@ class PermissionEnforcer:
             permission=permission,
             denial_count=self._denied_count,
         )
+        # T05 of pre-wake-word-hardening mission (2026-05-02): emit
+        # sandbox_denial counter at layer=permission so the security
+        # team can see denial trends per plugin in dashboards. Lazy
+        # import to avoid bootstrap circularity.
+        from sovyx.plugins._metrics import record_sandbox_denial  # noqa: PLC0415
+
+        record_sandbox_denial(plugin=self._plugin, layer="permission")
 
         if self._denied_count >= self._max_denials:
             self._disabled = True
@@ -246,6 +253,15 @@ class PermissionEnforcer:
                 "plugin_auto_disabled",
                 plugin=self._plugin,
                 denial_count=self._denied_count,
+            )
+            # T05: also record auto_disabled with reason matching the
+            # enforcer-specific trigger (distinct from the manager-side
+            # ``consecutive_failures`` reason).
+            from sovyx.plugins._metrics import record_auto_disabled  # noqa: PLC0415
+
+            record_auto_disabled(
+                plugin=self._plugin,
+                reason="permission_denials_exceeded",
             )
             raise PluginAutoDisabledError(self._plugin, self._denied_count)
 

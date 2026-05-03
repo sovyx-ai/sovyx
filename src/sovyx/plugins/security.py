@@ -357,6 +357,14 @@ class ImportGuard(MetaPathFinder):
                 module=fullname,
                 count=self._denial_count,
             )
+            # T05 of pre-wake-word-hardening mission (2026-05-02):
+            # record import-layer sandbox denial as OTel counter.
+            # Lazy import to avoid bootstrap circularity.
+            from sovyx.plugins._metrics import (  # noqa: PLC0415
+                record_sandbox_denial,
+            )
+
+            record_sandbox_denial(plugin=self._plugin, layer="import")
             msg = (
                 f"Plugin '{self._plugin}' attempted to import blocked module "
                 f"'{fullname}'. Use PluginContext methods instead."

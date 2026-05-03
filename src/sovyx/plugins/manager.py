@@ -595,13 +595,32 @@ class PluginManager:
         duration_ms: int,
         error_msg: str,
     ) -> None:
-        """Emit PluginToolExecuted (delegate)."""
+        """Emit PluginToolExecuted (delegate) + record metrics (T05)."""
         self._emitter.tool_executed(
             plugin_name=plugin_name,
             tool_name=tool_name,
             success=success,
             duration_ms=duration_ms,
             error_msg=error_msg,
+        )
+        # T05 of pre-wake-word-hardening mission (2026-05-02): record
+        # the count + latency metrics alongside the existing structured
+        # event. Plugin observability becomes time-series-aggregable
+        # (was log-event-only).
+        from sovyx.plugins._metrics import (  # noqa: PLC0415 — lazy import
+            record_tool_executed,
+            record_tool_latency,
+        )
+
+        record_tool_executed(
+            plugin=plugin_name,
+            tool=tool_name,
+            outcome="ok" if success else "error",
+        )
+        record_tool_latency(
+            plugin=plugin_name,
+            tool=tool_name,
+            duration_ms=float(duration_ms),
         )
 
     def _emit_plugin_loaded(
@@ -622,8 +641,14 @@ class PluginManager:
         self._emitter.unloaded(plugin_name=plugin_name, reason=reason)
 
     def _emit_auto_disabled(self, plugin_name: str, health: _PluginHealth) -> None:
-        """Emit PluginAutoDisabled (delegate)."""
+        """Emit PluginAutoDisabled (delegate) + record metric (T05)."""
         self._emitter.auto_disabled(plugin_name=plugin_name, health=health)
+        # T05: time-series surface for the auto-disable signal
+        # (was log-event-only). Reason "consecutive_failures" matches
+        # the manager-side trigger at ``_record_failure``.
+        from sovyx.plugins._metrics import record_auto_disabled  # noqa: PLC0415
+
+        record_auto_disabled(plugin=plugin_name, reason="consecutive_failures")
 
     # ── Query ───────────────────────────────────────────────────────
 

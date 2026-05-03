@@ -56,6 +56,15 @@ def _emit_denied(
             "plugin.denied_reason": reason,
         },
     )
+    # T05 of pre-wake-word-hardening mission (2026-05-02): record
+    # the denial as an OTel counter at layer=http so it appears in
+    # operator dashboards. Every HTTP-layer denial path goes through
+    # this helper, so a single record_sandbox_denial call covers all
+    # of: invalid_url, domain_not_allowed, local_ip_via_dns,
+    # local_ip_direct.
+    from sovyx.plugins._metrics import record_sandbox_denial  # noqa: PLC0415
+
+    record_sandbox_denial(plugin=plugin_id, layer="http")
 
 
 # ── Constants ───────────────────────────────────────────────────────

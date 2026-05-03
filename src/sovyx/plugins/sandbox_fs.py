@@ -27,6 +27,21 @@ if typing.TYPE_CHECKING:  # pragma: no cover
 
 logger = get_logger(__name__)
 
+
+def _record_fs_denial(plugin: str) -> None:
+    """T05 helper — record a FS-layer sandbox denial as an OTel counter.
+
+    Lazy-import to avoid bootstrap circularity. Called by every
+    ``raise PermissionDeniedError`` site in this module so the
+    operator dashboard sees per-plugin FS denial trends. The
+    log emission stays separate (different cardinality budget +
+    different consumer audience).
+    """
+    from sovyx.plugins._metrics import record_sandbox_denial  # noqa: PLC0415
+
+    record_sandbox_denial(plugin=plugin, layer="fs")
+
+
 # ── Constants ───────────────────────────────────────────────────────
 
 _MAX_FILE_BYTES = 50 * 1024 * 1024  # 50MB per file
@@ -102,6 +117,7 @@ class SandboxedFsAccess:
                     "plugin.fs.violation_kind": "absolute_path",
                 },
             )
+            _record_fs_denial(self._plugin)
             raise PermissionDeniedError(self._plugin, f"Absolute paths not allowed: {relative}")
 
         # Join and resolve
@@ -119,6 +135,7 @@ class SandboxedFsAccess:
                     "plugin.fs.violation_kind": "path_escape",
                 },
             )
+            _record_fs_denial(self._plugin)
             raise PermissionDeniedError(
                 self._plugin,
                 f"Path escapes sandbox: {relative} → {target}",
@@ -137,6 +154,7 @@ class SandboxedFsAccess:
         """
         current = self._get_total_size()
         if current + additional_bytes > self._max_total:
+            _record_fs_denial(self._plugin)
             raise PermissionDeniedError(
                 self._plugin,
                 f"Storage budget exceeded: {current + additional_bytes} > {self._max_total} bytes",
@@ -255,6 +273,7 @@ class SandboxedFsAccess:
                     "plugin.fs.limit_bytes": self._max_file,
                 },
             )
+            _record_fs_denial(self._plugin)
             raise PermissionDeniedError(
                 self._plugin,
                 f"File too large: {len(data)} > {self._max_file} bytes",
@@ -308,6 +327,7 @@ class SandboxedFsAccess:
             return False
 
         if path.is_dir():
+            _record_fs_denial(self._plugin)
             raise PermissionDeniedError(
                 self._plugin,
                 f"Cannot delete directory: {relative}. Use delete on files only.",

@@ -1061,7 +1061,7 @@ Async logging via `AsyncQueueHandler` + `BackgroundLogWriter` (`observability/as
 | LLM | 4 | per-provider latency, cost-cap-hit, circuit-open, failover-engaged |
 | Bridge | 2 | per-channel ingress, response-sent |
 | Errors | 1 | structured error counter |
-| Plugins | 0 | log-event-only (no structured metrics) |
+| Plugins | 4 | `sovyx.plugins.tool_executed{plugin,tool,outcome}` Counter, `sovyx.plugins.tool_latency_ms{plugin,tool}` Histogram, `sovyx.plugins.sandbox_denial{plugin,layer}` Counter (5 layers: ast/import/http/fs/permission), `sovyx.plugins.auto_disabled{plugin,reason}` Counter — added v0.28.1 (T05 fix) |
 
 `metrics.py` is the **sole instrument-creation site** - all call sites use `get_metrics().<attr>.add()` or `record_*` helpers in `voice/health/_metrics.py`.
 
