@@ -6,7 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.28.1 below)
+(none — every shipped delta is in 0.28.2 below)
+
+## [0.28.2] — 2026-05-03
+
+### Wake-word runtime wire-up
+
+Closes the critical gap identified in the 2026-05-02 review: pre-T07,
+``MindConfig.wake_word_enabled=True`` had ZERO runtime effect because
+the voice factory always created a no-op stub and never passed
+``wake_word_router=`` to ``VoicePipeline``. v0.28.1 made the toggle
+config-driven; v0.28.2 makes it load-bearing. Mission spec:
+``docs-internal/missions/MISSION-wake-word-runtime-wireup-2026-05-03.md``
+(gitignored). 5 implementation commits (T1, T2/T4 atomic, T3, T5, T6).
+
+STT-fallback for the NONE-strategy path is DEFERRED to v0.28.3 per the
+mission's D3 amendment — Phase 0 R3 surfaced 3 verified blockers in
+the adapter contract (sync↔async mismatch, broken ``asyncio.run``
+adapter pattern, race condition on shared MoonshineSTT state). Refuse-
+to-start beats silent failure: an operator who flips
+``wake_word_enabled=True`` for a mind with no trained model gets a
+clear remediation message immediately.
+
+### Added
+
+- **T1 — Factory builds WakeWordRouter for enabled minds** (`64df704`).
+  New helper ``voice/factory/_wake_word_wire_up.py`` enumerates
+  ``<data_dir>/<mind_id>/mind.yaml`` (filesystem-as-source-of-truth
+  per R1 audit; NOT ``MindManager.get_active_minds()`` which only
+  sees currently-loaded minds), filters to ``wake_word_enabled=True``,
+  resolves each via ``WakeWordModelResolver`` against
+  ``<data_dir>/wake_word_models/pretrained/``, and registers a detector
+  per mind on a fresh ``WakeWordRouter``. Backward-compat: zero opted-in
+  minds → ``router=None`` → bit-exact match v0.28.1 behaviour.
+- **T2/T4 — wake_word.unregister_mind RPC handler + orchestrator
+  method** (`1dd77c9`). Symmetric inverse of ``wake_word.register_mind``.
+  ``WakeWordRouter.unregister_mind`` now returns ``bool`` (was ``None``)
+  so callers can distinguish "actually disabled" from "already disabled".
+  ``VoicePipeline.unregister_mind_wake_word`` raises ``VoiceError``
+  in single-mind mode (no router); the RPC handler validates non-empty
+  ``mind_id``, confirms voice subsystem is registered, then delegates.
+- **T3 — Dashboard wake-word toggle endpoint** (`2bffb13`). New
+  ``POST /api/mind/{mind_id}/wake-word/toggle`` mounted on the existing
+  ``/api/mind`` router (alongside ``/forget`` and ``/retention/prune``).
+  Two-phase contract: PERSIST always runs via ``ConfigEditor.set_scalar``
+  (atomic + per-path locked + comment-preserving); HOT-APPLY is
+  best-effort. Cold-start (voice subsystem not registered yet),
+  single-mind mode, and NONE strategy all produce
+  ``applied_immediately=False`` with operator-facing diagnostic in
+  ``hot_apply_detail``. Next pipeline boot picks up the persisted YAML
+  via T1's filesystem-enumeration helper. Companion helper
+  ``resolve_wake_word_model_for_mind`` for single-mind hot-apply
+  (mirrors T1's refuse-to-start contract).
+- **T5 — Per-state pipeline dwell histogram** (`000f9f2`). New
+  ``sovyx.voice.pipeline.state_dwell`` OTel histogram wired inside
+  ``PipelineStateMachine.record_transition`` so every state mutation
+  produces one sample, attributed by the FROM state (``IDLE`` |
+  ``WAKE_DETECTED`` | ``RECORDING`` | ``TRANSCRIBING`` | ``THINKING``
+  | ``SPEAKING`` — bounded cardinality). Decomposes the per-turn voice
+  latency budget for regression attribution. Self-loops are recorded
+  too — the canonical table allows IDLE/THINKING/SPEAKING self-loops
+  and dropping their samples would skew per-state percentiles.
+
+### Validation
+
+- All quality gates green: ruff lint + format, mypy strict (475
+  source files), bandit, pytest (existing + 4 new test files: 12 + 10 +
+  13 + 6 = 41 new tests). No regressions in the 6,423-test broader
+  unit + cli + engine sweep.
 
 ## [0.28.1] — 2026-05-02
 
