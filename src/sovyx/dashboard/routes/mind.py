@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
+    HTTP_422_UNPROCESSABLE_CONTENT,
     HTTP_503_SERVICE_UNAVAILABLE,
 )
 
@@ -476,27 +477,39 @@ async def post_mind_wake_word_toggle(
 ) -> WakeWordToggleResponse:
     """Toggle ``MindConfig.wake_word_enabled`` for a single mind.
 
-    Mission ``MISSION-wake-word-runtime-wireup-2026-05-03.md`` §T3.
+    Mission ``MISSION-wake-word-runtime-wireup-2026-05-03.md`` §T3
+    (initial endpoint). Pre-validate semantics added by
+    ``MISSION-pre-wake-word-ui-hardening-2026-05-03.md`` §T1 (D1):
+    when ``enabled=True``, the wake-word ONNX is resolved BEFORE
+    ``mind.yaml`` is written, so a failed resolution never persists a
+    config that would brick the next daemon boot.
 
-    Two-phase write:
+    Three-phase write:
 
-    1. **Persist** ``wake_word_enabled`` to
+    1. **Pre-validate** (only when ``enabled=True``): load the mind's
+       config, derive the effective wake word, call
+       :func:`resolve_wake_word_model_for_mind`. On NONE strategy the
+       endpoint returns HTTP 422 with the resolver's remediation
+       message — the YAML is not touched. The disable path
+       (``enabled=False``) skips this step because there is nothing
+       to resolve.
+    2. **Persist** ``wake_word_enabled`` to
        ``<data_dir>/<mind_id>/mind.yaml`` via
        :class:`sovyx.engine.config_editor.ConfigEditor.set_scalar`
        (atomic + per-path locked, comment-preserving).
-    2. **Hot-apply** to the running pipeline:
-       * ``enabled=True``: resolve the mind's wake word via
-         :func:`resolve_wake_word_model_for_mind`, then call
-         :meth:`VoicePipeline.register_mind_wake_word`.
+    3. **Hot-apply** to the running pipeline:
+       * ``enabled=True``: call
+         :meth:`VoicePipeline.register_mind_wake_word` with the
+         already-resolved model path.
        * ``enabled=False``: call
          :meth:`VoicePipeline.unregister_mind_wake_word`.
 
-    The persist step always runs; the hot-apply step is best-effort.
-    When the voice subsystem isn't registered yet (cold-start path)
-    or runs in single-mind mode, ``applied_immediately=False`` and
-    ``hot_apply_detail`` carries the reason. The next pipeline boot
-    picks up the persisted YAML automatically via T1's
-    :func:`build_wake_word_router_for_enabled_minds`.
+    Persist always runs (after pre-validate); the hot-apply step is
+    best-effort. When the voice subsystem isn't registered yet
+    (cold-start path) or runs in single-mind mode,
+    ``applied_immediately=False`` and ``hot_apply_detail`` carries
+    the reason. The next pipeline boot picks up the persisted YAML
+    automatically via :func:`build_wake_word_router_for_enabled_minds`.
 
     Args:
         mind_id: Target mind (path parameter).
@@ -511,8 +524,13 @@ async def post_mind_wake_word_toggle(
         HTTPException 404: ``<data_dir>/<mind_id>/mind.yaml`` doesn't
             exist (the operator named a mind that hasn't been
             onboarded). 404 mirrors ``/forget`` and ``/retention/prune``.
-        HTTPException 500: ``ConfigEditor.set_scalar`` raised — the
-            YAML write failed and the operator must retry.
+        HTTPException 422: ``enabled=True`` but the wake word does
+            not resolve to any pretrained ONNX (NONE strategy). The
+            ``detail`` carries the resolver's remediation message
+            (train via ``sovyx voice train-wake-word`` OR drop the
+            ONNX into the pretrained pool). The YAML is NOT written.
+        HTTPException 500: malformed mind.yaml (cannot parse for
+            pre-validate) OR ``ConfigEditor.set_scalar`` raised.
     """
     if not mind_id.strip():
         raise HTTPException(
@@ -528,7 +546,64 @@ async def post_mind_wake_word_toggle(
             detail=f"mind not found: {mind_id} (no mind.yaml at {mind_yaml})",
         )
 
-    # ── 1. Persist ───────────────────────────────────────────────────
+    # ── 1. Pre-validate (only when enabling) ─────────────────────────
+    # T1 of MISSION-pre-wake-word-ui-hardening (2026-05-03): refuse-to-
+    # persist beats refuse-to-boot. An operator who clicks "enable" on
+    # a mind without a trained ONNX gets HTTP 422 with actionable
+    # remediation NOW — instead of a silently-persisted config that
+    # would later brick the daemon's voice subsystem on the next boot
+    # via build_wake_word_router_for_enabled_minds raising VoiceError.
+    pre_resolved_model_path: Path | None = None
+    if body.enabled:
+        from sovyx.engine.errors import (  # noqa: PLC0415
+            MindConfigError,
+            VoiceError,
+        )
+        from sovyx.mind.config import load_mind_config  # noqa: PLC0415
+        from sovyx.voice.factory._wake_word_wire_up import (  # noqa: PLC0415
+            resolve_wake_word_model_for_mind,
+        )
+
+        try:
+            mind_config = load_mind_config(mind_yaml)
+        except MindConfigError as exc:
+            # Malformed YAML / schema-violation — not a 422 (well-formed
+            # request, precondition unmet) but a 500 (server-side state
+            # is corrupt for this mind). Operator must fix the YAML.
+            logger.exception(
+                "mind.wake_word.prevalidate_load_failed",
+                mind_id=mind_id,
+                mind_yaml=str(mind_yaml),
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"failed to load mind.yaml for pre-validate: {exc}",
+            ) from exc
+
+        try:
+            pre_resolved_model_path = resolve_wake_word_model_for_mind(
+                data_dir=data_dir,
+                wake_word=mind_config.effective_wake_word,
+            )
+        except VoiceError as exc:
+            # NONE strategy — no ONNX matches this wake word. Surface
+            # the resolver's full remediation message (train-wake-word
+            # CLI, pretrained-pool path, etc.) directly to the operator
+            # via the 422 detail. The yaml is NOT touched.
+            logger.info(
+                "mind.wake_word.prevalidate_rejected",
+                mind_id=mind_id,
+                **{
+                    "mind.wake_word": mind_config.effective_wake_word,
+                    "voice.error": str(exc),
+                },
+            )
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+
+    # ── 2. Persist ───────────────────────────────────────────────────
     from sovyx.engine.config_editor import ConfigEditor  # noqa: PLC0415
 
     persisted = False
@@ -547,13 +622,12 @@ async def post_mind_wake_word_toggle(
             detail=f"failed to persist wake_word_enabled: {exc}",
         ) from exc
 
-    # ── 2. Hot-apply (best-effort) ───────────────────────────────────
+    # ── 3. Hot-apply (best-effort) ───────────────────────────────────
     applied_immediately, detail = await _hot_apply_wake_word_toggle(
         request=request,
         mind_id=mind_id,
-        mind_yaml=mind_yaml,
         enabled=body.enabled,
-        data_dir=data_dir,
+        pre_resolved_model_path=pre_resolved_model_path,
     )
 
     logger.info(
@@ -578,11 +652,24 @@ async def _hot_apply_wake_word_toggle(
     *,
     request: Request,
     mind_id: str,
-    mind_yaml: Path,
     enabled: bool,
-    data_dir: Path,
+    pre_resolved_model_path: Path | None,
 ) -> tuple[bool, str | None]:
     """Hot-apply the toggle to the running pipeline (best-effort).
+
+    The endpoint pre-resolves the wake-word ONNX path BEFORE the
+    persist step (T1 of MISSION-pre-wake-word-ui-hardening); when
+    ``enabled=True`` the resolved path arrives via
+    ``pre_resolved_model_path``. The disable path passes ``None``
+    because no resolution is needed.
+
+    Args:
+        request: FastAPI request (for app.state.registry lookup).
+        mind_id: Target mind.
+        enabled: Final toggle state (post-persist).
+        pre_resolved_model_path: ONNX path resolved by the endpoint's
+            pre-validate step. Required when ``enabled=True``;
+            ignored when ``enabled=False``.
 
     Returns ``(applied_immediately, detail)``. ``detail`` is None on
     success or carries the diagnostic when applied_immediately=False.
@@ -611,27 +698,12 @@ async def _hot_apply_wake_word_toggle(
             return False, str(exc)
         return True, None
 
-    # enabled=True — resolve + register.
-    from sovyx.mind.config import load_mind_config  # noqa: PLC0415
-    from sovyx.voice.factory._wake_word_wire_up import (  # noqa: PLC0415
-        resolve_wake_word_model_for_mind,
-    )
-
+    # enabled=True — model already resolved by the endpoint's
+    # pre-validate; just register on the live router.
+    if pre_resolved_model_path is None:  # pragma: no cover — defensive
+        return False, "internal error: pre-resolved model path missing"
     try:
-        mind_config = load_mind_config(mind_yaml)
-    except Exception as exc:  # noqa: BLE001 — best-effort hot-apply
-        return False, f"mind.yaml load failed after persist: {exc}"
-
-    try:
-        model_path = resolve_wake_word_model_for_mind(
-            data_dir=data_dir,
-            wake_word=mind_config.effective_wake_word,
-        )
-    except VoiceError as exc:
-        return False, str(exc)
-
-    try:
-        pipeline.register_mind_wake_word(mid, model_path=model_path)
+        pipeline.register_mind_wake_word(mid, model_path=pre_resolved_model_path)
     except VoiceError as exc:
         return False, str(exc)
     return True, None

@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from sovyx.dashboard.server import create_app
@@ -162,7 +161,13 @@ class TestPersistColdStart:
     applied_immediately=False with cold-start detail."""
 
     def test_persist_enables_returns_applied_false(self, tmp_path: Path) -> None:
-        _write_mind_yaml(tmp_path, "aria", wake_word_enabled=False)
+        _write_mind_yaml(tmp_path, "aria", wake_word="Aria", wake_word_enabled=False)
+        # T1 of pre-wake-word-ui-hardening (2026-05-03): pre-validate
+        # requires the ONNX to exist BEFORE persist. Test the cold-start
+        # path with a model present so we isolate "no pipeline yet" from
+        # "no model" — the latter is covered by
+        # ``test_enable_with_no_model_rejects_with_422_no_persist``.
+        _write_pretrained_model(tmp_path, "aria")
         app = _build_app(tmp_path=tmp_path)  # no pipeline
         client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
 
@@ -234,12 +239,19 @@ class TestHotApplyEnable:
         assert str(call.args[0]) == "aria"
         assert str(call.kwargs["model_path"]).endswith("aria.onnx")
 
-    def test_enable_with_no_model_returns_applied_false_and_persists(self, tmp_path: Path) -> None:
+    def test_enable_with_no_model_rejects_with_422_no_persist(self, tmp_path: Path) -> None:
         """Operator enables a mind whose wake word has no trained model.
 
-        Persist still runs (operator's intent is durable), hot-apply
-        reports applied_immediately=False with the train-wake-word
-        remediation message. STT-fallback path is deferred to v0.28.3."""
+        T1 of MISSION-pre-wake-word-ui-hardening (2026-05-03): the
+        endpoint refuses-to-persist when the wake-word ONNX cannot be
+        resolved. Returns HTTP 422 with the resolver's remediation
+        message. The yaml is NOT touched (operator's intent does NOT
+        become durable until they have a trained model OR drop the
+        ONNX into the pretrained pool). The previous v0.28.2 contract
+        (persist + applied_immediately=False) was a footgun: the
+        persisted state would brick the next daemon boot via
+        :func:`build_wake_word_router_for_enabled_minds` raising
+        VoiceError on NONE strategy."""
         _write_mind_yaml(tmp_path, "aria", wake_word="Aria", wake_word_enabled=False)
         # No pretrained model for aria.
 
@@ -254,14 +266,15 @@ class TestHotApplyEnable:
             json={"enabled": True},
         )
 
-        assert response.status_code == 200  # noqa: PLR2004
-        body = response.json()
-        assert body["persisted"] is True
-        assert body["applied_immediately"] is False
-        assert "train-wake-word" in body["hot_apply_detail"]
-        # Persist-on-disk still happened.
-        assert _read_wake_word_enabled(tmp_path, "aria") is True
-        # register was NEVER called (resolution failed before).
+        # 422: well-formed request, semantic precondition (model exists) unmet.
+        assert response.status_code == 422  # noqa: PLR2004
+        detail = response.json()["detail"]
+        # Resolver's remediation message surfaces directly to the operator.
+        assert "train-wake-word" in detail
+        assert "Aria" in detail
+        # YAML is NOT touched — no side-effect persistence.
+        assert _read_wake_word_enabled(tmp_path, "aria") is False
+        # register was NEVER called (rejected before persist + hot-apply).
         pipeline.register_mind_wake_word.assert_not_called()
 
     def test_enable_in_single_mind_mode_returns_applied_false(self, tmp_path: Path) -> None:
@@ -360,6 +373,8 @@ class TestPersistContract:
             "voice_language: en\n",
             encoding="utf-8",
         )
+        # T1 pre-validate requires the model to exist before persist.
+        _write_pretrained_model(tmp_path, "aria")
         app = _build_app(tmp_path=tmp_path)  # cold-start ok
         client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
 
@@ -381,7 +396,9 @@ class TestPersistContract:
         assert data["voice_language"] == "en"
 
     def test_repeated_toggle_is_idempotent(self, tmp_path: Path) -> None:
-        _write_mind_yaml(tmp_path, "aria", wake_word_enabled=False)
+        _write_mind_yaml(tmp_path, "aria", wake_word="Aria", wake_word_enabled=False)
+        # T1 pre-validate requires the model to exist before persist.
+        _write_pretrained_model(tmp_path, "aria")
         app = _build_app(tmp_path=tmp_path)
         client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
 
@@ -396,8 +413,93 @@ class TestPersistContract:
         assert _read_wake_word_enabled(tmp_path, "aria") is True
 
 
-@pytest.mark.skip(
-    reason="placeholder — pydantic body validation already raises 422; "
-    "covered by test_missing_enabled_returns_422 above."
-)
-def test_pydantic_body_validation_placeholder() -> None: ...
+# ── T1 contract additions (MISSION-pre-wake-word-ui-hardening) ───────
+
+
+class TestT1PreValidateContract:
+    """T1 D1: refuse-to-persist when ``enabled=True`` but no ONNX
+    resolves. Disable path NEVER runs pre-validate (nothing to resolve)."""
+
+    def test_disable_with_no_model_still_works(self, tmp_path: Path) -> None:
+        """Symmetric counterpart to refuse-to-persist on enable.
+
+        The disable path must NOT pre-validate the wake-word model —
+        an operator who's disabling the feature might be doing so
+        precisely BECAUSE they realised they don't have a trained
+        model, and forcing them to train one before they can disable
+        would be a UX deadlock."""
+        # YAML carries enabled=true but no pretrained model exists.
+        _write_mind_yaml(tmp_path, "aria", wake_word="Aria", wake_word_enabled=True)
+        app = _build_app(tmp_path=tmp_path)  # cold-start ok
+        client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+
+        response = client.post(
+            "/api/mind/aria/wake-word/toggle",
+            json={"enabled": False},
+        )
+
+        assert response.status_code == 200  # noqa: PLR2004
+        body = response.json()
+        assert body["enabled"] is False
+        assert body["persisted"] is True
+        # Side-effect: yaml updated to false even though no model existed.
+        assert _read_wake_word_enabled(tmp_path, "aria") is False
+
+    def test_malformed_yaml_returns_500(self, tmp_path: Path) -> None:
+        """Malformed mind.yaml during pre-validate is a server-state
+        error (500), not a precondition error (422). Operator must fix
+        the YAML — the toggle endpoint cannot recover.
+
+        This is distinct from "yaml exists but wake-word doesn't
+        resolve" (422). Different failure modes need different surfaces
+        so the dashboard can render the right operator action."""
+        mind_dir = tmp_path / "aria"
+        mind_dir.mkdir()
+        (mind_dir / "mind.yaml").write_text(
+            "this is: not: valid: yaml: schema\nweird: [unclosed list\n",
+            encoding="utf-8",
+        )
+        app = _build_app(tmp_path=tmp_path)
+        client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+
+        response = client.post(
+            "/api/mind/aria/wake-word/toggle",
+            json={"enabled": True},
+        )
+
+        assert response.status_code == 500  # noqa: PLR2004
+        # YAML untouched (the bad file remains as-is).
+
+    def test_enable_with_match_persists_and_registers_unchanged(self, tmp_path: Path) -> None:
+        """Pin the happy path: ``enabled=True`` + valid model + live
+        pipeline still produces the v0.28.2 success contract
+        (persist + register + applied_immediately=True)."""
+        _write_mind_yaml(tmp_path, "aria", wake_word="Aria", wake_word_enabled=False)
+        _write_pretrained_model(tmp_path, "aria")
+
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        pipeline = MagicMock(spec=VoicePipeline)
+        pipeline.register_mind_wake_word = MagicMock(return_value=None)
+
+        app = _build_app(tmp_path=tmp_path, pipeline=pipeline)
+        client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+
+        response = client.post(
+            "/api/mind/aria/wake-word/toggle",
+            json={"enabled": True},
+        )
+
+        assert response.status_code == 200  # noqa: PLR2004
+        body = response.json()
+        assert body["enabled"] is True
+        assert body["persisted"] is True
+        assert body["applied_immediately"] is True
+        assert body["hot_apply_detail"] is None
+        # YAML updated.
+        assert _read_wake_word_enabled(tmp_path, "aria") is True
+        # Register fired with the pre-resolved path.
+        pipeline.register_mind_wake_word.assert_called_once()
+        call = pipeline.register_mind_wake_word.call_args
+        assert str(call.args[0]) == "aria"
+        assert str(call.kwargs["model_path"]).endswith("aria.onnx")
