@@ -6,7 +6,97 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.28.0 below)
+(none — every shipped delta is in 0.28.1 below)
+
+## [0.28.1] — 2026-05-02
+
+### Pre-wake-word-UI hardening pass
+
+This patch release closes the 5 CRITICAL + 2 RECOMMENDED fixes
+identified in the 2026-05-02 enterprise-grade review of the
+codebase pre wake-word UI implementation. Mission spec at
+``docs-internal/missions/MISSION-pre-wake-word-hardening-2026-05-02.md``
+(gitignored). 7 commits + 1 closure = 8 commits total. **No
+default flips** — defaults stay conservative; v0.28.2 will land
+the AEC/NS flips after D2/D3 pilots.
+
+### Fixed
+
+- **T01 — `circuit_breaker_reset_seconds` config consumption**
+  (`e935969`). Previously
+  ``LLMProviderConfig.circuit_breaker_reset_seconds=300`` was
+  defined but never consumed; LLMRouter used its own default 60 s.
+  Setting the env var produced zero effect. Now ``LLMTuningConfig``
+  carries ``circuit_breaker_failures: int = 3`` +
+  ``circuit_breaker_reset_seconds: int = 60`` and ``bootstrap.py``
+  consumes them. Industry-triangulated default of 60 s (Hystrix 5,
+  LiteLLM 5, Polly 30, Resilience4j 60) — full citation chain in
+  ``LLMTuningConfig`` docstring.
+- **T02 — CLI flag triage** (`4253297`). Removed
+  ``sovyx start --foreground`` (semantically redundant; ``start``
+  already blocks in ``run_forever``) and ``sovyx init --quick`` (init
+  is non-interactive; no prompts to skip). ``sovyx plugin install --yes``
+  documented to clarify intentional asymmetry: skips permission
+  prompt for local-dir installs; no-op for pip / git installs
+  matching apt / pip / brew industry pattern.
+- **T03 — `extract_signals.has_tool_use` signal**
+  (`5df4c2a`). The complexity-tier router consumed the signal but
+  ``extract_signals`` never set it — tool-using conversations could
+  route to providers lacking native tool support. Now derived from
+  a 5-message sliding window: ``has_tool_use=True`` if any recent
+  message has ``role=="tool"`` or carries a non-empty ``tool_calls``
+  list. Window size matches the Sovyx ReAct loop shape (3-5
+  messages per cycle per ``cognitive/act.py:380-403``).
+- **T07 — `MindConfig.wake_word_enabled` per-mind config**
+  (`a528216`). Replaces the hardcoded ``wake_word_enabled=False``
+  in ``dashboard/routes/voice.py:1793`` with per-mind config field.
+  Default ``False`` preserves backward-compat (always-listening UX);
+  operators opt in per mind via ``mind.yaml: wake_word_enabled: true``.
+  This is the foundation commit unblocking the upcoming wake-word UI
+  mission — adding a UI toggle on top of the hardcoded literal would
+  have been a band-aid by definition.
+
+### Added
+
+- **T04 — `voice.wake_word.router.dispatch_latency` Histogram**
+  (`2ccaf0f`). The master mission §T8.10 + README §11 promise of
+  "≤ 50 ms multi-mind dispatch" was log-only previously. Now
+  recorded as an OTel histogram with ``mind_id`` attribute alongside
+  the existing log. Operators can verify the SLA contract in
+  dashboards.
+- **T05 — 4 plugin observability metrics** (`9ee7227`). Plugin
+  observability was log-event-only before T05 (zero structured
+  metrics). Added: ``sovyx.plugins.tool_executed{plugin,tool,outcome}``
+  Counter, ``sovyx.plugins.tool_latency_ms{plugin,tool}`` Histogram,
+  ``sovyx.plugins.sandbox_denial{plugin,layer}`` Counter (5 layers:
+  ast/import/http/fs/permission), ``sovyx.plugins.auto_disabled``
+  ``{plugin,reason}`` Counter. New helper module
+  ``src/sovyx/plugins/_metrics.py`` with closed-set ``Literal`` types
+  + defensive no-op when registry attribute is missing. Wire-up
+  across 5 sandbox-layer denial sites + 2 auto-disable trigger
+  sites + the manager's tool-execution emission point.
+- **T06 — `sovyx.cognitive.phase_latency` Histogram**
+  (`5765015`). Previously only the full-loop ``cognitive.latency``
+  histogram existed. Per-phase latencies (Perceive/Attend/Think/
+  Act/Reflect) were untimed. Now recorded with ``phase`` attribute
+  (5 closed-set values) via new ``_measure_phase_latency`` context
+  manager. Wired across both ``_execute_loop`` (sync) and
+  ``_execute_loop_streaming`` paths — 10 wraps total. Records even
+  when the wrapped phase raises.
+
+### Quality posture
+
+- 13,690+ backend tests pass; 1,009+ frontend tests pass
+- ruff + ruff format + mypy strict + bandit all clean
+- ``uv lock --check`` green; CI matrix Linux 3.11/3.12 + Win/macOS 3.12
+- Per-commit gates verified for each of the 7 fix commits
+
+### Roadmap impact
+
+This release lands the FOUNDATION for the wake-word UI mission. Two
+mission-blocker observability gaps closed (T04 + T06); two
+config-system band-aids removed (T01 + T07); three trust-killers
+fixed (T02 + T03 + T05).
 
 ## [0.28.0] — 2026-05-02
 
