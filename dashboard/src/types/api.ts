@@ -1640,6 +1640,65 @@ export interface WakeWordToggleResponse {
   hot_apply_detail: string | null;
 }
 
+/* ── Per-mind wake-word status — GET /api/voice/wake-word/status ──
+ *
+ * Mission ``MISSION-wake-word-ui-2026-05-03.md`` §T1+T2 (D1+D2). The
+ * dashboard's per-mind wake-word section consumes this to render
+ * one card per mind with toggle + status pill + error disclosure.
+ *
+ * Response is flat: ``{minds: [...]}``. Empty list when (a) the
+ * daemon is still booting, (b) no minds are on disk. Non-empty list
+ * always includes ALL minds (enabled + disabled) so operators can
+ * toggle ON disabled minds without leaving the page.
+ *
+ * Field semantics — see backend dataclass at
+ * ``voice/factory/_wake_word_wire_up.py::WakeWordPerMindStatusEntry``.
+ * Strict 1:1 mirror of the pydantic model in
+ * ``dashboard/routes/voice.py::WakeWordPerMindStatusItem``.
+ */
+
+export type WakeWordResolutionStrategy = "exact" | "phonetic" | "none";
+
+export interface WakeWordPerMindStatus {
+  mind_id: string;
+  wake_word: string;
+  voice_language: string;
+  /**
+   * What ``mind.yaml`` says (operator's persisted intent). Distinct
+   * from ``runtime_registered`` — a mind can be configured but not
+   * registered when the v0.28.3 T2 boot tolerance caught a stale-
+   * config error and degraded to ``router=None``.
+   */
+  wake_word_enabled: boolean;
+  /**
+   * Whether a detector for this mind is currently in the live
+   * ``WakeWordRouter``. Always false when the voice subsystem isn't
+   * running OR when the boot tolerance degraded the router.
+   */
+  runtime_registered: boolean;
+  /**
+   * Resolved ``.onnx`` path on EXACT/PHONETIC strategy. Null on NONE
+   * strategy or when ``wake_word_enabled`` is false (resolution
+   * skipped to save ~5ms cost).
+   */
+  model_path: string | null;
+  /**
+   * Discriminated union over the three resolution strategies. Null
+   * when ``wake_word_enabled`` is false (resolution skipped).
+   */
+  resolution_strategy: WakeWordResolutionStrategy | null;
+  /**
+   * Operator-facing remediation text when ``resolution_strategy ===
+   * "none"``. Null on the happy path. Surface directly to operators
+   * via the dashboard error-details disclosure.
+   */
+  last_error: string | null;
+}
+
+export interface WakeWordPerMindStatusResponse {
+  minds: WakeWordPerMindStatus[];
+}
+
 /* ── Voice setup wizard — Phase 7 / T7.21-T7.24 ──────────────
  *
  *   GET  /api/voice/wizard/devices

@@ -1310,6 +1310,43 @@ export const WakeWordToggleResponseSchema = z.object({
   hot_apply_detail: z.string().nullable(),
 });
 
+/* ── Per-mind wake-word status runtime schemas ──
+ *
+ * Mission ``MISSION-wake-word-ui-2026-05-03.md`` §T2 paired with
+ * ``api.ts``'s ``WakeWordPerMindStatus / WakeWordPerMindStatusResponse``.
+ *
+ * ``resolution_strategy`` uses ``z.enum()`` so the discriminated
+ * union mirrors the backend StrEnum (``WakeWordResolutionStrategy``)
+ * exactly. ``model_path`` and ``last_error`` use ``.nullable()`` to
+ * match the pydantic ``str | None`` default-None semantics.
+ *
+ * Pass ``{ schema: WakeWordPerMindStatusResponseSchema }`` to
+ * ``api.get`` so a backend shape change surfaces as a runtime
+ * safeParse warning + the dashboard logs the mismatch instead of
+ * silently rendering stale fields.
+ */
+
+export const WakeWordResolutionStrategySchema = z.enum([
+  "exact",
+  "phonetic",
+  "none",
+]);
+
+export const WakeWordPerMindStatusSchema = z.object({
+  mind_id: z.string(),
+  wake_word: z.string(),
+  voice_language: z.string(),
+  wake_word_enabled: z.boolean(),
+  runtime_registered: z.boolean(),
+  model_path: z.string().nullable(),
+  resolution_strategy: WakeWordResolutionStrategySchema.nullable(),
+  last_error: z.string().nullable(),
+});
+
+export const WakeWordPerMindStatusResponseSchema = z.object({
+  minds: z.array(WakeWordPerMindStatusSchema),
+});
+
 /* ── Voice setup wizard runtime schemas — Phase 7 / T7.21-T7.24 ── */
 
 export const WizardDeviceInfoSchema = z.object({

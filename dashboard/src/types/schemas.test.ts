@@ -11,6 +11,8 @@ import {
   TrainingJobSummarySchema,
   VoiceBypassTierStatusResponseSchema,
   VoiceRestartHistoryResponseSchema,
+  WakeWordPerMindStatusResponseSchema,
+  WakeWordPerMindStatusSchema,
   WakeWordToggleRequestSchema,
   WakeWordToggleResponseSchema,
   WizardDevicesResponseSchema,
@@ -462,6 +464,138 @@ describe("WakeWordToggleResponseSchema", () => {
         ...happyPath,
         hot_apply_detail: 42,
       }),
+    ).toThrow();
+  });
+});
+
+// ── MISSION-wake-word-ui §T2 — per-mind wake-word status ──
+
+describe("WakeWordPerMindStatusSchema", () => {
+  const healthyExact = {
+    mind_id: "aria",
+    wake_word: "Aria",
+    voice_language: "en",
+    wake_word_enabled: true,
+    runtime_registered: true,
+    model_path: "/data/wake_word_models/pretrained/aria.onnx",
+    resolution_strategy: "exact",
+    last_error: null,
+  };
+
+  it("parses a healthy EXACT-match entry", () => {
+    const parsed = WakeWordPerMindStatusSchema.parse(healthyExact);
+    expect(parsed.runtime_registered).toBe(true);
+    expect(parsed.resolution_strategy).toBe("exact");
+    expect(parsed.last_error).toBeNull();
+  });
+
+  it("parses a PHONETIC-match entry", () => {
+    const parsed = WakeWordPerMindStatusSchema.parse({
+      ...healthyExact,
+      wake_word: "Lúcia",
+      voice_language: "pt-BR",
+      resolution_strategy: "phonetic",
+      model_path: "/data/wake_word_models/pretrained/lucia.onnx",
+    });
+    expect(parsed.resolution_strategy).toBe("phonetic");
+  });
+
+  it("parses a NONE-strategy entry with last_error remediation", () => {
+    const parsed = WakeWordPerMindStatusSchema.parse({
+      ...healthyExact,
+      runtime_registered: false,
+      model_path: null,
+      resolution_strategy: "none",
+      last_error:
+        "No ONNX model resolved for wake word 'Aria' ... train via `sovyx voice train-wake-word`",
+    });
+    expect(parsed.runtime_registered).toBe(false);
+    expect(parsed.resolution_strategy).toBe("none");
+    expect(parsed.last_error).toContain("train-wake-word");
+  });
+
+  it("parses a disabled-mind entry (resolution skipped)", () => {
+    const parsed = WakeWordPerMindStatusSchema.parse({
+      mind_id: "joao",
+      wake_word: "Joao",
+      voice_language: "en",
+      wake_word_enabled: false,
+      runtime_registered: false,
+      model_path: null,
+      resolution_strategy: null,
+      last_error: null,
+    });
+    expect(parsed.wake_word_enabled).toBe(false);
+    expect(parsed.resolution_strategy).toBeNull();
+  });
+
+  it("rejects invalid resolution_strategy values", () => {
+    expect(() =>
+      WakeWordPerMindStatusSchema.parse({
+        ...healthyExact,
+        resolution_strategy: "fuzzy",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects payloads missing required fields", () => {
+    expect(() => WakeWordPerMindStatusSchema.parse({})).toThrow();
+    const { mind_id: _omit, ...withoutMindId } = healthyExact;
+    expect(() => WakeWordPerMindStatusSchema.parse(withoutMindId)).toThrow();
+  });
+});
+
+describe("WakeWordPerMindStatusResponseSchema", () => {
+  it("parses an empty-minds payload (cold-start / no minds on disk)", () => {
+    const parsed = WakeWordPerMindStatusResponseSchema.parse({ minds: [] });
+    expect(parsed.minds).toEqual([]);
+  });
+
+  it("parses a mixed list (healthy + broken + disabled)", () => {
+    const mixedPayload = {
+      minds: [
+        {
+          mind_id: "aria",
+          wake_word: "Aria",
+          voice_language: "en",
+          wake_word_enabled: true,
+          runtime_registered: true,
+          model_path: "/data/wake_word_models/pretrained/aria.onnx",
+          resolution_strategy: "exact",
+          last_error: null,
+        },
+        {
+          mind_id: "lucia",
+          wake_word: "Lucia",
+          voice_language: "pt-BR",
+          wake_word_enabled: true,
+          runtime_registered: false,
+          model_path: null,
+          resolution_strategy: "none",
+          last_error: "No ONNX model resolved ...",
+        },
+        {
+          mind_id: "joao",
+          wake_word: "Joao",
+          voice_language: "en",
+          wake_word_enabled: false,
+          runtime_registered: false,
+          model_path: null,
+          resolution_strategy: null,
+          last_error: null,
+        },
+      ],
+    };
+    const parsed = WakeWordPerMindStatusResponseSchema.parse(mixedPayload);
+    expect(parsed.minds.length).toBe(3);
+    expect(parsed.minds[0].resolution_strategy).toBe("exact");
+    expect(parsed.minds[1].resolution_strategy).toBe("none");
+    expect(parsed.minds[2].resolution_strategy).toBeNull();
+  });
+
+  it("rejects payloads where minds is not an array", () => {
+    expect(() =>
+      WakeWordPerMindStatusResponseSchema.parse({ minds: "not-an-array" }),
     ).toThrow();
   });
 });
