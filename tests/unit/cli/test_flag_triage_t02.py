@@ -10,15 +10,41 @@ After T02:
   industry pattern). The flag itself stays accepted on all 3 paths.
 
 This file pins the contract so future refactors don't reintroduce dead flags.
+
+**ANSI-aware contract** — Rich (via Typer) emits ANSI escape codes on
+non-Windows TTYs in CI (Linux + macOS runners). Naive
+``'--foreground' in stdout`` substring matches break because the
+hyphen + flag-name get split by colour codes
+(``'\\x1b[1;36m-\\x1b[0m\\x1b[1;36m-foreground\\x1b[0m'``). Tests
+strip ANSI escape sequences before substring assertion.
 """
 
 from __future__ import annotations
+
+import re
 
 from typer.testing import CliRunner
 
 from sovyx.cli.main import app
 
 runner = CliRunner()
+
+
+# Strip ANSI escape sequences from CLI output before substring matching.
+# Pattern matches CSI (Control Sequence Introducer) sequences:
+# ESC [ <params> <intermediate> <final-byte 0x40-0x7E>.
+# Captures every Rich/click colour + style sequence that splits flag
+# names mid-token in CI Linux/macOS Rich output.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+def _output(result: object) -> str:
+    """Return ANSI-stripped output from a CliRunner Result."""
+    return _strip_ansi(getattr(result, "stdout", "") or getattr(result, "output", "") or "")
 
 
 class TestStartForegroundRemoved:
@@ -32,7 +58,7 @@ class TestStartForegroundRemoved:
             f"--foreground should be rejected as unknown option; "
             f"got exit_code={result.exit_code} stdout={result.stdout!r}"
         )
-        assert "--foreground" in result.stdout or "--foreground" in result.output
+        assert "--foreground" in _output(result)
 
     def test_short_f_flag_rejected(self) -> None:
         result = runner.invoke(app, ["start", "-f"])
@@ -51,7 +77,7 @@ class TestInitQuickRemoved:
             f"--quick should be rejected as unknown option; "
             f"got exit_code={result.exit_code} stdout={result.stdout!r}"
         )
-        assert "--quick" in result.stdout or "--quick" in result.output
+        assert "--quick" in _output(result)
 
     def test_short_q_flag_rejected(self) -> None:
         result = runner.invoke(app, ["init", "TestMind", "-q"])
@@ -74,19 +100,19 @@ class TestPluginInstallYesAccepted:
     def test_yes_flag_accepted_in_help(self) -> None:
         result = runner.invoke(app, ["plugin", "install", "--help"])
         assert result.exit_code == 0
-        # Verify the flag is documented in --help output
-        assert "--yes" in result.stdout or "--yes" in result.output
-        assert "-y" in result.stdout or "-y" in result.output
+        # Verify the flag is documented in --help output (ANSI-stripped
+        # so Rich's colour escapes don't split flag names mid-token).
+        out = _output(result)
+        assert "--yes" in out
+        assert "-y" in out
 
     def test_yes_help_text_documents_asymmetry(self) -> None:
         """The flag's help text must surface the local-dir vs pip/git
         asymmetry so operators don't expect uniform behaviour."""
         result = runner.invoke(app, ["plugin", "install", "--help"])
         assert result.exit_code == 0
-        out = result.stdout if result.stdout else result.output
+        out = _output(result).lower()
         # Either "no-op for pip" or equivalent disambiguation must be present.
-        assert (
-            "no-op" in out.lower()
-            or "trust the source" in out.lower()
-            or "industry pattern" in out.lower()
-        ), f"--yes help text must explain asymmetry; got {out!r}"
+        assert "no-op" in out or "trust the source" in out or "industry pattern" in out, (
+            f"--yes help text must explain asymmetry; got {out!r}"
+        )
