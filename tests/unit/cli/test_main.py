@@ -36,26 +36,26 @@ class TestInit:
 
     def test_init_creates_files(self, tmp_path: Path) -> None:
         with patch("sovyx.cli.main.Path.home", return_value=tmp_path):
-            result = runner.invoke(app, ["init", "TestMind", "--quick"])
+            result = runner.invoke(app, ["init", "TestMind"])
         assert result.exit_code == 0
         assert "initialized" in result.stdout
 
     def test_init_default_name(self, tmp_path: Path) -> None:
         with patch("sovyx.cli.main.Path.home", return_value=tmp_path):
-            result = runner.invoke(app, ["init", "--quick"])
+            result = runner.invoke(app, ["init"])
         assert result.exit_code == 0
         assert "Sovyx" in result.stdout
 
     def test_init_idempotent(self, tmp_path: Path) -> None:
         with patch("sovyx.cli.main.Path.home", return_value=tmp_path):
-            runner.invoke(app, ["init", "Test", "--quick"])
-            result = runner.invoke(app, ["init", "Test", "--quick"])
+            runner.invoke(app, ["init", "Test"])
+            result = runner.invoke(app, ["init", "Test"])
         assert result.exit_code == 0
         assert "already exists" in result.stdout
 
     def test_init_creates_logs_dir(self, tmp_path: Path) -> None:
         with patch("sovyx.cli.main.Path.home", return_value=tmp_path):
-            result = runner.invoke(app, ["init", "Test", "--quick"])
+            result = runner.invoke(app, ["init", "Test"])
         assert result.exit_code == 0
         logs_dir = tmp_path / ".sovyx" / "logs"
         assert logs_dir.is_dir()

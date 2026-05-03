@@ -151,9 +151,46 @@ def plugin_info(
 @plugin_app.command("install")
 def plugin_install(
     source: Annotated[str, typer.Argument(help="Local path, pip package, or git+URL")],
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip permission confirmation")] = False,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help=(
+                "Skip the permission confirmation for local-directory installs "
+                "(no-op for pip / git installs — those trust the source by design, "
+                "matching apt / pip / brew industry pattern)."
+            ),
+        ),
+    ] = False,
 ) -> None:
-    """Install a plugin from a local directory, pip package, or git URL."""
+    """Install a plugin from a local directory, pip package, or git URL.
+
+    The 3 install paths have asymmetric permission-prompt behaviour by
+    design (verified 2026-05-02 against apt / pip / brew industry
+    pattern):
+
+    * **Local directory** — ``./my-plugin/``. The operator points at an
+      arbitrary path; Sovyx loads ``plugin.yaml`` and prompts for
+      every requested permission. ``--yes`` skips the prompt for
+      automated CI/CD.
+
+    * **pip package** — ``my-sovyx-plugin``. Trust derives from PyPI's
+      package signing + the operator's explicit package choice, so
+      no Sovyx-side permission prompt fires (matching ``pip install``
+      itself). ``--yes`` is a no-op here. Plugin permissions enforced
+      at runtime by the 5-layer sandbox.
+
+    * **git+URL** — ``git+https://...``. Same trust model as pip:
+      operator's explicit URL choice + git-side authentication is the
+      gate. ``--yes`` is a no-op here. Permissions enforced at runtime.
+
+    Trade-off: the asymmetry means a malicious *local directory* gets
+    operator review, but a malicious *PyPI package* or *git URL*
+    relies on operator vetting + the runtime sandbox. The 5-layer
+    sandbox is designed to contain malicious plugins regardless of
+    install path.
+    """
     if source.startswith("git+"):
         _install_from_git(source, yes=yes)
     elif Path(source).is_dir():

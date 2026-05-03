@@ -182,9 +182,11 @@ def init(
         "Sovyx",
         help="Mind name (letters/digits/_/-, 1-64 chars, starts with letter)",
     ),
-    quick: bool = typer.Option(False, "--quick", "-q", help="Quick mode: defaults, zero prompts"),
 ) -> None:
     """Initialize Sovyx: create config files and data directory."""
+    # ``--quick`` was removed 2026-05-02 (mission pre-wake-word T02).
+    # The flag was declared but never honoured because ``init`` is
+    # already non-interactive — there are no prompts to skip.
 
     name = _validate_mind_name(name)
 
@@ -227,10 +229,14 @@ def init(
 
 
 @app.command()
-def start(
-    foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground"),
-) -> None:  # pragma: no cover
+def start() -> None:  # pragma: no cover
     """Start the Sovyx daemon."""
+    # ``--foreground`` was removed 2026-05-02 (mission pre-wake-word T02).
+    # The flag was declared but never honoured — ``sovyx start`` already
+    # blocks in ``run_forever`` and there is no daemonize/fork path that
+    # the flag could disable. Operators wanting backgrounded execution
+    # should use the OS service manager (systemd / launchd / Windows
+    # Service) rather than a Sovyx-internal flag.
     client = _get_client()
     if client.is_daemon_running():
         console.print("[red]Sovyx daemon is already running[/red]")
