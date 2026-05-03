@@ -547,10 +547,18 @@ async def bootstrap(
             )
             await cost_guard.restore()
             registry.register_instance(CostGuard, cost_guard)
+            # Circuit breaker tunables consumed from EngineConfig.tuning.llm
+            # per the 2026-05-02 fix (T01 of pre-wake-word-hardening
+            # mission). Industry-triangulated default of 60 s matches the
+            # previous router-side default — see LLMTuningConfig docstring
+            # for Hystrix/LiteLLM/Polly/Resilience4j comparison.
+            llm_tuning = engine_config.tuning.llm
             router = LLMRouter(
                 providers=providers,
                 cost_guard=cost_guard,
                 event_bus=event_bus,
+                circuit_breaker_failures=llm_tuning.circuit_breaker_failures,
+                circuit_breaker_reset_s=llm_tuning.circuit_breaker_reset_seconds,
             )
             _closables.append(router)
             registry.register_instance(LLMRouter, router)

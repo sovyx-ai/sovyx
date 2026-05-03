@@ -2091,10 +2091,33 @@ class VoiceTuningConfig(BaseSettings):
 
 
 class LLMTuningConfig(BaseSettings):
-    """Tunable thresholds for the LLM router complexity classifier.
+    """Tunable thresholds for the LLM router (complexity classifier + circuit breaker).
 
     Overridable via ``SOVYX_TUNING__LLM__SIMPLE_MAX_LENGTH=300`` etc.
     See :class:`SafetyTuningConfig` for the ``BaseSettings`` rationale.
+
+    Circuit breaker defaults (industry-triangulated for LLM-specific
+    resilience, 2026-05-02):
+
+    * Hystrix (Netflix, OG circuit breaker): 5 s sleep window
+    * LiteLLM (LLM-specific industry leader): 5 s cooldown
+    * Polly (.NET resilience): 30 s break duration
+    * Resilience4j (Java): 60 s wait-in-open-state
+
+    Sovyx adopts **60 s** as the default — the upper end of the
+    industry range for LLM-resilience standards (5–60 s), matching
+    the previous router-side default to avoid surprise behaviour
+    change. Operators wanting more aggressive recovery (à la
+    LiteLLM/Hystrix) can lower via ``SOVYX_TUNING__LLM__CIRCUIT_BREAKER_RESET_SECONDS``.
+
+    Note: ``LLMProviderConfig.circuit_breaker_failures`` and
+    ``circuit_breaker_reset_seconds`` (defined at
+    ``engine/config.py:97-98``) are dead schema fields — the
+    ``LLMDefaultsConfig.providers`` list is never consumed by bootstrap.
+    Those fields will be removed in v0.30.0; for now they remain in the
+    schema to avoid breaking YAML files that reference them. **Operators
+    must use the tunable fields below** — the per-provider fields do
+    nothing.
     """
 
     model_config = SettingsConfigDict(env_prefix="SOVYX_TUNING__LLM__", extra="ignore")
@@ -2103,6 +2126,13 @@ class LLMTuningConfig(BaseSettings):
     simple_max_turns: int = 3
     complex_min_length: int = 2000
     complex_min_turns: int = 8
+
+    # Circuit breaker tunables — see class docstring for industry
+    # triangulation. These are **process-global** (apply to every
+    # provider in the LLMRouter); per-provider overrides may land in a
+    # future minor cycle if operator demand surfaces.
+    circuit_breaker_failures: int = 3
+    circuit_breaker_reset_seconds: int = 60
 
 
 class ObservabilityFeaturesConfig(BaseSettings):

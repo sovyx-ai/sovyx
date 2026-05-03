@@ -404,6 +404,37 @@ class TestTuningEnvOverrides:
         monkeypatch.setenv("SOVYX_TUNING__LLM__SIMPLE_MAX_LENGTH", "123")
         assert LLMTuningConfig().simple_max_length == 123
 
+    def test_llm_tuning_circuit_breaker_defaults(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Circuit breaker defaults match the industry-triangulated 60s
+        chosen 2026-05-02 (matches Resilience4j + previous router default).
+
+        See ``LLMTuningConfig`` docstring for Hystrix/LiteLLM/Polly/
+        Resilience4j industry comparison underlying this default.
+        """
+        for key in list(os.environ):
+            if key.startswith("SOVYX_TUNING__LLM__CIRCUIT"):
+                monkeypatch.delenv(key, raising=False)
+        cfg = LLMTuningConfig()
+        assert cfg.circuit_breaker_failures == 3
+        assert cfg.circuit_breaker_reset_seconds == 60
+
+    def test_llm_tuning_circuit_breaker_env_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``SOVYX_TUNING__LLM__CIRCUIT_BREAKER_*`` env vars flow to the
+        tuning config (which is consumed by ``engine/bootstrap.py`` when
+        constructing the LLMRouter — fixes T01 of the pre-wake-word
+        hardening mission)."""
+        monkeypatch.setenv("SOVYX_TUNING__LLM__CIRCUIT_BREAKER_FAILURES", "7")
+        monkeypatch.setenv("SOVYX_TUNING__LLM__CIRCUIT_BREAKER_RESET_SECONDS", "120")
+        cfg = LLMTuningConfig()
+        assert cfg.circuit_breaker_failures == 7
+        assert cfg.circuit_breaker_reset_seconds == 120
+
     def test_safety_tuning_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SOVYX_TUNING__SAFETY__AUDIT_BUFFER_MAX", "77")
         assert SafetyTuningConfig().audit_buffer_max == 77
@@ -417,6 +448,7 @@ class TestTuningEnvOverrides:
         assert VoiceTuningConfig().transcribe_timeout_seconds == 10.0
         assert BrainTuningConfig().star_topology_k == 15
         assert LLMTuningConfig().simple_max_length == 500
+        assert LLMTuningConfig().circuit_breaker_reset_seconds == 60
         assert SafetyTuningConfig().audit_buffer_max == 100
 
     def test_engine_config_tuning_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
