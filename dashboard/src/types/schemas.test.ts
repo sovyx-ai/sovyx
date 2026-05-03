@@ -5,9 +5,12 @@ import {
   CaptureRestartReasonSchema,
   ForgetMindResponseSchema,
   PruneRetentionResponseSchema,
+  StartTrainingRequestSchema,
+  StartTrainingResponseSchema,
   TrainingJobDetailResponseSchema,
   TrainingJobsResponseSchema,
   TrainingJobStatusSchema,
+  TrainingJobStreamMessageSchema,
   TrainingJobSummarySchema,
   VoiceBypassTierStatusResponseSchema,
   VoiceRestartHistoryResponseSchema,
@@ -919,6 +922,123 @@ describe("CancelJobResponseSchema", () => {
   it("rejects payloads missing booleans", () => {
     expect(() =>
       CancelJobResponseSchema.parse({ job_id: "lucia" }),
+    ).toThrow();
+  });
+});
+
+// ── Mission v0.30.0 §T1.3 — Train Wake Word UI runtime schemas ──
+
+describe("StartTrainingRequestSchema", () => {
+  const valid = {
+    wake_word: "Aria",
+    mind_id: "aria",
+    language: "en",
+    target_samples: 200,
+    voices: [],
+    variants: [],
+    negatives_dir: "/data/negatives",
+  };
+
+  it("parses a valid request", () => {
+    expect(StartTrainingRequestSchema.parse(valid).wake_word).toBe("Aria");
+  });
+
+  it("accepts optional fields omitted (use backend defaults)", () => {
+    const minimal = {
+      wake_word: "Lúcia",
+      mind_id: "lucia",
+      negatives_dir: "/data/negatives",
+    };
+    const parsed = StartTrainingRequestSchema.parse(minimal);
+    expect(parsed.wake_word).toBe("Lúcia");
+  });
+
+  it("rejects target_samples below 100", () => {
+    expect(() =>
+      StartTrainingRequestSchema.parse({ ...valid, target_samples: 50 }),
+    ).toThrow();
+  });
+
+  it("rejects target_samples above 10000", () => {
+    expect(() =>
+      StartTrainingRequestSchema.parse({ ...valid, target_samples: 100_000 }),
+    ).toThrow();
+  });
+
+  it("rejects empty wake_word", () => {
+    expect(() =>
+      StartTrainingRequestSchema.parse({ ...valid, wake_word: "" }),
+    ).toThrow();
+  });
+
+  it("rejects payloads missing required fields", () => {
+    expect(() => StartTrainingRequestSchema.parse({})).toThrow();
+    const { negatives_dir: _omit, ...withoutNeg } = valid;
+    expect(() => StartTrainingRequestSchema.parse(withoutNeg)).toThrow();
+  });
+});
+
+describe("StartTrainingResponseSchema", () => {
+  it("parses a 202 Accepted response", () => {
+    const parsed = StartTrainingResponseSchema.parse({
+      job_id: "lucia",
+      stream_url: "/api/voice/training/jobs/lucia/stream",
+    });
+    expect(parsed.job_id).toBe("lucia");
+    expect(parsed.stream_url).toContain("/stream");
+  });
+
+  it("rejects payloads missing fields", () => {
+    expect(() => StartTrainingResponseSchema.parse({})).toThrow();
+    expect(() =>
+      StartTrainingResponseSchema.parse({ job_id: "lucia" }),
+    ).toThrow();
+  });
+});
+
+describe("TrainingJobStreamMessageSchema", () => {
+  it("parses a snapshot message", () => {
+    const parsed = TrainingJobStreamMessageSchema.parse({
+      type: "snapshot",
+      state: { status: "synthesizing", progress: 0.5, samples_generated: 100 },
+    });
+    expect(parsed.type).toBe("snapshot");
+    if (parsed.type === "snapshot") {
+      expect(parsed.state["status"]).toBe("synthesizing");
+    }
+  });
+
+  it("parses a terminal message", () => {
+    const parsed = TrainingJobStreamMessageSchema.parse({
+      type: "terminal",
+      state: { status: "complete", progress: 1.0 },
+    });
+    expect(parsed.type).toBe("terminal");
+  });
+
+  it("parses an error message", () => {
+    const parsed = TrainingJobStreamMessageSchema.parse({
+      type: "error",
+      message: "job not found: ghost",
+    });
+    expect(parsed.type).toBe("error");
+    if (parsed.type === "error") {
+      expect(parsed.message).toContain("not found");
+    }
+  });
+
+  it("rejects unknown type values", () => {
+    expect(() =>
+      TrainingJobStreamMessageSchema.parse({
+        type: "unknown",
+        state: {},
+      }),
+    ).toThrow();
+  });
+
+  it("rejects snapshot without state field", () => {
+    expect(() =>
+      TrainingJobStreamMessageSchema.parse({ type: "snapshot" }),
     ).toThrow();
   });
 });

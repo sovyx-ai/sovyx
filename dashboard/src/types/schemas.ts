@@ -1454,3 +1454,42 @@ export const CancelJobResponseSchema = z.object({
   cancel_signal_written: z.boolean(),
   already_terminal: z.boolean(),
 });
+
+/* ── Train Wake Word UI runtime schemas — Mission v0.30.0 §T1.1+T1.2 ── */
+
+export const StartTrainingRequestSchema = z.object({
+  wake_word: z.string().min(1).max(64),
+  mind_id: z.string().max(64),
+  language: z.string().max(16).optional(),
+  target_samples: z.number().int().min(100).max(10000).optional(),
+  voices: z.array(z.string()).optional(),
+  variants: z.array(z.string()).optional(),
+  negatives_dir: z.string().min(1),
+});
+
+export const StartTrainingResponseSchema = z.object({
+  job_id: z.string(),
+  stream_url: z.string(),
+});
+
+/**
+ * Discriminated union for the WebSocket stream messages. Three
+ * branches: snapshot (incremental progress), terminal (final state),
+ * error (auth / job-not-found / path-traversal). Zod's
+ * ``z.discriminatedUnion`` enforces the ``type`` field at the schema
+ * level so frontend code gets exhaustive switch-case narrowing.
+ */
+export const TrainingJobStreamMessageSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("snapshot"),
+    state: z.record(z.string(), z.union([z.string(), z.number()])),
+  }),
+  z.object({
+    type: z.literal("terminal"),
+    state: z.record(z.string(), z.union([z.string(), z.number()])),
+  }),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+  }),
+]);

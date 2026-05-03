@@ -1836,3 +1836,59 @@ export interface CancelJobResponse {
   cancel_signal_written: boolean;
   already_terminal: boolean;
 }
+
+/* ── Train Wake Word UI — Mission v0.30.0 §T1.1 + T1.2 ──────────────
+ *
+ * POST /api/voice/training/jobs/start — start a new job. Mirrors the
+ * CLI's TrainingRequest shape (cli/commands/voice.py:440-449).
+ *
+ * WS /api/voice/training/jobs/{job_id}/stream — live progress.
+ * Frontend opens new WebSocket(host + stream_url + "?token=" + token)
+ * and receives discriminated-union messages.
+ */
+
+export interface StartTrainingRequest {
+  /** The wake word to train. Diacritics preserved for audit logs. */
+  wake_word: string;
+  /** Mind that owns the resulting model. Empty string for unattached. */
+  mind_id: string;
+  /** BCP-47 language tag (default ``"en"``). */
+  language?: string;
+  /** Positive samples to synthesize (100-10000; default 200). */
+  target_samples?: number;
+  /** Override Kokoro voice catalogue (empty list uses defaults). */
+  voices?: string[];
+  /** Phrases to render (empty list uses default variants). */
+  variants?: string[];
+  /** Filesystem path with operator-provided non-wake-word audio. */
+  negatives_dir: string;
+}
+
+export interface StartTrainingResponse {
+  /** Filesystem-safe slug derived from wake_word. */
+  job_id: string;
+  /**
+   * Relative WebSocket path for live progress (e.g.,
+   * ``/api/voice/training/jobs/lucia/stream``). Open via
+   * ``new WebSocket(host + stream_url + "?token=" + token)``.
+   */
+  stream_url: string;
+}
+
+/**
+ * Discriminated union for WebSocket messages from
+ * ``WS /api/voice/training/jobs/{job_id}/stream``. Frontend
+ * dispatches on ``type`` to update Zustand state.
+ *
+ * * ``snapshot`` — incremental progress; ``state`` carries the
+ *   most-recent ``TrainingJobState`` fields.
+ * * ``terminal`` — emitted ONCE when the orchestrator writes a
+ *   terminal status (COMPLETE / FAILED / CANCELLED). After this
+ *   message the server closes the socket cleanly (code 1000).
+ * * ``error`` — auth / job-not-found / path-traversal failure.
+ *   Server closes after sending.
+ */
+export type TrainingJobStreamMessage =
+  | { type: "snapshot"; state: Record<string, string | number> }
+  | { type: "terminal"; state: Record<string, string | number> }
+  | { type: "error"; message: string };
