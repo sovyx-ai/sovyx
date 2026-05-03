@@ -715,13 +715,45 @@ async def create_voice_pipeline(
         # value is identical to the one threaded through the rest of
         # the factory (both come from EngineConfig.tuning.voice).
         from sovyx.engine.config import VoiceTuningConfig  # noqa: PLC0415
+        from sovyx.engine.errors import VoiceError  # noqa: PLC0415
 
         _tuning_for_router = VoiceTuningConfig()
-        wake_word_router = await asyncio.to_thread(
-            build_wake_word_router_for_enabled_minds,
-            data_dir=data_dir,
-            phonetic_max_distance=_tuning_for_router.wake_word_phonetic_max_distance,
-        )
+        # T2 of MISSION-pre-wake-word-ui-hardening (2026-05-03):
+        # defense-in-depth pair to T1's refuse-to-persist. T1 prevents
+        # NEW bricked configs from being written via the dashboard
+        # endpoint; T2 catches OLD bricked configs that already exist
+        # on disk (operators upgrading from v0.28.2.0 → v0.28.3 may
+        # have a persisted ``wake_word_enabled: true`` without a
+        # trained ONNX — that was the v0.28.2 footgun). The helper
+        # raises VoiceError on NONE strategy by design (refuse-to-
+        # start fresh installs); here we degrade-on-stale-config so
+        # ONE bad mind doesn't block voice for ALL minds. Operators
+        # see the structured ERROR + can re-toggle from the dashboard
+        # once they train the missing model. Catching only VoiceError
+        # (not blanket Exception) preserves loud-failure behaviour for
+        # genuine helper bugs (KeyError, RuntimeError, …).
+        try:
+            wake_word_router = await asyncio.to_thread(
+                build_wake_word_router_for_enabled_minds,
+                data_dir=data_dir,
+                phonetic_max_distance=_tuning_for_router.wake_word_phonetic_max_distance,
+            )
+        except VoiceError as exc:
+            logger.error(
+                "voice.factory.wake_word_router_init_failed",
+                **{
+                    "voice.error": str(exc),
+                    "voice.degraded_to": "router=None",
+                    "voice.remediation": (
+                        "fix the offending mind's wake_word_enabled "
+                        "config (set false, OR train via "
+                        "`sovyx voice train-wake-word`, OR drop "
+                        "<wake_word>.onnx into the pretrained pool); "
+                        "then restart the daemon"
+                    ),
+                },
+            )
+            wake_word_router = None
 
     # ── 5. Resolve device + detect capture APOs BEFORE the pipeline ──
     # The detector result (``voice_clarity_active``) is threaded into
