@@ -4,7 +4,8 @@
     "general": "General",
     "mind": "Mente",
     "providers": "Proveedores LLM",
-    "exportImport": "Exportar / Importar"
+    "exportImport": "Exportar / Importar",
+    "displayLanguage": "Visualización e Idioma"
   },
   "general": {
     "logLevel": "Nivel de Log",
@@ -190,6 +191,18 @@
     "failed": "No se pudo actualizar el modo de captura: {{error}}",
     "knownApos": "APOs detectados: {{list}}",
     "activeDevice": "Micrófono activo: {{device}}"
+  },
+  "displayLanguage": {
+    "title": "Visualización e Idioma",
+    "description": "Elige el idioma usado en todo el panel. Tu selección se guarda localmente y se usa en cada visita.",
+    "selectorLabel": "Idioma del panel",
+    "options": {
+      "en": "English",
+      "pt-BR": "Português (Brasil)",
+      "es": "Español"
+    },
+    "autoDetected": "Idioma cambiado a {{name}} según la configuración de tu navegador.",
+    "autoDetectedUndo": "Usar English"
   },
   "exportImport": {
     "title": "Exportar / Importar",

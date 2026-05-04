@@ -4,7 +4,8 @@
     "general": "General",
     "mind": "Mind",
     "providers": "LLM Providers",
-    "exportImport": "Export / Import"
+    "exportImport": "Export / Import",
+    "displayLanguage": "Display & Language"
   },
   "general": {
     "logLevel": "Log Level",
@@ -190,6 +191,18 @@
     "failed": "Could not update capture mode: {{error}}",
     "knownApos": "Detected APOs: {{list}}",
     "activeDevice": "Active microphone: {{device}}"
+  },
+  "displayLanguage": {
+    "title": "Display & Language",
+    "description": "Choose the language used across the dashboard. Your selection is saved locally and used on every visit.",
+    "selectorLabel": "Dashboard language",
+    "options": {
+      "en": "English",
+      "pt-BR": "Português (Brasil)",
+      "es": "Español"
+    },
+    "autoDetected": "Language switched to {{name}} based on your browser settings.",
+    "autoDetectedUndo": "Use English"
   },
   "exportImport": {
     "title": "Export / Import",
