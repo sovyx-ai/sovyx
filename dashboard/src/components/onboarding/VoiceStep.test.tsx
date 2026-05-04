@@ -146,4 +146,40 @@ describe("VoiceStep", () => {
     const [, body] = mockPost.mock.calls[0];
     expect(body).toEqual({ input_device: 0, output_device: 1 });
   });
+
+  it("does not mount the wizard by default (opt-in affordance)", async () => {
+    stubGets();
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+    await screen.findByText(/8 cores/i);
+    // Button is rendered, but wizard surface (its testid) is not.
+    expect(
+      screen.getByRole("button", { name: /open setup wizard/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("voice-setup-wizard")).not.toBeInTheDocument();
+  });
+
+  it("mounts wizard inline when 'Test microphone' is clicked", async () => {
+    // Wizard's own mount fetches /api/voice/wizard/devices on mount —
+    // stub it so the component's loading effect resolves.
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/api/voice/hardware-detect") return Promise.resolve(hardwareInfo);
+      if (url === "/api/voice/voices") return Promise.resolve(voiceCatalog);
+      if (url === "/api/voice/models/status") return Promise.resolve(modelsStatus);
+      if (url === "/api/voice/wizard/devices") return Promise.resolve({ devices: [] });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+    await screen.findByText(/8 cores/i);
+
+    const testBtn = screen.getByRole("button", { name: /open setup wizard/i });
+    fireEvent.click(testBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-setup-wizard")).toBeInTheDocument();
+    });
+    // The opt-in button is gone while the wizard is open.
+    expect(
+      screen.queryByRole("button", { name: /open setup wizard/i }),
+    ).not.toBeInTheDocument();
+  });
 });

@@ -14,6 +14,7 @@ import {
   type SelectedDevices,
   type SelectedVoice,
 } from "@/components/setup-wizard";
+import { VoiceSetupWizard } from "@/components/setup-wizard/VoiceSetupWizard";
 import {
   DeviceContentionBanner,
   type AlternativeDevice,
@@ -55,6 +56,8 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
     null,
   );
   const [copied, setCopied] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardTested, setWizardTested] = useState(false);
   const [devices, setDevices] = useState<SelectedDevices>({
     input_device: null,
     output_device: null,
@@ -174,6 +177,39 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
         onVoiceChange={handleVoiceChange}
         initialLanguage={language}
       />
+
+      {/* Optional pre-enable mic test — wizard mounts inline. The wizard
+          itself is application-scope (does not persist to mind.yaml in
+          v0.30.x); operator still completes the enable flow below to
+          activate voice. Mirror of the voice.tsx Section pattern. */}
+      {!enabled && !missingDeps && (
+        <div className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] p-3">
+          {wizardOpen ? (
+            <VoiceSetupWizard
+              onComplete={() => {
+                setWizardTested(true);
+                setWizardOpen(false);
+              }}
+              onCancel={() => setWizardOpen(false)}
+            />
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-[var(--svx-color-text-secondary)]">
+                {wizardTested
+                  ? "Microphone tested — proceed to enable voice."
+                  : "Walk through 4 steps to pick + test your microphone (optional)."}
+              </p>
+              <button
+                type="button"
+                onClick={() => setWizardOpen(true)}
+                className="shrink-0 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-accent)] bg-[var(--svx-color-accent-soft)] px-3 py-1 text-xs font-medium text-[var(--svx-color-accent)] hover:bg-[var(--svx-color-accent)] hover:text-white"
+              >
+                {wizardTested ? "Re-open setup wizard" : "Open setup wizard"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Success state */}
       {enabled && (
