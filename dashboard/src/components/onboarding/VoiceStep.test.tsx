@@ -83,6 +83,11 @@ function stubGets() {
 beforeEach(() => {
   mockGet.mockReset();
   mockPost.mockReset();
+  // Default for telemetry POSTs from VoiceSetupWizard (Mission v0.30.1
+  // §T1.2). When VoiceStep mounts the wizard inline, the wizard's
+  // step_dwell + completion telemetry calls api.post; without a
+  // default, undefined.catch() crashes the cleanup hook on unmount.
+  mockPost.mockResolvedValue({ ok: true });
 });
 
 describe("VoiceStep", () => {

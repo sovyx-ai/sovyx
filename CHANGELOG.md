@@ -6,7 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.30.0 below)
+(none — every shipped delta is in 0.30.1 below)
+
+## [0.30.1] — 2026-05-03
+
+### Closure batch — onboarding wizard integration + A/B telemetry
+
+Phase 1 of `MISSION-claude-autonomous-batch-2026-05-03` (gitignored).
+Two operator-facing improvements + the regen of the operator debt
+ledger reflecting v0.30.0's closures.
+
+### Added
+
+* **T1.1 — `VoiceSetupWizard` opt-in affordance in onboarding flow**
+  (`9fbec87`). New collapsible "Open setup wizard" button mounted
+  inside the existing `VoiceStep` between `HardwareDetection` and
+  the success/missing-deps banners. Mirrors the existing voice.tsx
+  Section pattern from v0.30.0 §T2. The wizard is OPT-IN — operators
+  who want the 4-step record + diagnostic check click the button;
+  operators who don't get the same enable flow as before. Zero
+  regression on the production path; flagged for D22 batch
+  validation.
+* **T1.2 — Voice wizard A/B telemetry instruments + frontend hooks**
+  (`dd1d793`). Two low-cardinality OTel instruments answer the
+  post-D22-pilot question "is the wizard better than the legacy
+  modal?":
+  * `sovyx.voice.wizard.step.dwell.latency` (histogram, attribute
+    `step` ∈ {devices, record, results, save, done}).
+  * `sovyx.voice.wizard.completion.rate` (counter, attributes
+    `outcome` ∈ {completed, abandoned} + `exit_step`).
+
+  New `POST /api/voice/wizard/telemetry` (204 No Content) accepts a
+  discriminated-union body with pydantic-bounded `duration_ms` ∈
+  [0, 1 h]. Frontend `VoiceSetupWizard.tsx` instrumented via two
+  refs + two `useEffect` hooks; emission is best-effort (network
+  failures swallowed so wizard UX is never blocked). 18 new backend
+  cases + 3 new frontend cases.
+
+### Changed
+
+* **T1.3 — Operator debt master ledger regen**. In-place update of
+  `OPERATOR-DEBT-MASTER-2026-05-03.md` (gitignored) reflecting
+  v0.30.0 closures: D15 (T27 Tier 1 RAW DEPRECATED), D23 (Train
+  Wake Word UI shipped). Two enterprise-grade ratifications under
+  operator delegation (per `RESPONSIBILITIES-MAP-2026-05-03.md`
+  PART 1B): D10 → option (b) framework-only (PHONETIC + Train UI
+  cover the use cases at zero GPU cost); D4 → DEFER UNTIL D14
+  telemetry validates < 0.1 % mismatch rate (LENIENT remains
+  correct).
+
+### Out of scope (deferred — see mission PART 6)
+
+* STT-fallback NONE strategy → own research-first mission per
+  "logic 100 % internalized" contract; the v0.28.2 R3 blockers
+  still hold and require deep design clarity.
+* 4 Phase 3 default-flag flips → operator-blocked on D1/D2/D3
+  telemetry pilots.
+* v0.31.0 final GA tag → 6-8 weeks gated on D22 batch validation +
+  D2 + D1 + 30-day soak.
 
 ## [0.30.0] — 2026-05-03
 
