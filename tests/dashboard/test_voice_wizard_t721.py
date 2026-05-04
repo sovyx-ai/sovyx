@@ -81,8 +81,19 @@ class _ErroringRecorder:
 
 
 def _build_app(*, recorder: WizardRecorder | None = None) -> Any:  # noqa: ANN401
+    """Build the dashboard app for tests.
+
+    ``create_app`` now wires a real ``SoundDeviceWizardRecorder`` onto
+    ``app.state`` so production routes are usable on first boot. Tests
+    that want to exercise the 503 / pre-init path or inject a
+    deterministic stub override the attribute explicitly here:
+    ``recorder=None`` clears the production recorder, while a
+    non-None recorder replaces it.
+    """
     app = create_app(token=_TOKEN)
-    if recorder is not None:
+    if recorder is None:
+        app.state.wizard_recorder = None
+    else:
         app.state.wizard_recorder = recorder
     return app
 
@@ -181,6 +192,32 @@ class TestListDevices:
 
 
 # ── T7.22 test-record ───────────────────────────────────────────────
+
+
+class TestProductionRecorderRegistration:
+    """Regression: ``create_app`` MUST wire a production recorder.
+
+    Before v0.30.8 the ``/api/voice/wizard/test-record`` route returned
+    503 to every operator click because nothing in the daemon ever
+    instantiated :class:`SoundDeviceWizardRecorder` and bound it to
+    ``app.state.wizard_recorder`` — the route's docstring promised the
+    binding but no caller delivered it. Verified live in operator log
+    ``logs_teste.txt`` (``POST /api/voice/wizard/test-record → 503``,
+    five times, 06:28:12-42 on a freshly booted daemon).
+    """
+
+    def test_create_app_registers_real_recorder(self) -> None:
+        from sovyx.dashboard.routes.voice_wizard import (
+            SoundDeviceWizardRecorder,
+        )
+        from sovyx.dashboard.server import create_app
+
+        app = create_app(token=_TOKEN)
+        recorder = getattr(app.state, "wizard_recorder", None)
+        assert isinstance(recorder, SoundDeviceWizardRecorder), (
+            "create_app must wire a SoundDeviceWizardRecorder so the "
+            "wizard route doesn't 503 on first operator click"
+        )
 
 
 class TestTestRecord:

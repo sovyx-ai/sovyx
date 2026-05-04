@@ -412,6 +412,18 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
 
     app.state.import_tracker = ImportProgressTracker()
 
+    # Voice setup wizard recorder — production binding. The
+    # ``/api/voice/wizard/test-record`` route (voice_wizard.py:519)
+    # resolves this off ``request.app.state`` and returns 503 when
+    # absent. The class is constructed lazily — it does NOT import
+    # ``sounddevice`` until ``record()`` is called — so wiring it here
+    # remains safe on hosts without audio hardware. Tests that need
+    # the 503 path or a deterministic stub override the attribute
+    # explicitly after :func:`create_app` returns.
+    from sovyx.dashboard.routes.voice_wizard import SoundDeviceWizardRecorder
+
+    app.state.wizard_recorder = SoundDeviceWizardRecorder()
+
     # ── Auth dependency (using Header) ──
 
     from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
