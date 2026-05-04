@@ -1,0 +1,141 @@
+{
+  "title": "Vista general",
+  "subtitle": "Tu Mente de un vistazo",
+  "subtitleFresh": "Tu Mente está despierta. Inicia una conversación para darle vida.",
+  "subtitleProgress": "Casi listo — termina de configurar tu Mente.",
+  "cards": {
+    "engineStatus": "Estado de la Mente",
+    "uptime": "Tiempo activo: {{duration}}",
+    "justBooted": "Recién despertó — lista para pensar",
+    "messages": "Mensajes",
+    "messagesFresh": "—",
+    "messagesHint": "Esperando primer mensaje",
+    "activeCount": "{{count}} activas",
+    "brainConcepts": "Cerebro",
+    "episodeCount": "{{count}} episodios",
+    "brainFresh": "Vacío",
+    "brainHint": "Aprende de la conversación",
+    "llmCost": "Costo LLM",
+    "costFresh": "—",
+    "costHint": "Sin llamadas hoy",
+    "costSubtitle": "{{calls}} llamadas · {{tokens}} tokens"
+  },
+  "health": {
+    "title": "Verificaciones de Salud"
+  },
+  "chart": {
+    "costTitle": "Costo LLM (24h)",
+    "costLabel": "Costo",
+    "noData": "Aún no hay datos de costo"
+  },
+  "events": {
+    "PerceptionReceived": "Percepción",
+    "ThinkCompleted": "Pensar",
+    "ResponseSent": "Respuesta",
+    "ConceptCreated": "Concepto",
+    "EpisodeEncoded": "Episodio",
+    "ServiceHealthChanged": "Salud",
+    "ConsolidationCompleted": "Consolidación",
+    "DreamCompleted": "Sueño",
+    "EngineStarted": "Engine Iniciado",
+    "EngineStopping": "Engine Deteniéndose",
+    "ChannelConnected": "Canal",
+    "ChannelDisconnected": "Canal",
+    "ChatMessage": "Chat",
+    "unknown": "Evento"
+  },
+  "eventSummary": {
+    "PerceptionReceived": "de {{source}} ({{person}})",
+    "ThinkCompleted": "{{model}} — {{tokensIn}}+{{tokensOut}} tokens — ${{cost}}",
+    "ResponseSent": "vía {{channel}} ({{latency}}ms)",
+    "ConceptCreated": "Creado: {{title}}",
+    "EpisodeEncoded": "importancia: {{importance}}",
+    "ServiceHealthChanged": "{{service}}: {{status}}",
+    "ConsolidationCompleted": "fusionados: {{merged}}, podados: {{pruned}}, fortalecidos: {{strengthened}}",
+    "DreamCompleted": "{{patterns}} patrones, {{concepts}} conceptos derivados, {{relations}} relaciones fortalecidas",
+    "EngineStarted": "Engine iniciado",
+    "EngineStopping": "Deteniendo: {{reason}}",
+    "ChannelConnected": "{{channel}} conectado",
+    "ChannelDisconnected": "{{channel}} desconectado: {{reason}}",
+    "ChatMessage": "{{defaultValue}}"
+  },
+  "feed": {
+    "title": "Feed en vivo",
+    "empty": "Escuchando eventos…",
+    "emptyHint": "Los eventos aparecen aquí en tiempo real mientras tu Mente piensa."
+  },
+  "timeline": {
+    "title": "Línea de tiempo cognitiva",
+    "empty": "Aún no hay actividad cognitiva",
+    "emptyHint": "Inicia una conversación para ver pensar a tu Mente.",
+    "groupJustNow": "Ahora mismo",
+    "groupEarlierToday": "Más temprano hoy",
+    "groupYesterday": "Ayer",
+    "conceptsLearned": "{{count}} conceptos aprendidos",
+    "episodeEncoded": "Episodio codificado (importancia: {{importance}})",
+    "conversation": "Conversación en {{channel}} ({{messages}} msgs)",
+    "message": "Mensaje intercambiado",
+    "consolidation": "Consolidación: {{merged}} fusionados, {{pruned}} podados, {{strengthened}} fortalecidos"
+  },
+  "welcome": {
+    "title": "Bienvenido a Sovyx",
+    "subtitle": "Tu engine de mente está listo. Sigue estos pasos para comenzar.",
+    "progress": "{{completed}} de {{total}}",
+    "progressDone": "Todo listo ✓",
+    "stepDone": "Hecho",
+    "dismissLabel": "Descartar guía de configuración",
+    "step1Title": "Configura tu clave LLM",
+    "step1Desc": "Agrega tu clave de API OpenAI, Anthropic u otra LLM en Configuración.",
+    "step2Title": "Envía tu primer mensaje",
+    "step2Desc": "Abre Chat e inicia una conversación con tu mente. Aprende de cada interacción.",
+    "step3Title": "Mira crecer a tu mente",
+    "step3Desc": "Mientras conversas, tu mente construye conceptos, forma memorias y desarrolla su personalidad.",
+    "goSettings": "Ir a Configuración",
+    "goChat": "Abrir Chat",
+    "stepLabel": "Paso {{step}}"
+  },
+  "usage": {
+    "title": "Uso este mes",
+    "total": "Total: {{cost}} a lo largo de {{days}} días",
+    "noHistory": "Aún no hay historial de uso",
+    "messages": "mensajes"
+  },
+  "alive": {
+    "title": "Tu mente está viva.",
+    "concepts": "conceptos",
+    "memories": "memorias",
+    "messages": "mensajes",
+    "activeFor": "Activa por {{duration}}",
+    "exploreBrain": "Explorar Cerebro",
+    "openChat": "Abrir Chat",
+    "dismiss": "Cerrar",
+    "conversations": "conversaciones"
+  },
+  "channelSetup": {
+    "getToken": "Obtén un token de bot en",
+    "pasteToken": "Pega tu token abajo",
+    "connect": "Conectar",
+    "connecting": "Conectando...",
+    "connected": "Conectado",
+    "failed": "Conexión fallida",
+    "invalidToken": "Token inválido",
+    "networkError": "No se pudo conectar — verifica tu red",
+    "signalRequires": "Signal requiere un contenedor Docker separado en ejecución",
+    "signalConfigure": "Configura el número de teléfono y la URL de la API en mind.yaml, luego reinicia Sovyx.",
+    "done": "Hecho",
+    "connectedTo": "Conectado a @{{username}}",
+    "restartToActivate": "Reinicia Sovyx para activar el canal.",
+    "activeNow": "Conectado y activo ahora. No se necesita reiniciar.",
+    "tokenLabel": "Token del bot"
+  },
+  "channels": {
+    "title": "Canales",
+    "connected": "Conectado",
+    "setUp": "Configurar"
+  },
+  "connectionError": {
+    "title": "No se pudo conectar",
+    "subtitle": "El panel no puede alcanzar el engine Sovyx. Confirma que esté en ejecución.",
+    "retry": "Reintentar conexión"
+  }
+}

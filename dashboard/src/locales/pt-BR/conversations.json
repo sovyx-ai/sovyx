@@ -1,0 +1,22 @@
+{
+  "title": "Conversas",
+  "search": "Buscar conversas...",
+  "list": {
+    "empty": "Nenhuma conversa ainda",
+    "emptyHint": "Envie uma mensagem pelo Telegram para iniciar um diálogo com sua Mente."
+  },
+  "detail": {
+    "backLabel": "Voltar para conversas",
+    "messageCount_one": "{{count}} mensagem",
+    "messageCount_other": "{{count}} mensagens",
+    "selectTitle": "Selecione uma conversa",
+    "selectHint": "Escolha na lista para ver as mensagens.",
+    "sendPlaceholder": "Envio pelo painel chega na v1.0",
+    "emptyThread": "Nenhuma mensagem nesta conversa ainda."
+  },
+  "error": {
+    "loadFailed": "Falha ao carregar conversas",
+    "messagesFailed": "Falha ao carregar mensagens"
+  },
+  "unknownParticipant": "Desconhecido"
+}

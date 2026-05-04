@@ -1,0 +1,22 @@
+{
+  "title": "Conversaciones",
+  "search": "Buscar conversaciones...",
+  "list": {
+    "empty": "Aún no hay conversaciones",
+    "emptyHint": "Envía un mensaje por Telegram para iniciar un diálogo con tu Mente."
+  },
+  "detail": {
+    "backLabel": "Volver a conversaciones",
+    "messageCount_one": "{{count}} mensaje",
+    "messageCount_other": "{{count}} mensajes",
+    "selectTitle": "Selecciona una conversación",
+    "selectHint": "Elige de la lista para ver los mensajes.",
+    "sendPlaceholder": "El envío desde el panel llega en v1.0",
+    "emptyThread": "Aún no hay mensajes en esta conversación."
+  },
+  "error": {
+    "loadFailed": "Falló al cargar conversaciones",
+    "messagesFailed": "Falló al cargar mensajes"
+  },
+  "unknownParticipant": "Desconocido"
+}

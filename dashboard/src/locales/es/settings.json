@@ -1,0 +1,209 @@
+{
+  "title": "Configuración",
+  "tabs": {
+    "general": "General",
+    "mind": "Mente",
+    "providers": "Proveedores LLM",
+    "exportImport": "Exportar / Importar"
+  },
+  "general": {
+    "logLevel": "Nivel de Log",
+    "dataDir": "Directorio de Datos",
+    "saved": "Configuración guardada.",
+    "saveFailed": "Falló al guardar configuración.",
+    "loadFailed": "Falló al cargar configuración.",
+    "engineConfig": "Configuración del Engine",
+    "engineConfigDesc": "Solo lectura. Edita system.yaml para cambiar estos valores.",
+    "runtimeSettings": "Configuración mutable en tiempo de ejecución. Los cambios surten efecto inmediatamente.",
+    "logFormat": "Formato de Log",
+    "logFile": "Archivo de Log",
+    "telemetryLabel": "Telemetría",
+    "apiEndpoint": "API",
+    "relayLabel": "Relay",
+    "enabled": "Habilitado",
+    "disabled": "Deshabilitado"
+  },
+  "providers": {
+    "title": "Proveedores LLM",
+    "description": "Configura qué proveedor de IA alimenta tu mente.",
+    "cloudProviders": "Proveedores en la Nube",
+    "localProvider": "Proveedor Local",
+    "configured": "configurado",
+    "notConfigured": "no configurado",
+    "running": "corriendo",
+    "notRunning": "no está corriendo",
+    "models": "modelos",
+    "selectModel": "Modelo",
+    "chooseModel": "Elige un modelo...",
+    "active": "Activo",
+    "noneSelected": "ninguno seleccionado",
+    "refresh": "Actualizar",
+    "save": "Guardar Cambios",
+    "saved": "Proveedor actualizado con éxito.",
+    "saveFailed": "Falló al actualizar proveedor.",
+    "loadFailed": "Falló al cargar proveedores.",
+    "retry": "Reintentar",
+    "ollamaInstructions": "Instala Ollama desde ollama.com y luego ejecuta: ollama serve",
+    "noProviderTitle": "Ningún proveedor configurado",
+    "cloudSetup": "Nube (requiere clave de API):",
+    "cloudInstructions": "Define una como variable de entorno y reinicia:",
+    "localSetup": "Local (gratis):",
+    "ollamaStep1": "Instala Ollama desde ollama.com",
+    "ollamaStep3": "Haz clic en \"Actualizar\" abajo"
+  },
+  "mind": {
+    "identity": "Identidad de la Mente",
+    "name": "Nombre",
+    "language": "Idioma",
+    "timezone": "Zona horaria",
+    "loadingConfig": "Cargando configuración de la mente...",
+    "noMindLoaded": "Ninguna Mente Cargada",
+    "noMindDescription": "La personalidad y la configuración OCEAN aparecerán cuando una mente esté activa."
+  },
+  "personality": {
+    "title": "Personalidad",
+    "description": "Estilo conversacional y rasgos de comportamiento. Los cambios se aplican inmediatamente a nuevas conversaciones.",
+    "tone": "Tono",
+    "savePersonality": "Guardar Personalidad",
+    "traits": {
+      "formality": "Formalidad",
+      "humor": "Humor",
+      "assertiveness": "Asertividad",
+      "curiosity": "Curiosidad",
+      "empathy": "Empatía",
+      "verbosity": "Verbosidad"
+    },
+    "traitLow": {
+      "formality": "Casual",
+      "humor": "Serio",
+      "assertiveness": "Deferente",
+      "curiosity": "Enfocado",
+      "empathy": "Analítico",
+      "verbosity": "Breve"
+    },
+    "traitHigh": {
+      "formality": "Formal",
+      "humor": "Bromista",
+      "assertiveness": "Asertivo",
+      "curiosity": "Curioso",
+      "empathy": "Empático",
+      "verbosity": "Detallado"
+    },
+    "tones": {
+      "warm": "Cálido",
+      "neutral": "Neutral",
+      "direct": "Directo",
+      "playful": "Bromista"
+    }
+  },
+  "ocean": {
+    "title": "OCEAN — Big Five de Personalidad",
+    "description": "Modelo central de personalidad que moldea cómo la mente piensa y se comunica.",
+    "traits": {
+      "openness": "Apertura",
+      "conscientiousness": "Conciencia",
+      "extraversion": "Extraversión",
+      "agreeableness": "Amabilidad",
+      "neuroticism": "Neuroticismo"
+    },
+    "traitLow": {
+      "openness": "Práctico",
+      "conscientiousness": "Flexible",
+      "extraversion": "Reflexivo",
+      "agreeableness": "Desafiante",
+      "neuroticism": "Calmado"
+    },
+    "traitHigh": {
+      "openness": "Creativo",
+      "conscientiousness": "Organizado",
+      "extraversion": "Energético",
+      "agreeableness": "Armonioso",
+      "neuroticism": "Sensible"
+    }
+  },
+  "safety": {
+    "title": "Guardrails de Seguridad",
+    "description": "Filtrado de contenido, protección de PII y reglas personalizadas.",
+    "contentFilter": "Filtro de Contenido",
+    "contentFilterDesc": "Controla qué patrones de entrada y salida se bloquean.",
+    "childSafeMode": "Modo Seguro para Niños",
+    "childSafeModeDesc": "Todo el contenido debe ser apropiado para menores de 10 años",
+    "childSafeWarning": "Modo Seguro para Niños activo. Filtro de contenido, protección de PII y confirmación financiera se imponen automáticamente.",
+    "childSafeEnforced": "Impuesto por Modo Seguro para Niños",
+    "financialConfirmation": "Confirmación Financiera",
+    "financialConfirmationDesc": "Requerir confirmación explícita antes de ejecutar acciones financieras (pagos, transferencias, operaciones)",
+    "confirmationMethod": "Método de Confirmación",
+    "confirmationMethodInlineButtons": "Botones en línea",
+    "confirmationMethodTextClassification": "Clasificación de texto",
+    "confirmationMethodDisabled": "Deshabilitado",
+    "classificationFallback": "Fallback de Clasificación",
+    "classificationFallbackLlm": "LLM (cualquier idioma)",
+    "classificationFallbackRegex": "Regex (solo PT/EN)",
+    "confirmationChannels": "Soporte por Canal",
+    "channelSupportsButtons": "Botones",
+    "channelTextOnly": "Solo texto",
+    "piiProtection": "Protección de PII",
+    "piiProtectionDesc": "Redacta automáticamente datos personales (correos, teléfonos, CPFs, claves de API) de las respuestas de la IA",
+    "guardrails": "Reglas Personalizadas",
+    "guardrailsDesc": "Reglas absolutas inyectadas en el prompt del sistema. Las reglas integradas no pueden eliminarse.",
+    "guardrailBuiltin": "Integrada",
+    "guardrailCustom": "Personalizada",
+    "guardrailAdd": "Agregar Regla",
+    "guardrailPlaceholder": "Ingresa una regla de guardrail...",
+    "guardrailSeverity": "Severidad",
+    "guardrailCritical": "Crítica",
+    "guardrailWarning": "Aviso",
+    "patternCount": "{{count}} patrones activos",
+    "filters": {
+      "none": "Ninguno",
+      "standard": "Estándar",
+      "strict": "Estricto"
+    },
+    "filterTooltips": {
+      "none": "Sin filtrado de contenido. Todos los mensajes pasan sin filtrar.",
+      "standard": "Bloquea contenido nocivo: violencia, armas, autolesiones, hacking, actividades ilegales.",
+      "strict": "Bloquea nocivo + adulto, sustancias, juegos de azar, discurso de odio, manipulación."
+    }
+  },
+  "llmBrain": {
+    "title": "Parámetros LLM y Cerebro",
+    "description": "Parámetros del modelo y configuración del sistema de memoria (solo lectura).",
+    "temperature": "Temperatura",
+    "dailyBudget": "Presupuesto Diario",
+    "perConvBudget": "Presupuesto Por Conversación",
+    "brainMaxConcepts": "Máx. de Conceptos del Cerebro",
+    "consolidation": "Consolidación",
+    "consolidationValue": "Cada {{hours}}h"
+  },
+  "voiceClarity": {
+    "title": "Calidad de la entrada del micrófono",
+    "alertTitle": "Windows Voice Clarity detectado",
+    "alertBody": "Windows está corriendo un APO de supresión de ruido en \"{{device}}\" que puede bloquear la detección de habla. Habilita el modo exclusivo WASAPI para esquivarlo.",
+    "enableExclusive": "Habilitar modo exclusivo",
+    "disableExclusive": "Deshabilitar modo exclusivo",
+    "alreadyExclusive": "El modo exclusivo está activo — cadena de APO esquivada.",
+    "checking": "Verificando micrófono...",
+    "noIssues": "No se detectaron problemas de captura-APO en este sistema.",
+    "enableSuccess": "Modo exclusivo habilitado y aplicado inmediatamente.",
+    "enableSuccessRestart": "Modo exclusivo guardado. Reinicia el pipeline para aplicar.",
+    "disableSuccess": "Modo exclusivo deshabilitado. Reinicia para volver al modo compartido.",
+    "failed": "No se pudo actualizar el modo de captura: {{error}}",
+    "knownApos": "APOs detectados: {{list}}",
+    "activeDevice": "Micrófono activo: {{device}}"
+  },
+  "exportImport": {
+    "title": "Exportar / Importar",
+    "description": "Descarga o restaura los datos de tu mente. Tus datos, tu soberanía.",
+    "exportButton": "Exportar Mente",
+    "importButton": "Importar Mente",
+    "exportSuccess": "Mente exportada con éxito.",
+    "exportFailed": "Falló la exportación: {{error}}",
+    "importSuccess": "{{concepts}} conceptos y {{episodes}} episodios importados.",
+    "importFailed": "Falló la importación: {{error}}",
+    "invalidFile": "Selecciona un archivo .sovyx-mind.",
+    "confirmTitle": "Importar Datos de la Mente",
+    "confirmDescription": "Esto importará datos desde \"{{filename}}\". Los datos existentes de la mente pueden verse afectados. Esta acción no se puede deshacer.",
+    "confirmImport": "Importar",
+    "gdprNote": "Conforme a GDPR Art. 20 — tus datos en formato portable y legible por máquina."
+  }
+}

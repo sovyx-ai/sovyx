@@ -1,0 +1,56 @@
+{
+  "title": "Explorador del Cerebro",
+  "search": "Buscar conceptos...",
+  "stats": {
+    "concepts": "{{count}} conceptos",
+    "relations": "{{count}} relaciones"
+  },
+  "categories": {
+    "fact": "Hecho",
+    "preference": "Preferencia",
+    "entity": "Entidad",
+    "skill": "Habilidad",
+    "belief": "Creencia",
+    "event": "Evento",
+    "relationship": "Relación"
+  },
+  "relations": {
+    "related_to": "Relacionado",
+    "part_of": "Parte de",
+    "causes": "Causa",
+    "contradicts": "Contradice",
+    "example_of": "Ejemplo",
+    "temporal": "Temporal",
+    "emotional": "Emocional"
+  },
+  "detail": {
+    "category": "Categoría",
+    "importance": "Importancia",
+    "confidence": "Confianza",
+    "accessCount": "Accesos",
+    "close": "Cerrar detalle"
+  },
+  "empty": "Aún no hay conceptos",
+  "emptyDescription": "Los conceptos aparecerán a medida que el engine aprenda de las conversaciones.",
+  "error": {
+    "loadFailed": "Falló al cargar el grafo del cerebro",
+    "engineHint": "Verifica que el engine esté en ejecución.",
+    "retry": "Reintentar"
+  },
+  "graph": {
+    "regionLabel": "Grafo de conocimiento del cerebro — {{nodes}} conceptos y {{links}} relaciones",
+    "a11ySummary": "Grafo interactivo dirigido por fuerzas con {{nodes}} conceptos conectados por {{links}} relaciones. La visualización en canvas no es accesible por teclado; las tablas de abajo listan los mismos datos en formato accesible para lectores de pantalla.",
+    "a11yConceptsHeading": "Conceptos",
+    "a11yRelationsHeading": "Relaciones",
+    "a11yTableColName": "Nombre",
+    "a11yTableColCategory": "Categoría",
+    "a11yTableColImportance": "Importancia",
+    "a11yTableColConnections": "Conexiones",
+    "a11yRelationsTableColSource": "De",
+    "a11yRelationsTableColTarget": "A",
+    "a11yRelationsTableColType": "Tipo",
+    "a11yRelationsTableColWeight": "Peso",
+    "a11yContradictsBadge": "contradicción",
+    "a11yRelationsTruncated": "{{shown}} de {{total}} relaciones mostradas (más fuertes por peso)."
+  }
+}

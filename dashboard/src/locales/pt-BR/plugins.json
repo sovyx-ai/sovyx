@@ -1,0 +1,125 @@
+{
+  "title": "Plugins",
+  "subtitle": "Estenda sua Mente com plugins",
+  "stats": {
+    "total": "Total de Plugins",
+    "active": "Ativos",
+    "disabled": "Desabilitados",
+    "totalTools": "Total de Ferramentas"
+  },
+  "filter": {
+    "all": "Todos",
+    "active": "Ativos",
+    "disabled": "Desabilitados",
+    "error": "Erro"
+  },
+  "sort": {
+    "name": "Nome",
+    "status": "Status",
+    "tools": "Ferramentas"
+  },
+  "search": {
+    "placeholder": "Buscar plugins..."
+  },
+  "card": {
+    "tools_one": "{{count}} ferramenta",
+    "tools_other": "{{count}} ferramentas",
+    "viewDetails": "Ver Detalhes",
+    "noDescription": "Nenhuma descrição disponível"
+  },
+  "status": {
+    "active": "Ativo",
+    "disabled": "Desabilitado",
+    "error": "Erro"
+  },
+  "detail": {
+    "title": "Detalhes do Plugin",
+    "version": "Versão",
+    "author": "Autor",
+    "license": "Licença",
+    "homepage": "Página inicial",
+    "tools": "Ferramentas",
+    "permissions": "Permissões",
+    "health": "Saúde",
+    "manifest": "Manifesto",
+    "events": "Eventos",
+    "dependencies": "Dependências",
+    "noTools": "Nenhuma ferramenta registrada",
+    "noPermissions": "Nenhuma permissão necessária",
+    "noEvents": "Nenhum evento declarado",
+    "noDependencies": "Sem dependências",
+    "emits": "Emite",
+    "subscribes": "Inscreve-se em",
+    "requiresConfirmation": "Requer confirmação",
+    "optional": "opcional",
+    "notFound": "Plugin não encontrado",
+    "viewAudit": "Ver auditoria detalhada"
+  },
+  "health": {
+    "failures": "Falhas Consecutivas",
+    "lastError": "Último Erro",
+    "activeTasks": "Tarefas Ativas",
+    "autoDisableWarning": "Em risco de desabilitação automática ({{count}}/{{max}} falhas)"
+  },
+  "actions": {
+    "enable": "Habilitar",
+    "disable": "Desabilitar",
+    "reload": "Recarregar",
+    "disableConfirmTitle": "Desabilitar Plugin",
+    "disableConfirmDesc": "Isso parará o plugin e todas as suas ferramentas. Você pode reabilitá-lo depois.",
+    "reloadConfirmTitle": "Recarregar Plugin",
+    "reloadConfirmDesc": "Isso reiniciará o plugin. Tarefas ativas podem ser interrompidas.",
+    "confirm": "Confirmar",
+    "enabled": "Plugin habilitado",
+    "disabled": "Plugin desabilitado",
+    "reloaded": "Plugin recarregado",
+    "enableFailed": "Falha ao habilitar plugin",
+    "disableFailed": "Falha ao desabilitar plugin",
+    "reloadFailed": "Falha ao recarregar plugin",
+    "close": "Fechar"
+  },
+  "permission": {
+    "risk": {
+      "low": "Risco Baixo",
+      "medium": "Risco Médio",
+      "high": "Risco Alto"
+    },
+    "count_one": "{{count}} permissão",
+    "count_other": "{{count}} permissões",
+    "highCount": "({{count}} de risco alto)",
+    "mediumCount": "({{count}} de risco médio)",
+    "reviewInstall": "Revise as permissões que este plugin requer antes de instalar.",
+    "reviewAudit": "Permissões concedidas a este plugin.",
+    "allowedDomains": "Domínios permitidos:",
+    "approveInstall": "Aprovar e Instalar",
+    "highRiskWarning": {
+      "network:internet": "Este plugin pode fazer requisições HTTP a servidores externos. Verifique allowed_domains no manifesto.",
+      "brain:write": "Este plugin pode criar, modificar ou excluir conceitos na memória da sua Mente.",
+      "brain:delete": "Este plugin pode excluir permanentemente memórias e conceitos aprendidos.",
+      "config:write": "Este plugin pode modificar a configuração e os ajustes de personalidade da sua Mente."
+    }
+  },
+  "pricing": {
+    "free": "Grátis",
+    "paid": "Pago",
+    "freemium": "Freemium"
+  },
+  "empty": {
+    "title": "Nenhum plugin instalado",
+    "subtitle": "Estenda sua Mente com plugins",
+    "cta": "Instalar via CLI",
+    "cliHint": "sovyx plugin install <name>",
+    "noMatch": "Nenhum plugin corresponde à busca",
+    "clearFilter": "Limpar filtro"
+  },
+  "engineOff": {
+    "title": "Engine não está rodando",
+    "subtitle": "Inicie o engine Sovyx para gerenciar plugins",
+    "hint": "sovyx start"
+  },
+  "aria": {
+    "cardActions": "Ações do plugin",
+    "filter": "Filtro de plugins",
+    "sort": "Ordenar plugins"
+  }
+}

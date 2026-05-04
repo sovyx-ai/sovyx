@@ -1,0 +1,32 @@
+{
+  "title": "Chat",
+  "subtitle": "Converse diretamente com sua mente",
+  "placeholder": "Digite uma mensagem...",
+  "send": "Enviar",
+  "sending": "Pensando...",
+  "thinking": "Pensando...",
+  "empty": {
+    "title": "Inicie uma conversa",
+    "description": "Envie uma mensagem para começar a conversar com sua mente."
+  },
+  "error": {
+    "sendFailed": "Falha ao enviar mensagem. Tente novamente.",
+    "loadFailed": "Algo deu errado. Tente novamente."
+  },
+  "newChat": "Novo Chat",
+  "you": "Você",
+  "codeBlock": {
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "code": "código",
+    "copyAria": "Copiar código"
+  },
+  "tags": {
+    "aria": "Módulos que produziram esta resposta",
+    "brain": "cérebro",
+    "financial_math": "financeiro",
+    "weather": "clima",
+    "knowledge": "conhecimento",
+    "web_intelligence": "web"
+  }
+}

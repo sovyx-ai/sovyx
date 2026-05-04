@@ -1,0 +1,127 @@
+{
+  "app": {
+    "name": "Painel Sovyx",
+    "version": "v{{version}}"
+  },
+  "nav": {
+    "overview": "Visão geral",
+    "conversations": "Conversas",
+    "brain": "Explorador do Cérebro",
+    "logs": "Logs",
+    "settings": "Configurações",
+    "about": "Sobre",
+    "chat": "Chat",
+    "voice": "Voz",
+    "voiceHealth": "Saúde da Captura",
+    "voicePlatformDiagnostics": "Diagnóstico de Plataforma",
+    "plugins": "Plugins",
+    "emotions": "Emoções",
+    "productivity": "Produtividade"
+  },
+  "status": {
+    "online": "Online",
+    "offline": "Offline",
+    "degraded": "Degradado",
+    "loading": "Carregando...",
+    "error": "Erro",
+    "connected": "Conectado",
+    "disconnected": "Desconectado",
+    "reconnecting": "Reconectando...",
+    "idle": "Ocioso",
+    "thinking": "Pensando",
+    "dreaming": "Sonhando"
+  },
+  "actions": {
+    "save": "Salvar",
+    "cancel": "Cancelar",
+    "reset": "Redefinir",
+    "retry": "Tentar novamente",
+    "close": "Fechar",
+    "expand": "Expandir",
+    "collapse": "Recolher",
+    "loadMore": "Carregar mais",
+    "search": "Buscar...",
+    "export": "Exportar",
+    "copy": "Copiar",
+    "awaken": "Despertar",
+    "configure": "Configurar",
+    "clear": "Limpar",
+    "dismiss": "Dispensar"
+  },
+  "time": {
+    "justNow": "agora mesmo",
+    "minutesAgo_one": "há {{count}} min",
+    "minutesAgo_other": "há {{count}} min",
+    "hoursAgo_one": "há {{count}}h",
+    "hoursAgo_other": "há {{count}}h",
+    "daysAgo_one": "há {{count}}d",
+    "daysAgo_other": "há {{count}}d"
+  },
+  "health": {
+    "healthy": "Saudável",
+    "warning": "Aviso",
+    "critical": "Crítico",
+    "allGreen": "Todos os sistemas operacionais",
+    "checksPass": "{{passed}}/{{total}} aprovados"
+  },
+  "auth": {
+    "description": "Cole seu token do painel para continuar. Encontre-o executando:",
+    "command": "sovyx token",
+    "placeholder": "Cole o token aqui…",
+    "connect": "Conectar",
+    "connected": "Conectado"
+  },
+  "trend": {
+    "up": "Subiu {{value}}% {{label}}",
+    "down": "Caiu {{value}}% {{label}}"
+  },
+  "errors": {
+    "generic": "Algo deu errado",
+    "unexpected": "Ocorreu um erro inesperado.",
+    "network": "A Mente está inacessível. Verifique sua conexão.",
+    "notFound": "Este caminho não existe na Mente",
+    "notFoundPage": "Esta página não existe na memória da sua Mente.",
+    "unauthorized": "Autenticação expirada. Insira o token novamente.",
+    "tryAgain": "Tentar novamente",
+    "sectionFailed": "Esta seção não pôde carregar",
+    "backToOverview": "Voltar à Visão geral"
+  },
+  "command": {
+    "placeholder": "Digite um comando ou busque...",
+    "empty": "Nenhum resultado encontrado.",
+    "navigation": "Navegação",
+    "actions": "Ações",
+    "clearLogs": "Limpar Logs",
+    "refreshData": "Atualizar Dados"
+  },
+  "sidebar": {
+    "collapse": "Alternar Barra Lateral",
+    "health": "Saúde",
+    "cmdK": "Cmd+K",
+    "core": "Núcleo",
+    "connecting": "Conectando...",
+    "uptime": "Ativo há {{duration}}",
+    "skipToContent": "Pular para o conteúdo principal",
+    "notifications": "Notificações",
+    "cmdKLabel": "Pressione Command+K para abrir a paleta de comandos"
+  },
+  "comingSoon": {
+    "badge": "Em Breve"
+  },
+  "emotions": {
+    "title": "Emoções",
+    "description": "Acompanhe padrões emocionais nas suas conversas. Histórico de valência e ativação, alertas da amígdala, correlações de humor com qualidade de decisão e insights comportamentais — tudo a partir de como sua Mente processa contexto emocional."
+  },
+  "productivity": {
+    "title": "Produtividade",
+    "description": "Entenda seus padrões de trabalho. Rastreamento de tempo de foco, ritmos de conclusão de tarefas, detecção de fadiga decisória, análise do impacto de diários e tendências semanais — medidos a partir do seu comportamento real, não de estimativas autorreportadas."
+  },
+  "aria": {
+    "mindAvatar": "Mente Sovyx",
+    "mainNavigation": "Navegação principal",
+    "breadcrumb": "Trilha de navegação",
+    "liveFeed": "Feed ao vivo",
+    "cognitiveTimeline": "Linha do tempo cognitiva",
+    "loading": "Carregando"
+  }
+}

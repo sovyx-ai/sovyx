@@ -1,0 +1,47 @@
+{
+  "title": "Logs",
+  "entryCount_one": "{{count}} entrada",
+  "entryCount_other": "{{count}} entradas",
+  "empty": "Esperando logs…",
+  "emptyDescription": "Las entradas de log se transmitirán aquí en tiempo real mientras el engine corre.",
+  "follow": "Seguir",
+  "search": "Buscar logs...",
+  "actions": {
+    "clear": "Limpiar logs"
+  },
+  "error": {
+    "loadFailed": "Falló al cargar logs"
+  },
+  "status": {
+    "live": "en vivo",
+    "legacyFallback": "fallback legado (FTS no disponible)"
+  },
+  "filters": {
+    "search": "Buscar",
+    "searchPlaceholder": "Consulta FTS5…",
+    "level": "Nivel",
+    "allLevels": "Todos",
+    "logger": "Logger",
+    "sagaId": "ID de la Saga",
+    "since": "Desde",
+    "until": "Hasta",
+    "reset": "Restablecer filtros"
+  },
+  "tabs": {
+    "detail": "Detalle",
+    "causality": "Causalidad",
+    "saga": "Saga",
+    "narrative": "Narrativa",
+    "noSaga": "La entrada seleccionada no tiene saga_id.",
+    "causalityEmpty": "No se registraron aristas de causalidad para esta saga.",
+    "sagaEmpty": "Aún no hay entradas indexadas para esta saga.",
+    "narrativeEmpty": "No se pudo renderizar narrativa para esta saga."
+  },
+  "narrative": {
+    "locale": "idioma",
+    "mode": {
+      "compact": "Compacto",
+      "expanded": "Expandido"
+    }
+  }
+}

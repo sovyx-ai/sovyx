@@ -1,0 +1,432 @@
+{
+  "title": "Pipeline de Voz",
+  "subtitle": "Estado e configuração da interação de voz em tempo real.",
+  "loading": "Carregando estado da voz…",
+  "error": "Falha ao carregar estado da voz",
+  "retry": "Tentar novamente",
+  "notConfigured": "O pipeline de voz não está configurado. Habilite-o no seu config Sovyx para ver o estado aqui.",
+  "linuxMicGain": {
+    "title": "Ganho de entrada do microfone (Linux)",
+    "checking": "Verificando mixer ALSA...",
+    "noIssues": "O ganho do mixer ALSA está em uma faixa segura — nenhuma saturação detectada.",
+    "alertTitle": "O ganho pré-ADC está saturando o microfone",
+    "alertBody": "Um ou mais controles de captura ALSA estão fixados próximos ao máximo. Cada pico de fala inteligível clipa o ADC e a detecção de voz falhará. Redefina o mixer para restaurar um nível de captura seguro.",
+    "cardBoost": "boost agregado +{{boost}} dB — controles: {{controls}}",
+    "resetButton": "Redefinir ganho do microfone",
+    "resetSuccess": "{{count}} controle(s) do mixer redefinido(s). O microfone deve agora capturar sem distorção.",
+    "resetFailed": "Falha na redefinição: {{reason}} — {{detail}}",
+    "failed": "Não foi possível redefinir o mixer ALSA: {{error}}",
+    "amixerMissingTitle": "Utilitários ALSA não instalados",
+    "amixerMissingBody": "O comando `amixer` é necessário para diagnosticar e redefinir o ganho do microfone. Instale o pacote alsa-utils pelo gerenciador de pacotes da sua distribuição.",
+    "persistHintSummary": "Persistir esta correção entre reinicializações",
+    "persistHintBody": "O ALSA redefine o mixer para os padrões do sistema a cada boot. Para manter o nível seguro de captura entre reinícios, salve o estado atual com alsactl store (requer sudo na maioria das distros):"
+  },
+  "sections": {
+    "pipeline": "Pipeline",
+    "capture": "Microfone",
+    "stt": "Fala-para-Texto",
+    "tts": "Texto-para-Fala",
+    "vad": "Detecção de Atividade de Voz",
+    "wakeWord": "Palavra de Ativação",
+    "wyoming": "Protocolo Wyoming",
+    "hardware": "Hardware"
+  },
+  "capture": {
+    "hostApi": "API do Host",
+    "device": "Dispositivo",
+    "frames": "Frames entregues"
+  },
+  "pipeline": {
+    "state": "Estado",
+    "running": "Em execução",
+    "stopped": "Parado",
+    "latency": "Latência",
+    "latencyMs": "{{ms}}ms",
+    "noLatency": "—"
+  },
+  "stt": {
+    "engine": "Engine",
+    "model": "Modelo",
+    "state": "Estado",
+    "none": "Nenhum engine STT configurado"
+  },
+  "tts": {
+    "engine": "Engine",
+    "model": "Modelo",
+    "initialized": "Inicializado",
+    "yes": "Sim",
+    "no": "Não",
+    "none": "Nenhum engine TTS configurado"
+  },
+  "vad": {
+    "enabled": "Habilitado",
+    "disabled": "Desabilitado"
+  },
+  "wakeWord": {
+    "enabled": "Habilitada",
+    "disabled": "Desabilitada",
+    "phrase": "Frase"
+  },
+  "perMindWakeWord": {
+    "title": "Palavra de Ativação por Mente",
+    "registered": "Registrada",
+    "notRegistered": "Não registrada",
+    "error": "Erro de configuração",
+    "toggleLabel": "Palavra de ativação habilitada",
+    "viewDetails": "Ver detalhes do erro",
+    "empty": "Nenhuma mente ainda — cadastre uma mente para gerenciar sua palavra de ativação aqui.",
+    "dismiss": "Dispensar",
+    "phoneticMatch": "Correspondida como {{file}} (distância: {{distance}})"
+  },
+  "mind": {
+    "forget": {
+      "title": "Esquecer esta mente",
+      "subtitle": "Direito ao esquecimento (GDPR Art. 17 / LGPD Art. 18 VI). Apaga todos os dados; preserva a configuração.",
+      "openButton": "Esquecer…",
+      "warningTitle": "Esta ação apaga dados permanentemente.",
+      "warningBody": "Cada conceito, episódio, conversa, embedding e entrada do registro de consentimento desta mente será excluído. A configuração da mente é preservada para que você possa recadastrar. Use o modo de pré-visualização primeiro para ver as contagens.",
+      "confirmLabel": "Digite o ID da mente ({{mindId}}) para confirmar",
+      "confirmAriaLabel": "Campo de confirmação do ID da mente",
+      "dryRunLabel": "Apenas pré-visualizar (não excluir — mostrar contagens)",
+      "previewButton": "Pré-visualizar contagens",
+      "submitButton": "Esquecer mente permanentemente",
+      "submittingButton": "Trabalhando…",
+      "cancelButton": "Cancelar",
+      "closeButton": "Fechar",
+      "reportTitleDryRun": "Pré-visualização — nenhuma linha foi excluída",
+      "reportTitleApplied": "Esquecimento concluído",
+      "totalLabel": "Total de linhas expurgadas"
+    },
+    "retention": {
+      "title": "Expurgo de retenção",
+      "subtitle": "Expurgo agendado por política temporal. Remove apenas registros ANTIGOS conforme os horizontes configurados.",
+      "openButton": "Gerenciar retenção…",
+      "previewButton": "Pré-visualizar expurgo",
+      "applyButton": "Aplicar expurgo",
+      "submittingButton": "Trabalhando…",
+      "cancelButton": "Cancelar",
+      "closeButton": "Fechar",
+      "horizonsLabel": "Horizontes efetivos (dias)",
+      "horizonsHint": "Computado pelo servidor a partir de EngineConfig.tuning.retention.* + sobrescritas por mente. Zero significa que a superfície foi pulada.",
+      "reportTitleDryRun": "Pré-visualização — nenhuma linha foi excluída",
+      "reportTitleApplied": "Expurgo concluído",
+      "totalLabel": "Total de linhas expurgadas",
+      "cutoffLabel": "Corte (UTC)"
+    }
+  },
+  "wizard": {
+    "title": "Assistente de Configuração de Voz",
+    "openHint": "Percorra 4 passos para escolher e testar seu microfone.",
+    "openButton": "Abrir Assistente",
+    "cancel": "Cancelar",
+    "steps": {
+      "devices": "Passo 1 de 4 — Selecionar microfone",
+      "record": "Passo 2 de 4 — Testar gravação",
+      "results": "Passo 3 de 4 — Revisar resultados",
+      "save": "Passo 4 de 4 — Salvar seleção",
+      "done": "Concluído"
+    },
+    "devices": {
+      "loading": "Detectando microfones…",
+      "empty": "Nenhum dispositivo de entrada encontrado. Conecte um microfone e tente de novo.",
+      "intro": "Escolha o microfone que o Sovyx deve usar para entrada de voz."
+    },
+    "record": {
+      "intro": "Vamos gravar 3 segundos de áudio para verificar a qualidade do sinal e alertar sobre problemas.",
+      "selected": "Dispositivo selecionado:",
+      "start": "Iniciar gravação de 3 segundos",
+      "recording": "Gravando…"
+    },
+    "results": {
+      "rms": "RMS",
+      "peak": "Pico",
+      "snr": "SNR",
+      "clipping": "Clipping",
+      "yes": "Sim",
+      "no": "Não",
+      "recommendations": "Recomendações de captura-APO",
+      "retry": "Tentar de novo",
+      "advance": "Salvar seleção",
+      "diagnosis": {
+        "ok": "Gravação parece boa.",
+        "low_signal": "Sinal muito baixo — fale mais alto ou aproxime-se do microfone.",
+        "clipping": "Sinal está clipando — reduza o ganho de entrada.",
+        "no_audio": "Nenhum áudio capturado — verifique se o dispositivo não está mudo.",
+        "noisy": "Alto ruído de fundo detectado — considere um ambiente mais silencioso.",
+        "device_error": "Falha de gravação no dispositivo — verifique permissões no nível do SO."
+      }
+    },
+    "save": {
+      "intro": "Salve este microfone como o dispositivo de entrada de voz do Sovyx.",
+      "button": "Salvar"
+    },
+    "done": {
+      "message": "Tudo pronto! Seu microfone está configurado.",
+      "close": "Fechar"
+    }
+  },
+  "training": {
+    "button": "Treinar esta palavra de ativação",
+    "modal": {
+      "title": "Treinar palavra de ativação",
+      "subtitle": "Sintetize amostras e treine um modelo ONNX para {{wake_word}}.",
+      "close": "Fechar",
+      "wakeWord": "Palavra de ativação",
+      "mindId": "Mente",
+      "language": "Idioma",
+      "targetSamples": "Amostras-alvo: {{count}}",
+      "targetSamplesHint": "200 é o mínimo conservador (~30-60 min). Mais = mais lento, mais preciso.",
+      "negativesDir": "Diretório de negativas",
+      "negativesDirHint": "Caminho do sistema de arquivos com .wav de áudio que NÃO é palavra de ativação (sua fala, ruído ambiente, amostras common-voice).",
+      "voices": "Vozes Kokoro (opcional, separadas por vírgula)",
+      "variants": "Variantes (opcional, separadas por vírgula)",
+      "cancel": "Cancelar",
+      "startButton": "Iniciar treinamento",
+      "starting": "Iniciando…"
+    },
+    "panel": {
+      "title": "Treinamento de Palavra de Ativação",
+      "empty": "Nenhum treinamento ativo. Clique em \"Treinar esta palavra de ativação\" em uma mente para começar.",
+      "progressLabel": "Progresso do treinamento",
+      "samplesProgress": "{{generated}} / {{total}} amostras",
+      "viewError": "Ver detalhes do erro",
+      "outputLabel": "Modelo de saída:",
+      "completeHint": "O modelo treinado agora está no pool pré-treinado. Reinicie o daemon (ou aguarde hot-reload) para usá-lo.",
+      "cancel": "Cancelar treinamento",
+      "cancelling": "Cancelando…",
+      "dismiss": "Dispensar",
+      "status": {
+        "pending": "Pendente",
+        "synthesizing": "Sintetizando",
+        "training": "Treinando",
+        "complete": "Concluído",
+        "failed": "Falhou",
+        "cancelled": "Cancelado"
+      }
+    }
+  },
+  "wyoming": {
+    "connected": "Conectado",
+    "disconnected": "Desconectado",
+    "endpoint": "Endpoint"
+  },
+  "hardware": {
+    "tier": "Camada Detectada",
+    "ram": "RAM",
+    "ramMb": "{{mb}} MB",
+    "unknown": "Desconhecido"
+  },
+  "models": {
+    "title": "Matriz de Modelos",
+    "subtitle": "Modelos disponíveis por camada de hardware.",
+    "activeTier": "Camada Ativa",
+    "sttPrimary": "STT Primário",
+    "sttStreaming": "STT Streaming",
+    "ttsPrimary": "TTS Primário",
+    "ttsQuality": "Qualidade do TTS",
+    "wake": "Palavra de Ativação",
+    "vad": "VAD"
+  },
+  "health": {
+    "title": "Saúde da Captura",
+    "subtitle": "Diagnóstico de captura de áudio por endpoint, sobrescritas fixadas e controles de re-sondagem.",
+    "loading": "Carregando saúde da captura…",
+    "empty": "Nenhum endpoint de captura validado ainda. Execute o assistente de configuração de voz para descobrir um.",
+    "refresh": "Atualizar",
+    "dataDir": "Diretório de dados",
+    "voiceEnabled": "Pipeline de voz ativo",
+    "voiceDisabled": "Pipeline de voz desligado",
+    "warmUnavailable": "A re-sondagem quente requer que o pipeline de voz esteja em execução.",
+    "combo": {
+      "sectionTitle": "Combos conhecidos",
+      "sectionHint": "Uma linha por endpoint de áudio validado. O combo armazenado reabre no boot sem reexecutar a cascata.",
+      "friendlyName": "Dispositivo",
+      "guid": "GUID do Endpoint",
+      "winningCombo": "Combo vencedor",
+      "validatedAt": "Última validação",
+      "boots": "Boots validados",
+      "lastDiagnosis": "Último diagnóstico",
+      "needsRevalidation": "Precisa de revalidação",
+      "pinned": "Fixado",
+      "noEntries": "Nenhum combo armazenado ainda."
+    },
+    "overrides": {
+      "sectionTitle": "Sobrescritas fixadas",
+      "sectionHint": "Combos fixados pelo usuário que sobrevivem a --reset e curto-circuitam a cascata.",
+      "pinnedAt": "Fixado em",
+      "pinnedBy": "Por",
+      "reason": "Motivo",
+      "noEntries": "Nenhuma sobrescrita fixada.",
+      "sources": {
+        "user": "Usuário",
+        "wizard": "Assistente",
+        "cli": "CLI"
+      }
+    },
+    "mixerKb": {
+      "sectionTitle": "Perfis Mixer KB",
+      "sectionHint": "Perfis de mixer enviados e contribuídos pelo usuário usados pelo L2.5 para curar capturas defeituosas de fábrica. A contagem mostra enviados / usuário.",
+      "versionPrefix": "v",
+      "empty": "Nenhum perfil mixer-KB carregado.",
+      "loadingList": "Carregando perfis…",
+      "loadingDetail": "Carregando detalhe…",
+      "validateTitle": "Validar um perfil YAML",
+      "validateHint": "Cole o YAML de um contribuidor. O backend roda o mesmo loader que o daemon usa no boot e relata problemas pydantic inline.",
+      "validatePlaceholder": "profile_id: …\nprofile_version: 1\nschema_version: 1\n…",
+      "validateSubmit": "Validar",
+      "validateOk": "Schema OK",
+      "validateFail": "Validação falhou"
+    },
+    "actions": {
+      "reprobeCold": "Re-sondar (frio)",
+      "reprobeWarm": "Re-sondar (quente)",
+      "forget": "Esquecer",
+      "pin": "Fixar combo",
+      "confirmForget": "Esquecer este endpoint? O próximo boot reexecutará a cascata.",
+      "pinReason": "fixado-pelo-painel"
+    },
+    "result": {
+      "title": "Última re-sondagem",
+      "diagnosis": "Diagnóstico",
+      "mode": "Modo",
+      "rms": "RMS",
+      "vadMax": "VAD máx.",
+      "vadMean": "VAD médio",
+      "callbacks": "Callbacks PortAudio",
+      "duration": "Duração",
+      "error": "Erro",
+      "remediation": "Remediação"
+    },
+    "diagnosis": {
+      "healthy": "Saudável",
+      "muted": "Mudo",
+      "no_signal": "Sem sinal",
+      "low_signal": "Sinal baixo",
+      "format_mismatch": "Formato incompatível",
+      "apo_degraded": "APO degradado",
+      "vad_insensitive": "VAD insensível",
+      "driver_error": "Erro de driver",
+      "device_busy": "Dispositivo ocupado",
+      "exclusive_mode_not_available": "Modo exclusivo indisponível",
+      "insufficient_buffer_size": "Tamanho de buffer insuficiente",
+      "invalid_sample_rate_no_auto_convert": "Taxa de amostragem inválida (sem auto-conversão)",
+      "permission_denied": "Permissão negada",
+      "permission_revoked_runtime": "Permissão revogada em tempo de execução",
+      "stream_open_timeout": "Timeout ao abrir stream",
+      "heartbeat_timeout": "Timeout de heartbeat",
+      "kernel_invalidated": "Invalidado pelo kernel",
+      "unknown": "Desconhecido"
+    },
+    "quarantine": {
+      "sectionTitle": "Endpoints em quarentena",
+      "sectionHint": "§4.4.7: endpoints de captura cujo cliente de áudio do kernel está em estado invalidado. O Sovyx para de sondá-los até que um religar físico ou recheck periódico recupere o dispositivo.",
+      "count_one": "{{count}} endpoint em quarentena",
+      "count_other": "{{count}} endpoints em quarentena",
+      "noEntries": "Nenhum endpoint em quarentena de invalidação de kernel.",
+      "device": "Dispositivo",
+      "hostApi": "API do Host",
+      "reason": "Motivo",
+      "addedAt": "Em quarentena há",
+      "expiresIn": "Recheck em",
+      "secondsShort": "{{seconds}}s",
+      "remediation": {
+        "title": "Como recuperar",
+        "replug": "Desconecte o dispositivo fisicamente por 5 segundos e reconecte. O Sovyx reage ao evento de hot-plug do SO e limpa a quarentena automaticamente.",
+        "reboot": "Se religar não limpar o estado, reinicie o Windows — uma atualização de driver / pilha de áudio é necessária para rearmar o endpoint de áudio.",
+        "watchdog": "Enquanto isso, o Sovyx faz failover para o próximo dispositivo de captura viável e recheca o endpoint em quarentena a cada poucos minutos."
+      }
+    }
+  },
+  "platform": {
+    "title": "Diagnóstico de Plataforma",
+    "subtitle": "Visibilidade da pilha de áudio multi-SO — permissão de microfone, estado do serviço de áudio do host e anomalias específicas do SO surfaceadas a partir de uma única sondagem autenticada.",
+    "loading": "Sondando plataforma…",
+    "error": "Falha ao carregar diagnóstico de plataforma",
+    "refresh": "Atualizar",
+    "platformLabel": "Plataforma do host",
+    "micSection": {
+      "heading": "Permissão de microfone",
+      "statusGranted": "Concedida",
+      "statusDenied": "Negada",
+      "statusUnknown": "Desconhecida",
+      "machineValue": "Política da máquina",
+      "userValue": "Política do usuário",
+      "noHint": "Nenhuma remediação necessária.",
+      "notes": "Notas"
+    },
+    "linuxSection": {
+      "heading": "Linux",
+      "pipewireTitle": "PipeWire / WirePlumber",
+      "pipewireStatus": "Estado",
+      "pipewireSocket": "Socket presente",
+      "pipewirePactl": "pactl disponível",
+      "pipewireServer": "Servidor",
+      "pipewireModules": "Módulos carregados",
+      "pipewireEchoCancel": "módulo echo-cancel",
+      "ucmTitle": "Seleção de verb ALSA UCM",
+      "ucmStatus": "Estado",
+      "ucmCard": "ID da Placa",
+      "ucmAlsaucm": "alsaucm disponível",
+      "ucmVerbs": "Verbs disponíveis",
+      "ucmActiveVerb": "Verb ativo"
+    },
+    "windowsSection": {
+      "heading": "Windows",
+      "audioServiceTitle": "Serviços de áudio",
+      "audioServiceState": "Estado",
+      "audioServiceAllHealthy": "Todos rodando",
+      "audioServiceDegraded": "Degradado — a captura está estruturalmente indisponível até que ambos os serviços voltem a RUNNING.",
+      "etwTitle": "Eventos de áudio recentes (ETW)",
+      "etwEmpty": "Nenhum evento de áudio em nível warning ou superior na janela de lookback.",
+      "etwChannel": "Canal",
+      "etwEvent": "Evento",
+      "etwEventId": "ID do Evento",
+      "etwLevel": "Nível",
+      "etwTime": "Hora",
+      "etwLookback": "Lookback {{seconds}}s"
+    },
+    "macosSection": {
+      "heading": "macOS",
+      "halTitle": "Plug-ins HAL",
+      "halEmpty": "Nenhum plug-in HAL de terceiros detectado.",
+      "halVirtualActive": "Dispositivo de áudio virtual ativo",
+      "halEnhancementActive": "Aprimoramento de áudio ativo",
+      "halPlugin": "Plug-in",
+      "halPath": "Caminho",
+      "halCategory": "Categoria",
+      "bluetoothTitle": "Áudio Bluetooth",
+      "bluetoothEmpty": "Nenhum dispositivo de áudio Bluetooth pareado.",
+      "bluetoothDevice": "Dispositivo",
+      "bluetoothProfile": "Perfil",
+      "bluetoothInput": "Entrada",
+      "bluetoothOutput": "Saída",
+      "codeSigningTitle": "Hardened Runtime entitlement",
+      "codeSigningVerdict": "Veredito",
+      "codeSigningExecutable": "Executável",
+      "codeSigningHint": "Nenhuma remediação necessária."
+    },
+    "verdictColor": {
+      "ok": "ok",
+      "warn": "aviso",
+      "error": "erro",
+      "neutral": "neutro"
+    },
+    "noBranch": "Branch por SO não populado para este host."
+  },
+  "bypassTier": {
+    "heading": "Saúde das camadas de bypass",
+    "subtitle": "Tentativas e taxa de sucesso por camada desde o início do daemon. A Camada 3 (WASAPI exclusivo) é o bypass durável do Voice Clarity; as Camadas 1 e 2 são otimizações de performance sobrepostas.",
+    "loading": "Carregando estado das camadas de bypass…",
+    "error": "Falha ao carregar estado das camadas de bypass.",
+    "engagedTier1": "Camada 1 ativa",
+    "engagedTier2": "Camada 2 ativa",
+    "engagedTier3": "Camada 3 ativa",
+    "engagedNone": "Nenhum bypass ativo",
+    "tier1Label": "Camada 1 — RAW + Communications",
+    "tier1Description": "Stream RAW IAudioClient3 + role Communications no Windows. Otimização de performance para endpoints com qualidade VoIP; desligada por padrão na v0.26.0.",
+    "tier2Label": "Camada 2 — Rotação de host-API e então exclusivo",
+    "tier2Description": "Rotaciona o dispositivo de MME / DirectSound / WDM-KS para WASAPI e então engaja o modo exclusivo. Ativa quando o vencedor da cascata está em uma host API não-WASAPI.",
+    "tier3Label": "Camada 3 — WASAPI exclusivo",
+    "tier3Description": "Captura em modo exclusivo. Contorna cada APO de captura por endpoint, incluindo o Microsoft Voice Clarity. A correção durável do Voice Clarity per CLAUDE.md anti-pattern #21."
+  }
+}

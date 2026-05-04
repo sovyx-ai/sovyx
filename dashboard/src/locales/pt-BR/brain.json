@@ -1,0 +1,56 @@
+{
+  "title": "Explorador do Cérebro",
+  "search": "Buscar conceitos...",
+  "stats": {
+    "concepts": "{{count}} conceitos",
+    "relations": "{{count}} relações"
+  },
+  "categories": {
+    "fact": "Fato",
+    "preference": "Preferência",
+    "entity": "Entidade",
+    "skill": "Habilidade",
+    "belief": "Crença",
+    "event": "Evento",
+    "relationship": "Relacionamento"
+  },
+  "relations": {
+    "related_to": "Relacionado",
+    "part_of": "Parte de",
+    "causes": "Causa",
+    "contradicts": "Contradiz",
+    "example_of": "Exemplo",
+    "temporal": "Temporal",
+    "emotional": "Emocional"
+  },
+  "detail": {
+    "category": "Categoria",
+    "importance": "Importância",
+    "confidence": "Confiança",
+    "accessCount": "Acessos",
+    "close": "Fechar detalhe"
+  },
+  "empty": "Nenhum conceito ainda",
+  "emptyDescription": "Conceitos aparecerão à medida que o engine aprender com as conversas.",
+  "error": {
+    "loadFailed": "Falha ao carregar grafo do cérebro",
+    "engineHint": "Verifique se o engine está em execução.",
+    "retry": "Tentar novamente"
+  },
+  "graph": {
+    "regionLabel": "Grafo de conhecimento do cérebro — {{nodes}} conceitos e {{links}} relações",
+    "a11ySummary": "Grafo interativo dirigido por forças com {{nodes}} conceitos conectados por {{links}} relações. A visualização em canvas não é acessível por teclado; as tabelas abaixo listam os mesmos dados em formato acessível para leitores de tela.",
+    "a11yConceptsHeading": "Conceitos",
+    "a11yRelationsHeading": "Relações",
+    "a11yTableColName": "Nome",
+    "a11yTableColCategory": "Categoria",
+    "a11yTableColImportance": "Importância",
+    "a11yTableColConnections": "Conexões",
+    "a11yRelationsTableColSource": "De",
+    "a11yRelationsTableColTarget": "Para",
+    "a11yRelationsTableColType": "Tipo",
+    "a11yRelationsTableColWeight": "Peso",
+    "a11yContradictsBadge": "contradição",
+    "a11yRelationsTruncated": "{{shown}} de {{total}} relações exibidas (mais fortes pelo peso)."
+  }
+}
