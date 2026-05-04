@@ -29,6 +29,7 @@ Behaviour across platforms:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -109,7 +110,16 @@ def check_linux_mixer_sanity(
         if sys.platform != "linux":
             return True, "", {"platform": sys.platform, "skipped": True}
 
-        snapshots = enumerate_alsa_mixer_snapshots()
+        # Off-load to a worker thread: enumerate_alsa_mixer_snapshots
+        # spawns one synchronous `amixer -c N scontents` subprocess per
+        # ALSA card, each bounded by linux_mixer_subprocess_timeout_s
+        # (default 2.0 s). Hosts with several cards can therefore stall
+        # the calling event loop for multiple seconds while preflight
+        # runs — observed up to ~30 s on a 4-card host where amixer was
+        # contested. The dashboard's preflight handler is async and
+        # blocking it from inside FastAPI starves every other route +
+        # the WebSocket broadcast loop. CLAUDE.md anti-pattern #14.
+        snapshots = await asyncio.to_thread(enumerate_alsa_mixer_snapshots)
         if not snapshots:
             return (
                 True,

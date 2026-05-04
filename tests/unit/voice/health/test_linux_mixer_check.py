@@ -11,6 +11,7 @@ Covers the three behavioural branches the preflight contract requires:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -292,3 +293,60 @@ class TestAttenuationBranch:
             saturation_warning=False,
         )
         assert mod._is_attenuated(stuck) is False
+
+
+class TestEventLoopNotBlocked:
+    """Regression: the probe must run off the event loop.
+
+    ``enumerate_alsa_mixer_snapshots`` runs ``subprocess.run("amixer",
+    "-c", N, "scontents")`` per ALSA card with a per-call timeout
+    (default 2 s). Hosts with several cards or a contested ``amixer``
+    can therefore stall the calling coroutine for tens of seconds —
+    real-world observation: 29.7 s on a 4-card host while the dashboard
+    preflight ran. Wrapping the probe in :func:`asyncio.to_thread` is
+    the only correct fix per CLAUDE.md anti-pattern #14.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_check_does_not_block_event_loop(self) -> None:
+        """A 100 ms synchronous probe must not stall parallel coroutines.
+
+        If the probe were called directly from ``async def _check`` it
+        would block the loop; ``asyncio.sleep(0)`` ticks would not run
+        until the probe returned. With :func:`asyncio.to_thread` the
+        probe is off-loaded and the parallel ``asyncio.sleep`` chain
+        accrues progress concurrently.
+        """
+        import time
+
+        parallel_progress: list[int] = []
+
+        async def _parallel_ticks() -> None:
+            # 5 short ticks — well within the 100 ms probe window.
+            for _ in range(5):
+                await asyncio.sleep(0.005)
+                parallel_progress.append(1)
+
+        def _slow_probe() -> list[MixerCardSnapshot]:
+            time.sleep(0.1)
+            return []
+
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch.object(mod, "enumerate_alsa_mixer_snapshots", side_effect=_slow_probe),
+        ):
+            sys_mock.platform = "linux"
+            check = check_linux_mixer_sanity()
+
+            ticks_task = asyncio.create_task(_parallel_ticks())
+            ok, _hint, _details = await check()
+            await ticks_task
+
+        assert ok is True
+        # If the probe ran on the event loop the 100 ms time.sleep would
+        # have starved every asyncio.sleep tick — parallel_progress
+        # would hold 0 entries. With to_thread the ticks run in parallel.
+        assert len(parallel_progress) >= 3, (
+            f"event loop was blocked during probe — got "
+            f"{len(parallel_progress)} parallel ticks (expected >= 3)"
+        )
