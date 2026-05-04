@@ -348,6 +348,41 @@ class VoiceTuningConfig(BaseSettings):
     a deployment where wake-word audio MUST not be matched against
     a pre-trained model that wasn't explicitly approved)."""
 
+    stt_fallback_for_none_strategy: bool = False
+    """Phase 8 / T8.17 — STT-based wake-word fallback for NONE-strategy minds.
+
+    When ``True``, the factory builds an :class:`STTWakeWordDetector`
+    for every enabled mind whose wake word does NOT resolve to a
+    pretrained ONNX (after EXACT + PHONETIC). The fallback runs
+    Moonshine STT over a rolling buffer at ~2 s intervals and matches
+    the transcript against the mind's wake-word variants — slower
+    (~500 ms detection latency) but works without a trained ONNX.
+    Operators see hot-swap to ONNX after they train via
+    ``sovyx voice train-wake-word`` (T8.18).
+
+    When ``False`` (default), the factory keeps v0.28.3 behaviour:
+    NONE-strategy minds raise ``VoiceError`` from the helper, which
+    the factory catches at __init__.py:761 + degrades the router to
+    ``None`` (voice subsystem still works for other minds; the
+    NONE-strategy mind's wake word is just inactive). The dashboard
+    surfaces this as red "Configuration error" pill on the per-mind
+    wake-word card.
+
+    Default ``False`` per ``feedback_staged_adoption``: introducing a
+    new audio-thread-blocking path with default-ON would change
+    behaviour for every operator with a NONE-strategy mind without
+    them opting in. Operators flip via
+    ``SOVYX_TUNING__VOICE__STT_FALLBACK_FOR_NONE_STRATEGY=true``
+    after observing telemetry from
+    ``sovyx.voice.wake_word.detection_method{method=stt_fallback}``.
+    Default-flip is a future minor-version decision once production
+    telemetry validates the latency + match-rate envelope.
+
+    Disabled in ``sovyx[voice]``-not-installed environments
+    regardless of flag value: the factory probes for an STT engine
+    instance and degrades to the legacy raise path when none exists.
+    """
+
     wake_word_phonetic_max_distance: int = Field(default=3, ge=0, le=20)
     """Maximum Levenshtein-on-phonemes distance for accepting a
     phonetic match. Distance 0 = exact phoneme match;

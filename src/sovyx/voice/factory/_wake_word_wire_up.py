@@ -51,6 +51,7 @@ Backward-compat
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -68,6 +69,8 @@ from sovyx.voice._wake_word_router import WakeWordRouter
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from sovyx.voice.stt import STTEngine
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +142,9 @@ def build_wake_word_router_for_enabled_minds(
     data_dir: Path,
     phonetic_max_distance: int = 3,
     phonetic_fallback_enabled: bool = True,
+    stt_engine: STTEngine | None = None,
+    event_loop: asyncio.AbstractEventLoop | None = None,
+    stt_fallback_enabled: bool = False,
 ) -> WakeWordRouter | None:
     """Return a :class:`WakeWordRouter` populated for enabled minds, or ``None``.
 
@@ -159,18 +165,35 @@ def build_wake_word_router_for_enabled_minds(
             risk vs the v0.28.2 hardcoded-None contract on those
             hosts. Mirrors
             ``EngineConfig.tuning.voice.wake_word_phonetic_fallback_enabled``.
+        stt_engine: Optional STT engine for fallback registration.
+            Required when ``stt_fallback_enabled=True``; ignored when
+            ``False``. Mission v0.30.6 §T3.
+        event_loop: Daemon's main event loop. Required when
+            ``stt_fallback_enabled=True`` AND ``stt_engine is not None``;
+            captured by the bridge in :func:`_stt_fallback_bridge.make_stt_fallback_transcribe_fn`.
+        stt_fallback_enabled: Mirrors
+            ``EngineConfig.tuning.voice.stt_fallback_for_none_strategy``.
+            When ``True`` AND ``stt_engine is not None`` AND
+            ``event_loop is not None``, NONE-strategy minds get an
+            :class:`STTWakeWordDetector` registered instead of
+            raising. When ``False`` OR engine/loop missing, the legacy
+            VoiceError raise is preserved (factory degrades to
+            router=None). Default ``False`` per
+            ``feedback_staged_adoption``.
 
     Returns:
         A populated :class:`WakeWordRouter` when at least one mind on
         disk has ``wake_word_enabled=True`` AND its wake word resolves
-        to a pretrained ONNX model. ``None`` when zero minds opt in
+        to a pretrained ONNX model (OR has STT fallback registered
+        when the flag is enabled). ``None`` when zero minds opt in
         (backward-compat path, bit-exact v0.28.1 behaviour).
 
     Raises:
         VoiceError: When a mind has ``wake_word_enabled=True`` but the
-            resolver returns ``NONE`` (no ONNX model). The STT-fallback
-            path for this case is deferred to v0.28.3 per the mission's
-            D3 amendment.
+            resolver returns ``NONE`` (no ONNX model) AND STT fallback
+            is not active (flag off OR engine/loop missing). When the
+            flag is on + engine + loop present, the helper falls back
+            to STT-detector registration without raising.
     """
     if not data_dir.is_dir():
         logger.debug(
@@ -189,6 +212,18 @@ def build_wake_word_router_for_enabled_minds(
 
     pretrained_dir = data_dir / "wake_word_models" / "pretrained"
     registry = PretrainedModelRegistry(models_dir=pretrained_dir)
+
+    # STT fallback path is gated on three conjunctive predicates so
+    # operators on ``sovyx[voice]``-not-installed environments never
+    # accidentally land on this branch (engine would be ``None``).
+    # The shared lock is created once per builder invocation; all
+    # NONE-strategy minds serialise their transcribe calls through it
+    # (R1 conclusion: defense-in-depth against undocumented C library
+    # concurrency in moonshine_voice).
+    stt_fallback_active = (
+        stt_fallback_enabled and stt_engine is not None and event_loop is not None
+    )
+    stt_fallback_lock: asyncio.Lock | None = asyncio.Lock() if stt_fallback_active else None
 
     router = WakeWordRouter()
     for mind_id, wake_word, language in enabled_minds:
@@ -212,16 +247,40 @@ def build_wake_word_router_for_enabled_minds(
         )
         resolution = resolver.resolve(wake_word)
         if resolution.strategy is WakeWordResolutionStrategy.NONE:
+            # STT-fallback path (Mission v0.30.6 §T3). When all three
+            # predicates hold (flag on + engine present + loop present),
+            # build the bridge + register an STTWakeWordDetector
+            # instead of raising. Otherwise preserve the v0.28.3
+            # refuse-to-start contract: factory's outer try/except
+            # catches VoiceError + degrades the router to None.
+            if stt_fallback_active:
+                # Type narrowing for mypy: stt_fallback_active = True
+                # implies all three are non-None (see predicate above).
+                assert stt_engine is not None  # noqa: S101
+                assert event_loop is not None  # noqa: S101
+                assert stt_fallback_lock is not None  # noqa: S101
+                _register_stt_fallback_for_mind(
+                    router=router,
+                    mind_id=mind_id,
+                    wake_word=wake_word,
+                    language=language,
+                    stt_engine=stt_engine,
+                    event_loop=event_loop,
+                    lock=stt_fallback_lock,
+                )
+                continue
             msg = (
                 f"Mind '{mind_id}' has wake_word_enabled=True but no "
                 f"ONNX model resolved for wake word '{wake_word}'. "
                 f"Pretrained pool: {pretrained_dir}. Remediation: "
                 f"(a) train via `sovyx voice train-wake-word --mind "
                 f"{mind_id}` (Phase 8 / T8.13), (b) drop "
-                f"<wake_word>.onnx into the pretrained pool, or "
-                f"(c) set wake_word_enabled: false in mind.yaml. "
-                f"STT-fallback for this case is deferred to v0.28.3 "
-                f"(mission `MISSION-wake-word-stt-fallback-2026-05-XX`)."
+                f"<wake_word>.onnx into the pretrained pool, "
+                f"(c) set wake_word_enabled: false in mind.yaml, OR "
+                f"(d) opt into STT fallback by setting "
+                f"SOVYX_TUNING__VOICE__STT_FALLBACK_FOR_NONE_STRATEGY=true "
+                f"(adds ~500 ms detection latency vs ~80 ms ONNX, but "
+                f"works without training)."
             )
             raise VoiceError(msg)
 
@@ -254,6 +313,61 @@ def build_wake_word_router_for_enabled_minds(
         },
     )
     return router
+
+
+def _register_stt_fallback_for_mind(
+    *,
+    router: WakeWordRouter,
+    mind_id: str,
+    wake_word: str,
+    language: str,
+    stt_engine: STTEngine,
+    event_loop: asyncio.AbstractEventLoop,
+    lock: asyncio.Lock,
+) -> None:
+    """Register an STT-based fallback detector for one NONE-strategy mind.
+
+    Mission v0.30.6 §T3. Builds the sync transcribe bridge via
+    :func:`_stt_fallback_bridge.make_stt_fallback_transcribe_fn` and
+    calls :meth:`WakeWordRouter.register_mind_stt_fallback` with a
+    config that mirrors the existing ONNX path's frame contract
+    (1280 samples / 80 ms / 16 kHz).
+
+    Wake variants (``wake_word_variants``) come from the same
+    derivation that :class:`MindConfig.effective_wake_word_variants`
+    uses for ONNX-path matching: the wake word as typed by the
+    operator. The STT detector ASCII-folds + case-folds the variant
+    list at construction; the C library's transcript may drop
+    diacritics, so the comparison is invariant under either
+    canonicalisation source.
+    """
+    from sovyx.voice._wake_word_stt_fallback import STTWakeWordConfig  # noqa: PLC0415
+    from sovyx.voice.factory._stt_fallback_bridge import (  # noqa: PLC0415
+        make_stt_fallback_transcribe_fn,
+    )
+
+    transcribe_fn = make_stt_fallback_transcribe_fn(
+        engine=stt_engine,
+        loop=event_loop,
+        lock=lock,
+    )
+    config = STTWakeWordConfig(
+        wake_variants=(wake_word,),
+    )
+    router.register_mind_stt_fallback(
+        MindId(mind_id),
+        transcribe_fn=transcribe_fn,
+        config=config,
+    )
+    logger.info(
+        "voice.factory.wake_word_wire_up.mind_registered_stt_fallback",
+        **{
+            "voice.mind_id": str(mind_id),
+            "voice.wake_word": wake_word,
+            "voice.language": language,
+            "voice.detection_method": "stt_fallback",
+        },
+    )
 
 
 def resolve_wake_word_model_for_mind(

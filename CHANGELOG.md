@@ -6,7 +6,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.30.5 below)
+(none — every shipped delta is in 0.30.6 below)
+
+## [0.30.6] — 2026-05-04
+
+### STT-fallback wake-word path — opt-in wire-up (Phase 8 / T8.17 closure)
+
+Closes the queued gap from `MISSION-claude-autonomous-batch-2026-05-03`
+§D7 deferral via dedicated research-first mission
+`MISSION-wake-word-stt-fallback-2026-05-04.md`. Operators with
+NONE-strategy minds (wake word doesn't resolve to a pretrained ONNX
+after EXACT + PHONETIC) can now opt into STT-based fallback
+detection — no daemon restart needed when the operator later trains a
+model (T8.18 hot-swap unchanged).
+
+The foundational class (`STTWakeWordDetector`) and router method
+(`register_mind_stt_fallback`) were already shipped in v0.28.x; the
+gap was the factory-side wire-up that previously raised `VoiceError`
+on NONE strategy. R0 research re-validated the gap as narrow + the 3
+v0.28.2 R3 blockers reduced to "how to build the transcribe_fn" — a
+construction-time concern, not a re-architecture.
+
+### Added
+
+* **Tuning knob** `EngineConfig.tuning.voice.stt_fallback_for_none_strategy`
+  (`bool`, default `False` per `feedback_staged_adoption`). Operators
+  flip via `SOVYX_TUNING__VOICE__STT_FALLBACK_FOR_NONE_STRATEGY=true`.
+* **Sync↔async bridge** `voice/factory/_stt_fallback_bridge.py` —
+  `make_stt_fallback_transcribe_fn(*, engine, loop, lock, timeout_s)`
+  builds the sync `Callable[[NDArray], str]` expected by
+  `STTWakeWordDetector`. Uses `asyncio.run_coroutine_threadsafe` (R2
+  conclusion). Failure isolation: timeout / loop-closed / engine-error
+  → empty string → no-match per detector contract.
+* **Factory wire-up** `voice/factory/_wake_word_wire_up.py` accepts
+  optional `stt_engine`, `event_loop`, `stt_fallback_enabled`. On
+  NONE-strategy + flag-on + engine + loop → registers an
+  `STTWakeWordDetector` instead of raising. Shared `asyncio.Lock`
+  across all NONE minds (R1 defense-in-depth against undocumented
+  `moonshine_voice` C library concurrency).
+
+### Operator action — flip procedure
+
+1. Set `SOVYX_TUNING__VOICE__STT_FALLBACK_FOR_NONE_STRATEGY=true` in
+   the daemon environment (or `system.yaml`).
+2. Restart Sovyx (the flag is read at factory wire-up only).
+3. Mind cards in the dashboard's voice page that previously showed
+   "Configuration error" pill now flip to "Registered" pill.
+4. Detection latency for NONE-strategy minds increases from infinite
+   (no detection) to ~500 ms (vs ~80 ms ONNX). Telemetry counter
+   `sovyx.voice.wake_word.detection_method{method=stt_fallback}`
+   tracks fired detections.
+5. After training a model via `sovyx voice train-wake-word --mind X`,
+   the dashboard auto-hot-swaps to ONNX (T8.18); no restart needed.
+
+### Decisions ratified under operator delegation
+
+* **D1 (mission §R3)**: GO — gap is concrete, foundation in
+  production, operator explicitly requested.
+* **D2 (R2 bridge primitive)**: `asyncio.run_coroutine_threadsafe` —
+  `asyncio.run` REJECTED (broken in running-loop + creates fresh loop
+  per call); dedicated worker thread / janus.Queue REJECTED
+  (over-engineered for ~0.5 calls/s/mind).
+* **D3 (concurrency)**: shared `asyncio.Lock` defensively serialises
+  the engine across multiple NONE-strategy minds.
+* **D4 (staged adoption)**: default OFF; operators flip post-deploy
+  after observing telemetry. Default-flip deferred to a future minor
+  version once production data validates the latency + match-rate
+  envelope.
+* **D5 (timeout)**: 5 s default per-call. Calibrated against
+  Moonshine tiny ≈ 240 ms / small ≈ 530 ms / medium ≈ 800 ms.
+
+### Tests
+
+11 new pytest cases (all passing):
+* `tests/unit/voice/factory/test_stt_fallback_bridge.py` (6) — happy
+  path text passthrough, engine raises → "", timeout → "" + cancel,
+  loop closed → "", lock serialises 3 concurrent calls, reentrant.
+* `tests/unit/voice/factory/test_wake_word_stt_fallback_wireup.py`
+  (5) — flag OFF preserves raise contract, flag ON + engine None
+  raises (defense), flag ON + engine + loop None raises (defense),
+  flag ON + all present registers STT detector, flag ON + multiple
+  NONE minds → all registered.
+
+### Quality gates (full sweep at HEAD)
+
+* uv lock --check ✅
+* ruff + format ✅ (1015/1015)
+* mypy strict ✅ (0 issues, 477 source files — +2 new modules)
+* bandit ✅ (0 issues)
+* pytest ✅ (exit 0, +11 cases vs v0.30.5)
+* tsc ✅
+* vitest ✅ (1172/1172 unchanged — backend-only patch)
+
+### Out of scope (intentional)
+
+* Default-flip is deferred — operator opt-in is the staged-adoption-
+  correct posture for a new audio-thread-blocking path.
+* Per-mind STT engine (vs the shared one + lock): premature; lock
+  overhead is < 0.1 ms.
+* STT fallback for `sovyx[voice]`-not-installed environments —
+  factory engine is `None` there, fallback path correctly degrades to
+  the legacy raise + factory-level try/except.
 
 ## [0.30.5] — 2026-05-04
 

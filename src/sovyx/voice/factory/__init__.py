@@ -751,12 +751,24 @@ async def create_voice_pipeline(
         # once they train the missing model. Catching only VoiceError
         # (not blanket Exception) preserves loud-failure behaviour for
         # genuine helper bugs (KeyError, RuntimeError, …).
+        # Mission v0.30.6 §T4: capture the daemon's main event loop
+        # BEFORE asyncio.to_thread() switches contexts. The STT
+        # fallback bridge inside the builder needs a running loop
+        # reference to submit transcribe coroutines via
+        # asyncio.run_coroutine_threadsafe (R2 conclusion). The loop
+        # capture is a no-op cost when the flag is off because the
+        # builder ignores the loop reference unless stt_fallback_active
+        # gates evaluate True.
+        _main_event_loop = asyncio.get_running_loop()
         try:
             wake_word_router = await asyncio.to_thread(
                 build_wake_word_router_for_enabled_minds,
                 data_dir=data_dir,
                 phonetic_max_distance=_tuning_for_router.wake_word_phonetic_max_distance,
                 phonetic_fallback_enabled=(_tuning_for_router.wake_word_phonetic_fallback_enabled),
+                stt_engine=stt,
+                event_loop=_main_event_loop,
+                stt_fallback_enabled=_tuning_for_router.stt_fallback_for_none_strategy,
             )
         except VoiceError as exc:
             logger.error(
