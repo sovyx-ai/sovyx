@@ -33,6 +33,8 @@ import { VoiceQualityPanel } from "@/components/voice/VoiceQualityPanel";
 import { VoiceSetupWizard } from "@/components/setup-wizard/VoiceSetupWizard";
 import { TrainingJobsPanel } from "@/components/training/TrainingJobsPanel";
 import { TrainWakeWordModal } from "@/components/training/TrainWakeWordModal";
+import { PerMindForgetCard } from "@/components/mind-management/PerMindForgetCard";
+import { PerMindRetentionCard } from "@/components/mind-management/PerMindRetentionCard";
 import { useDashboardStore } from "@/stores/dashboard";
 import type { WakeWordPerMindStatus } from "@/types/api";
 
@@ -732,6 +734,32 @@ export default function VoicePage() {
             </div>
           )}
         </Section>
+
+        {/* Per-mind management — Mission v0.30.2 §T2.3 (D3). Two cards
+            per mind, both consume the mindManagement Zustand slice:
+            * PerMindForgetCard — destructive right-to-erasure
+              (typed-confirm UX matching backend's defense-in-depth at
+              routes/mind.py:173).
+            * PerMindRetentionCard — preview-then-apply scheduled
+              prune (no confirm; only removes AGED records).
+            Section visible only when at least one mind exists in the
+            wake-word per-mind status list (proxy for "minds onboarded
+            on this daemon"). Empty state otherwise. */}
+        {perMindStatus.length > 0 && (
+          <Section
+            icon={<MicIcon className="size-4" />}
+            title={t("mind.forget.title")}
+          >
+            <div className="flex flex-col gap-2">
+              {perMindStatus.map((entry) => (
+                <div key={entry.mind_id} className="flex flex-col gap-2">
+                  <PerMindForgetCard mindId={entry.mind_id} />
+                  <PerMindRetentionCard mindId={entry.mind_id} />
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
 
         {/* Training Jobs Panel — Mission v0.30.0 §T1.5. Renders only
             when an active training subscription exists; pure observer
