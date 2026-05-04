@@ -491,17 +491,73 @@ def _detect_voice_clarity_active(resolved_name: str | None) -> bool:
     return bool(report is not None and report.voice_clarity_active)
 
 
-def _create_stt(language: str) -> Any:  # noqa: ANN401, ARG001
-    """Construct an uninitialized :class:`MoonshineSTT`.
+def _create_stt(language: str = "en") -> Any:  # noqa: ANN401
+    """Construct an uninitialized :class:`MoonshineSTT` for ``language``.
 
     The factory calls ``await engine.initialize()`` right after; the
     split exists so :func:`create_voice_pipeline` can keep the sync
     construction trivially test-patchable while the async model load
     stays on the factory's control-flow path.
-    """
-    from sovyx.voice.stt import MoonshineSTT
 
-    return MoonshineSTT()
+    Pre-v0.30.9 this function silently dropped ``language`` (``ARG001``
+    suppressed the lint), so MoonshineSTT always initialised with its
+    default ``"en"`` regardless of the operator-configured mind language.
+    The forensic case at ``c:\\Users\\guipe\\Downloads\\logs_01.txt``
+    (line 855: ``voice_factory_creating_stt language=pt-br`` immediately
+    followed by line 857: ``Initializing MoonshineSTT language=en``)
+    pinned the bug. Mission anchor:
+    ``docs-internal/missions/MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+    §Phase 1 T1.1.
+
+    Critical guardrail: Moonshine v2 only ships models for the language
+    set in :data:`sovyx.voice.stt.MOONSHINE_SUPPORTED_LANGUAGES`
+    (``ar/en/es/ja/ko/uk/vi/zh``). A naive "remove ARG001 + pass
+    language" fix would convert the silent-wrong-language failure into
+    a hard ``VoiceFactoryError`` at ``await stt.initialize()`` for
+    every operator running ``language=pt-br/pt/de/fr/it/nl/tr/pl/...``.
+    The enterprise-grade fix coerces unsupported languages to ``"en"``
+    and emits a structured WARN that points to the actionable
+    remediation (install a multilingual STT engine or pick a Moonshine-
+    supported language). This preserves the v0.30.8 behaviour for
+    operators on unsupported languages (English voice keeps working)
+    while making the gap observable in dashboards.
+    """
+    from sovyx.voice.stt import (
+        MOONSHINE_SUPPORTED_LANGUAGES,
+        MoonshineConfig,
+        MoonshineSTT,
+    )
+
+    requested = (language or "en").strip().lower()
+    if requested in MOONSHINE_SUPPORTED_LANGUAGES:
+        logger.info(
+            "voice.factory.stt_language_wired",
+            **{
+                "voice.language": requested,
+                "voice.engine": "moonshine",
+            },
+        )
+        return MoonshineSTT(config=MoonshineConfig(language=requested))
+
+    logger.warning(
+        "voice.factory.stt_language_unsupported",
+        **{
+            "voice.requested_language": requested,
+            "voice.engine": "moonshine",
+            "voice.engine_supported_languages": sorted(
+                MOONSHINE_SUPPORTED_LANGUAGES,
+            ),
+            "voice.coerced_language": "en",
+            "voice.action_required": (
+                "Moonshine v2 has no model for the requested language. "
+                "Install a multilingual STT engine (Parakeet roadmap) or "
+                "set the mind language to one of: "
+                + ", ".join(sorted(MOONSHINE_SUPPORTED_LANGUAGES))
+                + ". Until then voice will transcribe in English."
+            ),
+        },
+    )
+    return MoonshineSTT(config=MoonshineConfig(language="en"))
 
 
 def _create_wake_word_stub() -> Any:  # noqa: ANN401

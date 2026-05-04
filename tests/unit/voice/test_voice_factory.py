@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import logging
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -12,6 +13,7 @@ from sovyx.voice.factory import (
     _create_kokoro_tts,
     _create_wake_word_stub,
 )
+from sovyx.voice.factory import _validate as factory_validate_mod
 
 
 class TestVoiceFactoryError:
@@ -39,6 +41,135 @@ class TestCreateWakeWordStub:
         stub = _create_wake_word_stub()
         result = stub.process_frame(b"\x00" * 1024)
         assert result.detected is False
+
+
+class TestCreateSttLanguagePassthrough:
+    """Bug #1 (Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+    §Phase 1 T1.1) — :func:`_create_stt` MUST forward the requested
+    language into :class:`MoonshineConfig` instead of silently dropping
+    it.
+
+    Forensic anchor: ``c:\\Users\\guipe\\Downloads\\logs_01.txt`` line
+    855 logs ``voice_factory_creating_stt language=pt-br`` immediately
+    followed by line 857 ``Initializing MoonshineSTT language=en`` —
+    the parameter was suppressed by a stale ``# noqa: ANN401, ARG001``
+    pin and never reached the engine.
+
+    The fix's safety contract: Moonshine v2 only ships
+    ``ar/en/es/ja/ko/uk/vi/zh``; an unsupported language MUST be coerced
+    to English with a structured WARN (rather than crashing
+    ``await stt.initialize()`` with ``ValueError("Language not found:
+    pt-br ...")``). These tests pin both the forwarding behaviour and
+    the safety contract.
+    """
+
+    _VALIDATE_LOGGER = "sovyx.voice.factory._validate"
+
+    def test_supported_language_is_forwarded_to_moonshine_config(self) -> None:
+        with patch("sovyx.voice.stt.MoonshineSTT") as mock_stt_cls:
+            mock_stt_cls.return_value = MagicMock(name="stt")
+            factory_validate_mod._create_stt("es")
+            mock_stt_cls.assert_called_once()
+            kwargs = mock_stt_cls.call_args.kwargs
+            assert "config" in kwargs
+            assert kwargs["config"].language == "es"
+
+    def test_supported_language_emits_wired_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=self._VALIDATE_LOGGER)
+        with patch("sovyx.voice.stt.MoonshineSTT") as mock_stt_cls:
+            mock_stt_cls.return_value = MagicMock(name="stt")
+            factory_validate_mod._create_stt("ja")
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.factory.stt_language_wired"
+        ]
+        assert len(events) == 1, f"expected one wired event, got {[r.msg for r in caplog.records]}"
+        assert events[0]["voice.language"] == "ja"
+        assert events[0]["voice.engine"] == "moonshine"
+
+    def test_unsupported_language_coerces_to_english(self) -> None:
+        with patch("sovyx.voice.stt.MoonshineSTT") as mock_stt_cls:
+            mock_stt_cls.return_value = MagicMock(name="stt")
+            factory_validate_mod._create_stt("pt-br")
+            kwargs = mock_stt_cls.call_args.kwargs
+            assert kwargs["config"].language == "en"
+
+    def test_unsupported_language_emits_warn_with_actionable_remediation(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger=self._VALIDATE_LOGGER)
+        with patch("sovyx.voice.stt.MoonshineSTT") as mock_stt_cls:
+            mock_stt_cls.return_value = MagicMock(name="stt")
+            factory_validate_mod._create_stt("pt-br")
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.factory.stt_language_unsupported"
+        ]
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["voice.requested_language"] == "pt-br"
+        assert evt["voice.coerced_language"] == "en"
+        assert evt["voice.engine"] == "moonshine"
+        # Operator-actionable remediation: must list supported languages
+        # AND mention that English will be used until they fix it.
+        action = evt["voice.action_required"]
+        assert "Moonshine" in action
+        assert "English" in action
+        for code in ("ar", "en", "es", "ja", "ko", "uk", "vi", "zh"):
+            assert code in action
+
+    def test_empty_language_defaults_to_english_back_compat(self) -> None:
+        # Legacy test stubs at lines 71/113/150/334/513/568/864 of this
+        # file pre-T1.1 used ``factory_mod._create_stt = lambda *a, **kw:
+        # fake_stt`` — the lambda accepts both no-args and arbitrary
+        # args. The new ``language: str = "en"`` default keeps zero-arg
+        # callers wired to English without breaking them.
+        with patch("sovyx.voice.stt.MoonshineSTT") as mock_stt_cls:
+            mock_stt_cls.return_value = MagicMock(name="stt")
+            factory_validate_mod._create_stt()
+            kwargs = mock_stt_cls.call_args.kwargs
+            assert kwargs["config"].language == "en"
+
+    def test_uppercase_language_is_normalised(self) -> None:
+        # Operators may type ``EN`` or ``En`` in mind.yaml; the
+        # case-insensitive normalisation prevents a silent miss
+        # against the lowercase frozenset.
+        with patch("sovyx.voice.stt.MoonshineSTT") as mock_stt_cls:
+            mock_stt_cls.return_value = MagicMock(name="stt")
+            factory_validate_mod._create_stt("EN")
+            kwargs = mock_stt_cls.call_args.kwargs
+            assert kwargs["config"].language == "en"
+
+    def test_whitespace_language_is_stripped(self) -> None:
+        with patch("sovyx.voice.stt.MoonshineSTT") as mock_stt_cls:
+            mock_stt_cls.return_value = MagicMock(name="stt")
+            factory_validate_mod._create_stt("  es  ")
+            kwargs = mock_stt_cls.call_args.kwargs
+            assert kwargs["config"].language == "es"
+
+
+# Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+# §Phase 1 T1.2 — defense-in-depth WARN when ``create_voice_pipeline``
+# is invoked with the literal ``mind_id="default"`` sentinel.
+#
+# The WARN sits inline at ``voice/factory/__init__.py`` just before the
+# ``VoicePipelineConfig(...)`` construction. It is purely observability
+# — fires only when SOMEONE bypasses the canonical dashboard resolver
+# (``sovyx.dashboard._shared.resolve_active_mind_id_for_request``) and
+# hits the factory directly with the sentinel. The behavioural fix
+# lives in the dashboard route (covered by
+# ``TestEnableVoiceMindIdResolution`` in ``test_voice_routes.py``).
+# An integration test that drives the full async ``create_voice_pipeline``
+# would be ~200 LOC of fixtures for a 5-line WARN — the cost / value
+# does not justify it. Code review + the production-path integration
+# tests are the right coverage gate here.
 
 
 class TestFactoryInitializesSTT:

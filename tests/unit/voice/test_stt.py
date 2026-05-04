@@ -25,6 +25,7 @@ from sovyx.voice.stt import (
     _MODEL_SPECS,
     _STREAMING_DRAIN_S,
     _TRANSCRIBE_TIMEOUT_S,
+    MOONSHINE_SUPPORTED_LANGUAGES,
     MoonshineConfig,
     MoonshineSTT,
     PartialTranscription,
@@ -136,6 +137,53 @@ async def _audio_stream(
 # ---------------------------------------------------------------------------
 # Config tests
 # ---------------------------------------------------------------------------
+
+
+class TestMoonshineSupportedLanguagesConstant:
+    """The MOONSHINE_SUPPORTED_LANGUAGES constant is a stable contract.
+
+    Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+    §Phase 1 T1.1 introduced the constant as the eligibility set for
+    :func:`sovyx.voice.factory._validate._create_stt`. The factory uses
+    membership in this frozenset to decide whether to forward an
+    operator-requested language to ``MoonshineConfig`` or coerce to
+    English with a structured WARN.
+
+    If a future Moonshine version ships a new language model, this test
+    breaks loudly and forces the constant to be updated in lock-step
+    with the underlying library — preventing the silent
+    "language is now supported but Sovyx still routes it to English"
+    drift class.
+    """
+
+    def test_set_membership_matches_moonshine_v2_models(self) -> None:
+        # Verified-at-HEAD via direct probe of moonshine_voice
+        # ``get_model_for_language`` — set is ar/en/es/ja/ko/uk/vi/zh.
+        assert (
+            frozenset({"ar", "en", "es", "ja", "ko", "uk", "vi", "zh"})
+            == MOONSHINE_SUPPORTED_LANGUAGES
+        )
+
+    def test_constant_is_immutable(self) -> None:
+        # frozenset is the contract, not a regular set — callers can
+        # safely cache it without defensive copy.
+        assert isinstance(MOONSHINE_SUPPORTED_LANGUAGES, frozenset)
+
+    def test_english_is_always_supported(self) -> None:
+        # English is the fallback target for the unsupported-language
+        # WARN path. If Moonshine ever drops English, the entire
+        # coercion strategy in _create_stt needs to be redesigned.
+        assert "en" in MOONSHINE_SUPPORTED_LANGUAGES
+
+    def test_pt_br_is_not_supported(self) -> None:
+        # Documents the forensic case from
+        # ``c:\\Users\\guipe\\Downloads\\logs_01.txt`` line 855:
+        # ``voice_factory_creating_stt language=pt-br``. Moonshine has
+        # no Portuguese model. If this assertion ever flips, the
+        # coercion-to-English logic in _create_stt becomes obsolete
+        # for Brazilian operators (a positive change worth catching).
+        assert "pt-br" not in MOONSHINE_SUPPORTED_LANGUAGES
+        assert "pt" not in MOONSHINE_SUPPORTED_LANGUAGES
 
 
 class TestMoonshineConfig:

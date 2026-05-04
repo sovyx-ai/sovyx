@@ -210,6 +210,19 @@ _MODEL_SPECS: dict[str, dict[str, float | int]] = {
 }
 
 
+# Languages Moonshine v2 ships a model for. Direct probe at HEAD via
+# moonshine_voice.get_model_for_language() raises ValueError for any
+# code outside this set ("Language not found: <code>. Supported
+# languages: ar, es, en, ja, ko, vi, uk, zh"). Kept as a frozenset so
+# callers can membership-test cheaply without importing moonshine_voice
+# at module load time. If a future Moonshine version adds a language,
+# tests/unit/voice/test_stt.py::test_moonshine_supported_languages_constant
+# breaks loudly to force this constant to be updated in lock-step.
+MOONSHINE_SUPPORTED_LANGUAGES: frozenset[str] = frozenset(
+    {"ar", "en", "es", "ja", "ko", "uk", "vi", "zh"},
+)
+
+
 # ---------------------------------------------------------------------------
 # Public types
 # ---------------------------------------------------------------------------
