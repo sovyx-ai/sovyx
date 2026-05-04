@@ -354,6 +354,17 @@ class TestPipeWireObservability:
 
 
 class TestAlsaUcmObservability:
+    """ALSA UCM observability — multi-card iteration (Mission §Phase 1 T1.3).
+
+    Pre-T1.3 the probe was hard-coded to ``card_id="0"``. Post-T1.3
+    it iterates every ALSA card with a capture PCM (via
+    :func:`sovyx.voice.health._alsa_input_cards.enumerate_input_card_ids`)
+    and emits one ``voice.factory.alsa_ucm_status`` event per card
+    plus the new ``voice.ucm_card_index`` field. The empty-fallback
+    case (no input cards) emits exactly one baseline event with
+    ``card_index=-1``.
+    """
+
     def test_disabled_does_nothing(self) -> None:
         with (
             patch(
@@ -361,11 +372,18 @@ class TestAlsaUcmObservability:
                 return_value=MagicMock(voice_alsa_ucm_detection_enabled=False),
             ),
             patch("sovyx.voice.health._alsa_ucm.detect_ucm") as mock_detect,
+            patch(
+                "sovyx.voice.health._alsa_input_cards.enumerate_input_card_ids",
+                return_value=[(0, "PCH")],
+            ),
         ):
             _maybe_log_alsa_ucm_status()
         mock_detect.assert_not_called()
 
-    def test_enabled_logs_status(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_enabled_logs_status_per_card(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         from sovyx.voice.health._alsa_ucm import UcmReport, UcmStatus
 
         report = UcmReport(
@@ -384,6 +402,10 @@ class TestAlsaUcmObservability:
                 "sovyx.voice.health._alsa_ucm.detect_ucm",
                 return_value=report,
             ),
+            patch(
+                "sovyx.voice.health._alsa_input_cards.enumerate_input_card_ids",
+                return_value=[(0, "PCH")],
+            ),
         ):
             caplog.set_level(logging.INFO, logger=_FACTORY_LOGGER)
             _maybe_log_alsa_ucm_status()
@@ -396,11 +418,158 @@ class TestAlsaUcmObservability:
         assert len(events) == 1
         assert events[0]["voice.ucm_status"] == "active"
         assert events[0]["voice.ucm_active_verb"] == "HiFi"
+        assert events[0]["voice.ucm_card_index"] == 0
+
+    def test_iterates_all_input_cards(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The forensic case (logs_01 line 76): host has card 0 = HDMI
+        only and card 1 = SN6180 with mic. Pre-T1.3 only card 0 was
+        probed; post-T1.3 every input card gets its own UCM event.
+        """
+        from sovyx.voice.health._alsa_ucm import UcmReport, UcmStatus
+
+        def _detect_per_card(card_id: str) -> UcmReport:
+            return UcmReport(
+                status=UcmStatus.NO_PROFILE if card_id == "PCH" else UcmStatus.ACTIVE,
+                card_id=card_id,
+                alsaucm_available=True,
+                verbs=() if card_id == "PCH" else ("HiFi",),
+                active_verb=None if card_id == "PCH" else "HiFi",
+            )
+
+        with (
+            patch(
+                "sovyx.engine.config.VoiceTuningConfig",
+                return_value=MagicMock(voice_alsa_ucm_detection_enabled=True),
+            ),
+            patch(
+                "sovyx.voice.health._alsa_ucm.detect_ucm",
+                side_effect=_detect_per_card,
+            ),
+            patch(
+                "sovyx.voice.health._alsa_input_cards.enumerate_input_card_ids",
+                return_value=[(0, "PCH"), (1, "Generic")],
+            ),
+        ):
+            caplog.set_level(logging.INFO, logger=_FACTORY_LOGGER)
+            _maybe_log_alsa_ucm_status()
+
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.factory.alsa_ucm_status"
+        ]
+        assert len(events) == 2
+        by_index = {e["voice.ucm_card_index"]: e for e in events}
+        assert by_index[0]["voice.ucm_status"] == "no_profile"
+        assert by_index[0]["voice.ucm_card_id"] == "PCH"
+        assert by_index[1]["voice.ucm_status"] == "active"
+        assert by_index[1]["voice.ucm_card_id"] == "Generic"
+
+    def test_empty_input_cards_emits_baseline_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Headless / no-mic hosts get one baseline event so dashboards
+        distinguish "scan ran, no cards" from "scan never ran".
+        """
+        with (
+            patch(
+                "sovyx.engine.config.VoiceTuningConfig",
+                return_value=MagicMock(voice_alsa_ucm_detection_enabled=True),
+            ),
+            patch(
+                "sovyx.voice.health._alsa_input_cards.enumerate_input_card_ids",
+                return_value=[],
+            ),
+            patch("sovyx.voice.health._alsa_ucm.detect_ucm") as mock_detect,
+        ):
+            caplog.set_level(logging.INFO, logger=_FACTORY_LOGGER)
+            _maybe_log_alsa_ucm_status()
+
+        # detect_ucm must NOT have been called — the empty-fallback
+        # path constructs the baseline UcmReport directly.
+        mock_detect.assert_not_called()
+
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.factory.alsa_ucm_status"
+        ]
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["voice.ucm_status"] == "unavailable"
+        assert evt["voice.ucm_card_index"] == -1
+        assert evt["voice.ucm_card_id"] == ""
+
+    def test_one_card_failure_continues_loop(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A per-card UCM failure logs a WARN and the loop continues
+        to the next card — one bad card MUST NOT block telemetry for
+        the rest.
+        """
+        from sovyx.voice.health._alsa_ucm import UcmReport, UcmStatus
+
+        def _detect_or_raise(card_id: str) -> UcmReport:
+            if card_id == "PCH":
+                raise RuntimeError("alsaucm crashed on PCH")
+            return UcmReport(
+                status=UcmStatus.ACTIVE,
+                card_id=card_id,
+                alsaucm_available=True,
+                verbs=("HiFi",),
+                active_verb="HiFi",
+            )
+
+        with (
+            patch(
+                "sovyx.engine.config.VoiceTuningConfig",
+                return_value=MagicMock(voice_alsa_ucm_detection_enabled=True),
+            ),
+            patch(
+                "sovyx.voice.health._alsa_ucm.detect_ucm",
+                side_effect=_detect_or_raise,
+            ),
+            patch(
+                "sovyx.voice.health._alsa_input_cards.enumerate_input_card_ids",
+                return_value=[(0, "PCH"), (1, "Generic")],
+            ),
+        ):
+            # INFO so we can also assert the surviving card's event.
+            caplog.set_level(logging.INFO, logger=_FACTORY_LOGGER)
+            _maybe_log_alsa_ucm_status()  # Must not raise.
+
+        warn_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.factory.alsa_ucm_detection_failed"
+        ]
+        assert len(warn_events) == 1
+        warn = warn_events[0]
+        assert warn["voice.card_index"] == 0
+        assert warn["voice.card_id"] == "PCH"
+        assert "crashed" in warn["voice.error"]
+
+        info_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.factory.alsa_ucm_status"
+        ]
+        # Card 0 raised → no INFO event for it; card 1 succeeded.
+        assert len(info_events) == 1
+        assert info_events[0]["voice.ucm_card_index"] == 1
 
     def test_probe_crash_logs_warn_no_raise(
         self,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
+        """Pre-T1.3 single-card crash compatibility — patch the loop
+        to one card and confirm the WARN still fires."""
         with (
             patch(
                 "sovyx.engine.config.VoiceTuningConfig",
@@ -409,6 +578,10 @@ class TestAlsaUcmObservability:
             patch(
                 "sovyx.voice.health._alsa_ucm.detect_ucm",
                 side_effect=RuntimeError("probe boom"),
+            ),
+            patch(
+                "sovyx.voice.health._alsa_input_cards.enumerate_input_card_ids",
+                return_value=[(0, "PCH")],
             ),
         ):
             caplog.set_level(logging.WARNING, logger=_FACTORY_LOGGER)

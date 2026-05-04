@@ -80,38 +80,98 @@ def _maybe_log_pipewire_status() -> None:
     )
 
 
-def _maybe_log_alsa_ucm_status(card_id: str = "0") -> None:
+def _maybe_log_alsa_ucm_status() -> None:
     """F4 wire-up: read-only ALSA UCM detection on Linux startup.
+
     Opt-in via
     :attr:`VoiceTuningConfig.voice_alsa_ucm_detection_enabled` (default
-    True). ``card_id`` defaults to ``"0"`` because most laptops have
-    the codec at index 0; future revisions can wire a per-device
-    lookup once the cascade has resolved the active card."""
+    True). Iterates every ALSA card with at least one capture PCM
+    (via :func:`sovyx.voice.health._alsa_input_cards.enumerate_input_card_ids`)
+    and emits one ``voice.factory.alsa_ucm_status`` event per card
+    with the new ``voice.ucm_card_index`` field.
+
+    Mission anchor:
+    ``docs-internal/missions/MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+    §Phase 1 T1.3.
+
+    Forensic anchor: the user's daemon
+    (``c:\\Users\\guipe\\Downloads\\logs_01.txt`` line 843) emitted
+    ``voice.factory.alsa_ucm_status ucm_card_id=0 ucm_status=no_profile``
+    — but on that host card 0 is HDMI-only and the real mic is on
+    card 1 (never probed). The pre-T1.3 hard-coded ``card_id="0"``
+    default made the event misleading on multi-card systems.
+
+    Backward-compat: on a host with NO input cards (e.g. headless
+    server) emits exactly one event with ``voice.ucm_card_index=-1``
+    and ``voice.ucm_status="unavailable"`` so dashboards always see
+    a baseline record (signal-of-absence is a valid telemetry signal).
+    Per-card failures emit ``voice.factory.alsa_ucm_detection_failed``
+    and the loop continues to the next card.
+    """
     from sovyx.engine.config import VoiceTuningConfig
 
     tuning = VoiceTuningConfig()
     if not tuning.voice_alsa_ucm_detection_enabled:
         return
-    try:
-        from sovyx.voice.health._alsa_ucm import detect_ucm
 
-        report = detect_ucm(card_id)
-    except Exception as exc:  # noqa: BLE001 — observability only
-        logger.warning(
-            "voice.factory.alsa_ucm_detection_failed",
-            error=str(exc),
-            error_type=type(exc).__name__,
+    from sovyx.voice.health._alsa_input_cards import enumerate_input_card_ids
+    from sovyx.voice.health._alsa_ucm import UcmReport, UcmStatus, detect_ucm
+
+    cards = enumerate_input_card_ids()
+    if not cards:
+        # Signal-of-absence: dashboards distinguish "scan ran, no
+        # input cards" from "scan never ran". Emit one baseline
+        # event with the sentinel card_index = -1.
+        baseline = UcmReport(
+            status=UcmStatus.UNAVAILABLE,
+            card_id="",
+            alsaucm_available=False,
+            notes=("no ALSA card with capture PCM detected",),
         )
+        _emit_alsa_ucm_event(baseline, card_index=-1)
         return
+
+    for card_index, card_id in cards:
+        try:
+            report = detect_ucm(card_id or str(card_index))
+        except Exception as exc:  # noqa: BLE001 — observability only
+            logger.warning(
+                "voice.factory.alsa_ucm_detection_failed",
+                **{
+                    "voice.card_index": card_index,
+                    "voice.card_id": card_id,
+                    "voice.error": str(exc),
+                    "voice.error_type": type(exc).__name__,
+                },
+            )
+            continue
+        _emit_alsa_ucm_event(report, card_index=card_index)
+
+
+def _emit_alsa_ucm_event(report: object, *, card_index: int) -> None:
+    """Emit one ``voice.factory.alsa_ucm_status`` log record.
+
+    Extracted from :func:`_maybe_log_alsa_ucm_status` so the per-card
+    iteration body stays concise (anti-pattern #16 — keeps the parent
+    function readable even after the multi-card fan-out).
+
+    The new ``voice.ucm_card_index`` field carries the numeric kernel
+    index (or ``-1`` for the empty-fallback baseline). Existing fields
+    (``voice.ucm_status``, ``voice.ucm_card_id``,
+    ``voice.ucm_alsaucm_available``, ``voice.ucm_verbs``,
+    ``voice.ucm_active_verb``, ``voice.ucm_notes``) are PRESERVED for
+    backward compatibility with existing dashboard consumers.
+    """
     logger.info(
         "voice.factory.alsa_ucm_status",
         **{
-            "voice.ucm_status": report.status.value,
-            "voice.ucm_card_id": report.card_id,
-            "voice.ucm_alsaucm_available": report.alsaucm_available,
-            "voice.ucm_verbs": list(report.verbs),
-            "voice.ucm_active_verb": report.active_verb or "",
-            "voice.ucm_notes": list(report.notes),
+            "voice.ucm_status": report.status.value,  # type: ignore[attr-defined]
+            "voice.ucm_card_id": report.card_id,  # type: ignore[attr-defined]
+            "voice.ucm_card_index": card_index,
+            "voice.ucm_alsaucm_available": report.alsaucm_available,  # type: ignore[attr-defined]
+            "voice.ucm_verbs": list(report.verbs),  # type: ignore[attr-defined]
+            "voice.ucm_active_verb": report.active_verb or "",  # type: ignore[attr-defined]
+            "voice.ucm_notes": list(report.notes),  # type: ignore[attr-defined]
         },
     )
 
