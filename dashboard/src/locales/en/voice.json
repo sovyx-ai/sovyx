@@ -117,7 +117,10 @@
   "wizard": {
     "title": "Voice Setup Wizard",
     "openHint": "Walk through 4 steps to pick + test your microphone.",
+    "openHintOptional": "Walk through 4 steps to pick + test your microphone (optional).",
+    "testedProceedHint": "Microphone tested — proceed to enable voice.",
     "openButton": "Open Setup Wizard",
+    "reopenButton": "Re-open Setup Wizard",
     "cancel": "Cancel",
     "steps": {
       "devices": "Step 1 of 4 — Select microphone",

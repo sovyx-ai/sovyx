@@ -6,7 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.30.3 below)
+(none — every shipped delta is in 0.30.4 below)
+
+## [0.30.4] — 2026-05-04
+
+### Self-correction patch — migrate T1.1 hardcoded English to i18n
+
+Closes a self-inflicted gap from v0.30.1 §T1.1. The opt-in wizard
+affordance shipped 4 hardcoded English strings inside `VoiceStep`
+on the first day of the autonomous batch — knowing T3 i18n landed
+3 days later. Per `feedback_enterprise_only` ("fixes paliativos /
+band-aid são proibidos"), shipping a self-introduced band-aid AND
+declaring the mission "done" violates the contract. This patch
+closes that gap before declaring v0.30.x stable.
+
+### Changed
+
+* `VoiceStep.tsx` now uses `useTranslation("voice")` for the wizard
+  opt-in copy.
+* `VoiceStep.test.tsx` imports `@/lib/i18n` so `t()` resolves in test
+  context (the file uses raw testing-library; the test-utils wrapper
+  bootstraps i18n elsewhere).
+
+### Added i18n keys (en + pt-BR + es)
+
+* `wizard.openHintOptional` — "Walk through 4 steps to pick + test
+  your microphone (optional)." (and translations).
+* `wizard.testedProceedHint` — "Microphone tested — proceed to
+  enable voice." (and translations).
+* `wizard.reopenButton` — "Re-open Setup Wizard" (and translations).
+* `wizard.openButton` reused for the initial "Open Setup Wizard"
+  label.
+
+### Out of scope (still queued)
+
+* **Onboarding components i18n migration (full)** — `ProviderStep`,
+  `PersonalityStep`, `ChannelsStep`, `FirstChatStep`, plus the
+  pre-existing hardcoded strings in `VoiceStep` (`Failed to enable
+  voice…`, `Enable Voice`, etc.) remain. This patch ONLY closes
+  strings I introduced during the autonomous batch. Full migration
+  is its own queued mission tied to the next onboarding refresh.
+* **STT-fallback NONE strategy** — DEFERRED per D7 ratification;
+  separate research-first mission queued.
+
+### Quality gates
+
+* ruff / mypy / bandit / pytest / tsc / vitest all green at HEAD.
+* Translation-completeness gate (40 cases) confirms parity across
+  en + pt-BR + es for all 3 new keys.
 
 ## [0.30.3] — 2026-05-04
 

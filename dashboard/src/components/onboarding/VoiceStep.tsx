@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   MicIcon,
   LoaderIcon,
@@ -44,6 +45,7 @@ interface EnableResult {
 }
 
 export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
+  const { t } = useTranslation("voice");
   const [detected, setDetected] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -196,15 +198,17 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-[var(--svx-color-text-secondary)]">
                 {wizardTested
-                  ? "Microphone tested — proceed to enable voice."
-                  : "Walk through 4 steps to pick + test your microphone (optional)."}
+                  ? t("wizard.testedProceedHint")
+                  : t("wizard.openHintOptional")}
               </p>
               <button
                 type="button"
                 onClick={() => setWizardOpen(true)}
                 className="shrink-0 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-accent)] bg-[var(--svx-color-accent-soft)] px-3 py-1 text-xs font-medium text-[var(--svx-color-accent)] hover:bg-[var(--svx-color-accent)] hover:text-white"
               >
-                {wizardTested ? "Re-open setup wizard" : "Open setup wizard"}
+                {wizardTested
+                  ? t("wizard.reopenButton")
+                  : t("wizard.openButton")}
               </button>
             </div>
           )}

@@ -10,6 +10,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+// Initialize i18n synchronously so VoiceStep's useTranslation finds
+// resources. v0.30.4 migrated the wizard opt-in strings to t() calls.
+import "@/lib/i18n";
 import { VoiceStep } from "./VoiceStep";
 
 const mockGet = vi.fn();

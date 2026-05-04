@@ -117,7 +117,10 @@
   "wizard": {
     "title": "Asistente de Configuración de Voz",
     "openHint": "Recorre 4 pasos para elegir y probar tu micrófono.",
+    "openHintOptional": "Recorre 4 pasos para elegir y probar tu micrófono (opcional).",
+    "testedProceedHint": "Micrófono probado — procede a habilitar la voz.",
     "openButton": "Abrir Asistente",
+    "reopenButton": "Reabrir Asistente",
     "cancel": "Cancelar",
     "steps": {
       "devices": "Paso 1 de 4 — Seleccionar micrófono",
