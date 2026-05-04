@@ -15,7 +15,7 @@
  * step + action shape — no implicit string-comparison drift.
  */
 import type { JSX } from "react";
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api } from "@/lib/api";
@@ -115,6 +115,60 @@ export function VoiceSetupWizard({
 }: VoiceSetupWizardProps): JSX.Element {
   const { t } = useTranslation("voice");
   const [state, dispatch] = useReducer(_reducer, _INITIAL_STATE);
+
+  // ── A/B telemetry (Mission v0.30.1 §T1.2) ─────────────────────────
+  // Refs avoid re-rendering on telemetry-only updates. ``stepStartRef``
+  // tracks (step, t_start) so a transition emits dwell for the prior
+  // step. ``completedRef`` flips true on reaching ``done`` — used by
+  // the unmount cleanup to discriminate completion vs abandonment.
+  const stepStartRef = useRef<{ step: WizardStep; t: number }>({
+    step: _INITIAL_STATE.step,
+    t: performance.now(),
+  });
+  const completedRef = useRef<boolean>(false);
+
+  // Emit step_dwell on every step transition. Best-effort POST: a
+  // network failure must not break the wizard's UX, so we swallow.
+  useEffect(() => {
+    const previous = stepStartRef.current;
+    if (previous.step === state.step) return;
+    const duration = Math.round(performance.now() - previous.t);
+    void api
+      .post("/api/voice/wizard/telemetry", {
+        event: "step_dwell",
+        step: previous.step,
+        duration_ms: duration,
+      })
+      .catch(() => {
+        // Telemetry is best-effort; swallow so wizard UX is unaffected.
+      });
+    stepStartRef.current = { step: state.step, t: performance.now() };
+    if (state.step === "done") {
+      completedRef.current = true;
+      void api
+        .post("/api/voice/wizard/telemetry", {
+          event: "completion",
+          outcome: "completed",
+          exit_step: "done",
+        })
+        .catch(() => {});
+    }
+  }, [state.step]);
+
+  // Emit abandonment on unmount when the wizard never reached done.
+  useEffect(() => {
+    return () => {
+      if (completedRef.current) return;
+      const exitStep = stepStartRef.current.step;
+      void api
+        .post("/api/voice/wizard/telemetry", {
+          event: "completion",
+          outcome: "abandoned",
+          exit_step: exitStep,
+        })
+        .catch(() => {});
+    };
+  }, []);
 
   // Step 1: fetch devices on mount.
   useEffect(() => {

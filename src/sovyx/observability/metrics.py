@@ -399,6 +399,29 @@ class MetricsRegistry:
             "Sink playback latency for the voice-test job",
         )
 
+        # ── Voice setup wizard A/B telemetry (Mission v0.30.1 §T1.2) ──
+        # Two low-cardinality instruments answer the operator's
+        # decision-making question post-D22 pilot: "is the 5-step
+        # wizard better than the legacy free-form modal?"
+        #   step_dwell  — distribution of how long operators sit on
+        #                 each step (catches "step 3 is too dense" UX
+        #                 problems)
+        #   completion  — discrete outcome counter; deriving rate
+        #                 (completed / started) is a query-time concern
+        # Attributes are intentionally enum-bounded:
+        #   step / exit_step ∈ {devices, record, results, save, done}
+        #   outcome ∈ {completed, abandoned}
+        self.voice_wizard_step_dwell_ms = self._histogram(
+            "sovyx.voice.wizard.step.dwell.latency",
+            "Time operator spent on each wizard step before transitioning (label: step)",
+        )
+
+        self.voice_wizard_completion_rate = self._counter(
+            "sovyx.voice.wizard.completion.rate",
+            "Wizard completion outcomes (labels: outcome=completed|abandoned, "
+            "exit_step=devices|record|results|save|done)",
+        )
+
         # Unified stream opener — one counter increment per attempted
         # (host_api, auto_convert, result) triple so field debugging can
         # answer "which host API + auto_convert combination is the mic

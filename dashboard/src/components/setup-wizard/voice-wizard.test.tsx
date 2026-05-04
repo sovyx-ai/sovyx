@@ -70,6 +70,12 @@ const DIAGNOSTIC_RESPONSE = {
 beforeEach(() => {
   mockGet.mockReset();
   mockPost.mockReset();
+  // Default for telemetry POSTs (Mission v0.30.1 §T1.2) — wizard now
+  // emits step_dwell + completion via api.post on every transition;
+  // tests that exercise specific endpoints override this with their
+  // own mockResolvedValueOnce. Without a default, every transition
+  // would crash on .catch() since the unstubbed mock returns undefined.
+  mockPost.mockResolvedValue({});
 });
 
 describe("VoiceSetupWizard — devices step", () => {
@@ -109,7 +115,14 @@ describe("VoiceSetupWizard — record + results flow", () => {
       if (path === "/api/voice/wizard/diagnostic") return Promise.resolve(DIAGNOSTIC_RESPONSE);
       return Promise.reject(new Error("unknown path"));
     });
-    mockPost.mockResolvedValueOnce(TEST_RESULT_OK);
+    // Discriminate by URL — telemetry POSTs (Mission v0.30.1 §T1.2)
+    // share the mock with /test-record, so a once-pin would race.
+    mockPost.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/test-record") {
+        return Promise.resolve(TEST_RESULT_OK);
+      }
+      return Promise.resolve({});
+    });
 
     render(<VoiceSetupWizard />);
     await waitFor(() => {
@@ -131,7 +144,14 @@ describe("VoiceSetupWizard — record + results flow", () => {
       if (path === "/api/voice/wizard/diagnostic") return Promise.resolve(DIAGNOSTIC_RESPONSE);
       return Promise.reject(new Error("unknown path"));
     });
-    mockPost.mockResolvedValueOnce(TEST_RESULT_OK);
+    // Discriminate by URL — telemetry POSTs (Mission v0.30.1 §T1.2)
+    // share the mock with /test-record, so a once-pin would race.
+    mockPost.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/test-record") {
+        return Promise.resolve(TEST_RESULT_OK);
+      }
+      return Promise.resolve({});
+    });
 
     render(<VoiceSetupWizard />);
     await waitFor(() => {
@@ -147,6 +167,88 @@ describe("VoiceSetupWizard — record + results flow", () => {
   });
 });
 
+describe("VoiceSetupWizard — A/B telemetry (Mission v0.30.1 §T1.2)", () => {
+  it("emits step_dwell on step transition", async () => {
+    mockGet.mockResolvedValueOnce(DEVICES_RESPONSE);
+    render(<VoiceSetupWizard />);
+    await waitFor(() => {
+      expect(screen.getByText("Built-in Microphone")).toBeInTheDocument();
+    });
+    // devices → record transition fires step_dwell for "devices".
+    fireEvent.click(screen.getByText("Built-in Microphone"));
+
+    await waitFor(() => {
+      const telemetryCalls = mockPost.mock.calls.filter(
+        ([path]) => path === "/api/voice/wizard/telemetry",
+      );
+      expect(telemetryCalls.length).toBeGreaterThanOrEqual(1);
+      const [, body] = telemetryCalls[0];
+      expect(body.event).toBe("step_dwell");
+      expect(body.step).toBe("devices");
+      expect(typeof body.duration_ms).toBe("number");
+      expect(body.duration_ms).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  it("emits completion=abandoned on unmount before reaching done", async () => {
+    mockGet.mockResolvedValueOnce(DEVICES_RESPONSE);
+    const { unmount } = render(<VoiceSetupWizard />);
+    await waitFor(() => {
+      expect(screen.getByText("Built-in Microphone")).toBeInTheDocument();
+    });
+    unmount();
+
+    await waitFor(() => {
+      const completionCalls = mockPost.mock.calls.filter(
+        ([path, body]) =>
+          path === "/api/voice/wizard/telemetry" &&
+          body.event === "completion",
+      );
+      expect(completionCalls.length).toBe(1);
+      const [, body] = completionCalls[0];
+      expect(body.outcome).toBe("abandoned");
+      expect(body.exit_step).toBe("devices");
+    });
+  });
+
+  it("emits completion=completed when wizard reaches done", async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/devices") return Promise.resolve(DEVICES_RESPONSE);
+      if (path === "/api/voice/wizard/diagnostic") return Promise.resolve(DIAGNOSTIC_RESPONSE);
+      return Promise.reject(new Error("unknown path"));
+    });
+    mockPost.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/test-record") {
+        return Promise.resolve(TEST_RESULT_OK);
+      }
+      return Promise.resolve({});
+    });
+
+    render(<VoiceSetupWizard />);
+    await waitFor(() => {
+      expect(screen.getByText("Built-in Microphone")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Built-in Microphone"));
+    fireEvent.click(screen.getByText("Start 3-second recording"));
+    await waitFor(() => {
+      expect(screen.getByText("Save selection")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Save selection"));
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => {
+      const completionCalls = mockPost.mock.calls.filter(
+        ([path, body]) =>
+          path === "/api/voice/wizard/telemetry" &&
+          body.event === "completion" &&
+          body.outcome === "completed",
+      );
+      expect(completionCalls.length).toBe(1);
+      expect(completionCalls[0][1].exit_step).toBe("done");
+    });
+  });
+});
+
 describe("VoiceSetupWizard — save + done", () => {
   it("save → done + onComplete fires with deviceId", async () => {
     mockGet.mockImplementation((path: string) => {
@@ -154,7 +256,14 @@ describe("VoiceSetupWizard — save + done", () => {
       if (path === "/api/voice/wizard/diagnostic") return Promise.resolve(DIAGNOSTIC_RESPONSE);
       return Promise.reject(new Error("unknown path"));
     });
-    mockPost.mockResolvedValueOnce(TEST_RESULT_OK);
+    // Discriminate by URL — telemetry POSTs (Mission v0.30.1 §T1.2)
+    // share the mock with /test-record, so a once-pin would race.
+    mockPost.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/test-record") {
+        return Promise.resolve(TEST_RESULT_OK);
+      }
+      return Promise.resolve({});
+    });
 
     const onComplete = vi.fn();
     render(<VoiceSetupWizard onComplete={onComplete} />);

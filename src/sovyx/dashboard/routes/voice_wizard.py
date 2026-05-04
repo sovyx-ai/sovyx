@@ -48,7 +48,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import numpy as np
 import numpy.typing as npt
@@ -62,6 +62,7 @@ from starlette.status import (
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
 
 logger = get_logger(__name__)
 
@@ -733,6 +734,82 @@ async def get_wizard_diagnostic(request: Request) -> WizardDiagnosticResponse:
         platform=platform,
         recommendations=recommendations,
     )
+
+
+# ── Wizard A/B telemetry ingestion (Mission v0.30.1 §T1.2) ──────────
+
+
+_VALID_STEPS: frozenset[str] = frozenset({"devices", "record", "results", "save", "done"})
+"""Wizard step enum — must match the discriminated-union ``WizardStep``
+in ``dashboard/src/components/setup-wizard/VoiceSetupWizard.tsx``. Both
+metric attributes (step / exit_step) are bounded to this enum so the
+OTel scrape series count stays predictable (5 distinct values × 2
+metrics × 2 outcomes = ≤ 20 series total)."""
+
+_MAX_DURATION_MS: int = 3_600_000
+"""1 h cap on a single step dwell. Anything longer is operator left
+the tab open + walked away — telemetry is meaningless beyond the cap
+and admitting it would stretch histogram buckets without insight."""
+
+
+class WizardTelemetryStepDwell(BaseModel):
+    """Step-dwell discriminated payload."""
+
+    event: Literal["step_dwell"]
+    step: str = Field(description="Wizard step the dwell ended on.")
+    duration_ms: int = Field(
+        ge=0,
+        le=_MAX_DURATION_MS,
+        description="Time spent on the step before transitioning.",
+    )
+
+
+class WizardTelemetryCompletion(BaseModel):
+    """Completion discriminated payload."""
+
+    event: Literal["completion"]
+    outcome: Literal["completed", "abandoned"]
+    exit_step: str = Field(description="Step the wizard was on at exit.")
+
+
+@router.post("/telemetry", status_code=204)
+async def emit_wizard_telemetry(
+    request: Request,
+    body: WizardTelemetryStepDwell | WizardTelemetryCompletion,
+) -> None:
+    """Record one wizard A/B telemetry event.
+
+    Frontend instrumentation in ``VoiceSetupWizard.tsx`` posts here on
+    every step transition (``step_dwell``) and on wizard exit
+    (``completion``). The endpoint is best-effort: a 4xx on payload
+    errors is informative, but the wizard doesn't block on the
+    response. Series cardinality is capped via the ``_VALID_STEPS``
+    enum + ``outcome`` literal — operators uploading random strings
+    via curl are rejected with 400 before any metric instrument is
+    touched.
+    """
+    if body.event == "step_dwell":
+        if body.step not in _VALID_STEPS:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=f"step must be one of {sorted(_VALID_STEPS)}",
+            )
+        get_metrics().voice_wizard_step_dwell_ms.record(
+            body.duration_ms, attributes={"step": body.step}
+        )
+    else:
+        if body.exit_step not in _VALID_STEPS:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=f"exit_step must be one of {sorted(_VALID_STEPS)}",
+            )
+        get_metrics().voice_wizard_completion_rate.add(
+            1,
+            attributes={
+                "outcome": body.outcome,
+                "exit_step": body.exit_step,
+            },
+        )
 
 
 # ── Production recorder (lazy-bound to sounddevice) ─────────────────
