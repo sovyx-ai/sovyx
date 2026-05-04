@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   CheckCircle2Icon,
   LoaderIcon,
@@ -22,6 +23,7 @@ export function ProviderStep({
   ollamaModels,
   onConfigured,
 }: ProviderStepProps) {
+  const { t } = useTranslation("onboarding");
   const [selected, setSelected] = useState<ProviderMeta | null>(
     ollamaAvailable ? PROVIDERS.find((p) => p.id === "ollama") ?? null : null,
   );
@@ -48,7 +50,10 @@ export function ProviderStep({
         body,
       );
       if (result.ok) {
-        setTestResult({ ok: true, message: `Connected - ${result.model}` });
+        setTestResult({
+          ok: true,
+          message: t("providers.connectedMessage", { model: result.model }),
+        });
         onConfigured(result.provider, result.model);
       }
     } catch (err) {
@@ -62,7 +67,7 @@ export function ProviderStep({
     } finally {
       setTesting(false);
     }
-  }, [selected, apiKey, ollamaModel, onConfigured]);
+  }, [selected, apiKey, ollamaModel, onConfigured, t]);
 
   const handleConfigure = useCallback(async () => {
     if (!selected) return;
@@ -94,10 +99,10 @@ export function ProviderStep({
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-[var(--svx-color-text-primary)]">
-          Choose Your Brain
+          {t("providers.title")}
         </h2>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
-          Select an LLM provider to power your companion.
+          {t("providers.subtitle")}
         </p>
       </div>
 
@@ -124,17 +129,17 @@ export function ProviderStep({
             </div>
             {p.local && ollamaAvailable && (
               <span className="mt-1 inline-block rounded-full bg-[var(--svx-color-success)]/10 px-2 py-0.5 text-[10px] font-medium text-[var(--svx-color-success)]">
-                Detected
+                {t("providers.detected")}
               </span>
             )}
             {p.local && !ollamaAvailable && (
               <span className="mt-1 inline-block text-[10px] text-[var(--svx-color-text-tertiary)]">
-                Local
+                {t("providers.local")}
               </span>
             )}
             {!p.local && (
               <span className="mt-1 inline-block text-[10px] text-[var(--svx-color-text-tertiary)]">
-                Cloud
+                {t("providers.cloud")}
               </span>
             )}
           </button>
@@ -152,7 +157,13 @@ export function ProviderStep({
               {selected.description}
             </p>
             <div className="mt-2 flex items-center gap-4 text-xs text-[var(--svx-color-text-tertiary)]">
-              <span>Model: {isOllama ? (ollamaModel || "auto") : selected.defaultModel}</span>
+              <span>
+                {t("providers.modelLine", {
+                  model: isOllama
+                    ? ollamaModel || t("providers.auto")
+                    : selected.defaultModel,
+                })}
+              </span>
               <span>{selected.pricing}</span>
             </div>
           </div>
@@ -161,7 +172,7 @@ export function ProviderStep({
           {isOllama && ollamaAvailable && ollamaModels.length > 0 && (
             <div>
               <label className="mb-1 block text-xs font-medium text-[var(--svx-color-text-secondary)]">
-                Model
+                {t("providers.ollamaModelLabel")}
               </label>
               <select
                 value={ollamaModel}
@@ -181,14 +192,14 @@ export function ProviderStep({
           {isOllama && !ollamaAvailable && (
             <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-warning)]/10 px-3 py-2.5 text-xs text-[var(--svx-color-warning)]">
               <ServerIcon className="mr-1.5 inline size-3.5" />
-              Ollama is not running. Install and start it, then refresh.
+              {t("providers.ollamaNotRunning")}
               <a
                 href="https://ollama.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="ml-1 underline"
               >
-                Download
+                {t("providers.ollamaDownload")}
                 <ExternalLinkIcon className="ml-0.5 inline size-3" />
               </a>
             </div>
@@ -198,7 +209,7 @@ export function ProviderStep({
           {!isOllama && (
             <div>
               <label className="mb-1 block text-xs font-medium text-[var(--svx-color-text-secondary)]">
-                API Key
+                {t("providers.apiKeyLabel")}
               </label>
               <input
                 type="password"
@@ -207,7 +218,7 @@ export function ProviderStep({
                   setApiKey(e.target.value);
                   setTestResult(null);
                 }}
-                placeholder={selected.keyPrefix ? `${selected.keyPrefix}...` : "Paste your API key"}
+                placeholder={selected.keyPrefix ? `${selected.keyPrefix}...` : t("providers.apiKeyPlaceholder")}
                 className="w-full rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3 py-2 font-mono text-sm text-[var(--svx-color-text-primary)] placeholder:text-[var(--svx-color-text-disabled)]"
               />
               <a
@@ -216,7 +227,7 @@ export function ProviderStep({
                 rel="noopener noreferrer"
                 className="mt-1 inline-flex items-center gap-1 text-xs text-[var(--svx-color-brand-primary)] hover:underline"
               >
-                Get your key
+                {t("providers.getKey")}
                 <ExternalLinkIcon className="size-3" />
               </a>
             </div>
@@ -246,13 +257,13 @@ export function ProviderStep({
             {!testResult?.ok && (
               <Button onClick={handleTest} disabled={!canTest || testing} size="sm">
                 {testing && <LoaderIcon className="mr-1.5 size-3.5 animate-spin" />}
-                {testing ? "Testing..." : "Test Connection"}
+                {testing ? t("providers.testingButton") : t("providers.testButton")}
               </Button>
             )}
             {testResult?.ok && (
               <Button onClick={handleConfigure} disabled={configuring}>
                 {configuring && <LoaderIcon className="mr-1.5 size-3.5 animate-spin" />}
-                Continue
+                {t("providers.continueButton")}
               </Button>
             )}
           </div>

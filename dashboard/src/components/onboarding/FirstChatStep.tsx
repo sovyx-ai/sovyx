@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { SendIcon, LoaderIcon, SparklesIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ const WELCOME: Record<string, (name: string) => string> = {
 };
 
 export function FirstChatStep({ mindName, language, provider, model, onComplete }: FirstChatStepProps) {
+  const { t } = useTranslation("onboarding");
   const welcomeFn = WELCOME[language] ?? WELCOME.en ?? ((n: string) => `Hi! I'm ${n}.`);
   const [messages, setMessages] = useState<Message[]>([
     { role: "assistant", content: welcomeFn(mindName) },
@@ -63,7 +65,7 @@ export function FirstChatStep({ mindName, language, provider, model, onComplete 
         ...prev,
         {
           role: "assistant",
-          content: "I couldn't respond right now. You can try again or explore the dashboard.",
+          content: t("firstChat.errorReply"),
         },
       ]);
       setHasReplied(true);
@@ -71,17 +73,16 @@ export function FirstChatStep({ mindName, language, provider, model, onComplete 
       setSending(false);
       inputRef.current?.focus();
     }
-  }, [input, sending]);
+  }, [input, sending, t]);
 
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-xl font-semibold text-[var(--svx-color-text-primary)]">
-          Say Hello
+          {t("firstChat.title")}
         </h2>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
-          This is a real conversation powered by {provider} ({model}).
-          Everything stays on this machine.
+          {t("firstChat.subtitle", { provider, model })}
         </p>
       </div>
 
@@ -109,7 +110,7 @@ export function FirstChatStep({ mindName, language, provider, model, onComplete 
           {sending && (
             <div className="flex items-center gap-2 text-xs text-[var(--svx-color-text-tertiary)]">
               <LoaderIcon className="size-3.5 animate-spin" />
-              {mindName} is thinking...
+              {t("firstChat.thinking", { name: mindName })}
             </div>
           )}
         </div>
@@ -127,7 +128,7 @@ export function FirstChatStep({ mindName, language, provider, model, onComplete 
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Type your first message..."
+              placeholder={t("firstChat.inputPlaceholder")}
               disabled={sending}
               className="flex-1 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3 py-2 text-sm text-[var(--svx-color-text-primary)] placeholder:text-[var(--svx-color-text-disabled)] disabled:opacity-50"
               autoFocus
@@ -145,7 +146,7 @@ export function FirstChatStep({ mindName, language, provider, model, onComplete 
 
       <div className="flex items-center justify-end">
         <Button onClick={onComplete} variant={hasReplied ? "default" : "outline"}>
-          {hasReplied ? "Explore Dashboard" : "Skip to Dashboard"}
+          {hasReplied ? t("firstChat.exploreButton") : t("firstChat.skipButton")}
         </Button>
       </div>
     </div>

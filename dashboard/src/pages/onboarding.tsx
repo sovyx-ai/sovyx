@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import { api } from "@/lib/api";
 import {
@@ -35,6 +36,7 @@ interface OnboardingState {
 const TOTAL_STEPS = 5;
 
 export default function OnboardingPage() {
+  const { t } = useTranslation("onboarding");
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -119,7 +121,7 @@ export default function OnboardingPage() {
       <div className="w-full max-w-2xl space-y-6">
         <div className="text-center">
           <div className="text-sm font-medium text-[var(--svx-color-text-tertiary)]">
-            Step {step} of {TOTAL_STEPS}
+            {t("page.step", { step, total: TOTAL_STEPS })}
           </div>
         </div>
 
@@ -172,7 +174,7 @@ export default function OnboardingPage() {
               onClick={handleSkipAll}
               className="text-xs text-[var(--svx-color-text-tertiary)] hover:text-[var(--svx-color-text-secondary)]"
             >
-              I'll configure manually
+              {t("page.skipAll")}
             </button>
           </div>
         )}

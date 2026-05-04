@@ -45,7 +45,11 @@ interface EnableResult {
 }
 
 export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
-  const { t } = useTranslation("voice");
+  // Two namespaces: ``onboarding`` is the dominant context (page copy
+  // + error messages); ``voice`` is reused for wizard-related strings
+  // shared with voice.tsx (Mission v0.30.4 §wizard.* keys).
+  const { t } = useTranslation("onboarding");
+  const { t: tVoice } = useTranslation("voice");
   const [detected, setDetected] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -93,7 +97,7 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
       } catch (err) {
         if (err instanceof ApiError) {
           if (err.status === 429) {
-            setError("Too many requests — wait a moment and try again.");
+            setError(t("voice.errors.tooManyRequests"));
           } else {
             try {
               const parsed = JSON.parse(err.message) as Record<string, unknown>;
@@ -115,25 +119,23 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
                   typeof body.error === "string" &&
                   body.error.toLowerCase().includes("audio")
                 ) {
-                  setError(
-                    "No audio hardware detected. Connect a microphone and speakers.",
-                  );
+                  setError(t("voice.errors.noAudio"));
                 } else {
-                  setError(body.error ?? "Failed to enable voice");
+                  setError(body.error ?? t("voice.errors.enableFailed"));
                 }
               }
             } catch {
-              setError(err.message || "Failed to enable voice pipeline");
+              setError(err.message || t("voice.errors.pipelineFailed"));
             }
           }
         } else {
-          setError("Failed to enable voice pipeline");
+          setError(t("voice.errors.pipelineFailed"));
         }
       } finally {
         setEnabling(false);
       }
     },
-    [voiceSelection],
+    [voiceSelection, t],
   );
 
   const handleEnable = useCallback(async () => {
@@ -166,10 +168,10 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-[var(--svx-color-text-primary)]">
-          Set up Voice
+          {t("voice.title")}
         </h2>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
-          Optional — enable local speech-to-text and text-to-speech.
+          {t("voice.subtitle")}
         </p>
       </div>
 
@@ -198,8 +200,8 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-[var(--svx-color-text-secondary)]">
                 {wizardTested
-                  ? t("wizard.testedProceedHint")
-                  : t("wizard.openHintOptional")}
+                  ? tVoice("wizard.testedProceedHint")
+                  : tVoice("wizard.openHintOptional")}
               </p>
               <button
                 type="button"
@@ -207,8 +209,8 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
                 className="shrink-0 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-accent)] bg-[var(--svx-color-accent-soft)] px-3 py-1 text-xs font-medium text-[var(--svx-color-accent)] hover:bg-[var(--svx-color-accent)] hover:text-white"
               >
                 {wizardTested
-                  ? t("wizard.reopenButton")
-                  : t("wizard.openButton")}
+                  ? tVoice("wizard.reopenButton")
+                  : tVoice("wizard.openButton")}
               </button>
             </div>
           )}
@@ -219,7 +221,7 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
       {enabled && (
         <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-success)]/10 px-4 py-3 text-xs text-[var(--svx-color-success)]">
           <CheckCircle2Icon className="size-4 shrink-0" />
-          <span>Voice pipeline enabled. You can talk to your companion.</span>
+          <span>{t("voice.successMessage")}</span>
         </div>
       )}
 
@@ -228,11 +230,11 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
         <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-warning)]/40 bg-[var(--svx-color-warning)]/5 p-4 space-y-3">
           <div className="flex items-center gap-2 text-xs font-medium text-[var(--svx-color-text-primary)]">
             <PackageIcon className="size-4 text-[var(--svx-color-warning)]" />
-            Voice packages not installed
+            {t("voice.missingDepsTitle")}
           </div>
           <div className="space-y-2">
             <p className="text-[11px] text-[var(--svx-color-text-secondary)]">
-              Run this command in your terminal, then restart Sovyx:
+              {t("voice.missingDepsHint")}
             </p>
             <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] px-3 py-2">
               <code className="flex-1 text-xs font-mono text-[var(--svx-color-text-primary)]">
@@ -242,7 +244,7 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
                 type="button"
                 onClick={() => handleCopy(missingDeps.command)}
                 className="shrink-0 rounded-[var(--svx-radius-sm)] p-1 text-[var(--svx-color-text-tertiary)] hover:text-[var(--svx-color-text-primary)] transition-colors"
-                aria-label="Copy command"
+                aria-label={t("voice.copyCommandAria")}
               >
                 {copied ? (
                   <CheckIcon className="size-3.5 text-[var(--svx-color-success)]" />
@@ -277,7 +279,7 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
           onClick={onSkip}
           className="text-xs text-[var(--svx-color-text-tertiary)] hover:text-[var(--svx-color-text-secondary)]"
         >
-          Skip for now
+          {t("voice.skipForNow")}
         </button>
         <div className="flex gap-2">
           {detected && !enabled && !missingDeps && (
@@ -287,11 +289,11 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
               ) : (
                 <MicIcon className="mr-1.5 size-3.5" />
               )}
-              {enabling ? "Enabling..." : "Enable Voice"}
+              {enabling ? t("voice.enablingButton") : t("voice.enableButton")}
             </Button>
           )}
           {(enabled || missingDeps) && (
-            <Button onClick={onConfigured}>Continue</Button>
+            <Button onClick={onConfigured}>{t("voice.continueButton")}</Button>
           )}
         </div>
       </div>

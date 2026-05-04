@@ -6,7 +6,92 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.30.4 below)
+(none — every shipped delta is in 0.30.5 below)
+
+## [0.30.5] — 2026-05-04
+
+### Onboarding components — full i18n migration
+
+Closes the queued gap from `MISSION-claude-autonomous-batch-2026-05-03`
+v0.30.3 §T3.0 inventory. Every onboarding-flow string is now driven
+by `useTranslation()`. Operators in pt-BR or es see their
+configuration wizard from the very first screen — no more "switched
+language but onboarding is still in English" UX trap.
+
+### Added
+
+* New `onboarding` i18n namespace registered in `lib/i18n.ts` across
+  en + pt-BR + es. ~120 keys covering page chrome, voice setup,
+  provider selection, personality presets, channel connection, and
+  first-chat demo. Translation-completeness gate (T3.5) extended to
+  44 cases (40 + 4 onboarding).
+* New `i18n-key-usage` namespace registration so VAL-24 static
+  scanner recognizes onboarding t() calls.
+
+### Changed
+
+* `pages/onboarding.tsx` — page chrome (step counter, "I'll
+  configure manually" skip-all link).
+* `components/onboarding/ProviderStep.tsx` — title, subtitle,
+  detected/local/cloud badges, model line, Ollama not-running
+  guidance, API-key labels, test/configure buttons.
+* `components/onboarding/PersonalityStep.tsx` — title with name,
+  4 preset cards (warm / direct / playful / professional) with
+  translated names + descriptions, companion name + language +
+  user name labels, skip + continue buttons. PRESETS const replaced
+  by id-driven lookup.
+* `components/onboarding/ChannelsStep.tsx` — Telegram + Signal
+  cards, BotFather instructions split into lead + tail keys for
+  inline link insertion, connection state suffixes (active /
+  deferred), token field labels, skip + continue buttons.
+* `components/onboarding/VoiceStep.tsx` — title, subtitle, success
+  banner, missing-deps install card (title + hint + copy aria),
+  4 error message keys (429 rate limit / no audio / generic
+  fallbacks), skip + enable + continue buttons. Wizard opt-in
+  strings stay in `voice` namespace (shared with voice.tsx);
+  consumed via `tVoice`.
+* `components/onboarding/FirstChatStep.tsx` — title, subtitle with
+  provider+model interpolation, thinking indicator, input
+  placeholder, explore/skip buttons, error reply fallback.
+
+### Decisions ratified under operator delegation
+
+* **D1**: dedicated `onboarding` namespace, not split across
+  per-step files. Single domain, single import.
+* **D2**: companion welcome strings (FirstChatStep) stay as code
+  data, NOT i18n keys. They reflect the COMPANION's chosen
+  language (operator-picked), independent of dashboard locale.
+* **D3**: PersonalityStep language dropdown shows NATIVE names
+  ("English", "Português", "Español", "Français", "Deutsch", "日本語",
+  "한국어", "中文", "Русский") regardless of dashboard locale — same
+  rationale as `LanguageSelector` D5.
+* **D4**: Personality preset names + descriptions ARE translated —
+  operator reads them in dashboard locale to decide companion
+  behavior.
+* **D5**: Backend error messages surfaced verbatim; only fallback
+  paths get i18n keys.
+
+### Out of scope (intentional)
+
+* `OnboardingState` API field names (`provider_configured`,
+  `default_model`, etc.) — these are network protocol, not UI.
+* Personality preset IDs (`warm`, `direct`, etc.) — wire-format
+  identifiers between UI and backend.
+* Welcome message strings keyed by mind-language code — they ARE
+  multi-language but conceptually data, not UI translation.
+
+### Quality gates (full sweep at HEAD)
+
+* uv lock --check ✅
+* ruff + format ✅ (1015/1015)
+* mypy strict ✅ (0 issues, 475 files)
+* bandit ✅ (0 issues)
+* pytest ✅ (exit 0)
+* tsc ✅
+* vitest ✅ 1172/1172 (translation-completeness 44/44 + key-usage
+  3/3 + 4 existing onboarding component tests still green
+  unchanged — i18n migration validated against the same regex
+  selectors)
 
 ## [0.30.4] — 2026-05-04
 

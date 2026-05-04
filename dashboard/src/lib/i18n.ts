@@ -33,6 +33,7 @@ import voice from "@/locales/en/voice.json";
 import about from "@/locales/en/about.json";
 import chat from "@/locales/en/chat.json";
 import plugins from "@/locales/en/plugins.json";
+import onboarding from "@/locales/en/onboarding.json";
 
 import commonPtBR from "@/locales/pt-BR/common.json";
 import overviewPtBR from "@/locales/pt-BR/overview.json";
@@ -44,6 +45,7 @@ import voicePtBR from "@/locales/pt-BR/voice.json";
 import aboutPtBR from "@/locales/pt-BR/about.json";
 import chatPtBR from "@/locales/pt-BR/chat.json";
 import pluginsPtBR from "@/locales/pt-BR/plugins.json";
+import onboardingPtBR from "@/locales/pt-BR/onboarding.json";
 
 import commonEs from "@/locales/es/common.json";
 import overviewEs from "@/locales/es/overview.json";
@@ -55,6 +57,7 @@ import voiceEs from "@/locales/es/voice.json";
 import aboutEs from "@/locales/es/about.json";
 import chatEs from "@/locales/es/chat.json";
 import pluginsEs from "@/locales/es/plugins.json";
+import onboardingEs from "@/locales/es/onboarding.json";
 
 /** Supported locales — keep in sync with locale-switcher dropdown + completeness gate. */
 export const SUPPORTED_LOCALES = ["en", "pt-BR", "es"] as const;
@@ -73,6 +76,7 @@ void i18n.use(initReactI18next).init({
       about,
       chat,
       plugins,
+      onboarding,
     },
     "pt-BR": {
       common: commonPtBR,
@@ -85,6 +89,7 @@ void i18n.use(initReactI18next).init({
       about: aboutPtBR,
       chat: chatPtBR,
       plugins: pluginsPtBR,
+      onboarding: onboardingPtBR,
     },
     es: {
       common: commonEs,
@@ -97,12 +102,13 @@ void i18n.use(initReactI18next).init({
       about: aboutEs,
       chat: chatEs,
       plugins: pluginsEs,
+      onboarding: onboardingEs,
     },
   },
   lng: "en",
   fallbackLng: "en",
   defaultNS: "common",
-  ns: ["common", "overview", "conversations", "brain", "logs", "settings", "voice", "about", "chat", "plugins"],
+  ns: ["common", "overview", "conversations", "brain", "logs", "settings", "voice", "about", "chat", "plugins", "onboarding"],
   interpolation: {
     escapeValue: false, // React already escapes
   },

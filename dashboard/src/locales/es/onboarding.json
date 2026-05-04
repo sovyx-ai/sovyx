@@ -1,0 +1,100 @@
+{
+  "page": {
+    "step": "Paso {{step}} de {{total}}",
+    "skipAll": "Configuraré manualmente"
+  },
+  "voice": {
+    "title": "Configurar Voz",
+    "subtitle": "Opcional — habilita reconocimiento y síntesis de voz locales.",
+    "skipForNow": "Omitir por ahora",
+    "enableButton": "Habilitar Voz",
+    "enablingButton": "Habilitando...",
+    "continueButton": "Continuar",
+    "successMessage": "Pipeline de voz habilitado. Puedes hablar con tu compañero.",
+    "missingDepsTitle": "Paquetes de voz no instalados",
+    "missingDepsHint": "Ejecuta este comando en tu terminal y reinicia Sovyx:",
+    "copyCommandAria": "Copiar comando",
+    "errors": {
+      "tooManyRequests": "Demasiadas solicitudes — espera un momento e intenta de nuevo.",
+      "noAudio": "No se detectó hardware de audio. Conecta un micrófono y altavoces.",
+      "enableFailed": "Falló al habilitar voz",
+      "pipelineFailed": "Falló al habilitar el pipeline de voz"
+    }
+  },
+  "providers": {
+    "title": "Elige tu Cerebro",
+    "subtitle": "Selecciona un proveedor LLM para alimentar a tu compañero.",
+    "detected": "Detectado",
+    "local": "Local",
+    "cloud": "Nube",
+    "modelLabel": "Modelo",
+    "auto": "auto",
+    "modelLine": "Modelo: {{model}}",
+    "ollamaModelLabel": "Modelo",
+    "ollamaNotRunning": "Ollama no está corriendo. Instálalo e inícialo, luego actualiza.",
+    "ollamaDownload": "Descargar",
+    "apiKeyLabel": "Clave de API",
+    "apiKeyPlaceholder": "Pega tu clave de API",
+    "getKey": "Obtén tu clave",
+    "testButton": "Probar Conexión",
+    "testingButton": "Probando...",
+    "continueButton": "Continuar",
+    "connectedMessage": "Conectado - {{model}}"
+  },
+  "personality": {
+    "titleWithName": "Conoce a {{name}}",
+    "subtitle": "¿Cómo debe comunicarse tu compañero?",
+    "presets": {
+      "warm": {
+        "name": "Cálido y Amigable",
+        "description": "Como un amigo atento que siempre tiene tiempo para ti"
+      },
+      "direct": {
+        "name": "Directo y Conciso",
+        "description": "Directo al grano. Sin rodeos. Máxima señal."
+      },
+      "playful": {
+        "name": "Bromista y Creativo",
+        "description": "Ingenioso, curioso, le encanta explorar ideas contigo"
+      },
+      "professional": {
+        "name": "Profesional",
+        "description": "Formal, preciso, listo para el trabajo"
+      }
+    },
+    "companionNameLabel": "Nombre del compañero",
+    "languageLabel": "Idioma",
+    "userNameLabel": "Tu nombre (opcional)",
+    "userNamePlaceholder": "¿Cómo debe dirigirse a ti?",
+    "skipForNow": "Omitir por ahora",
+    "continueButton": "Continuar"
+  },
+  "channels": {
+    "title": "Conectar Canales",
+    "subtitle": "Opcional — configura canales de mensajería ahora o más tarde en Configuración.",
+    "telegramTitle": "Telegram",
+    "telegramInstructionsLead": "Conversa con {{mindName}} por Telegram. Crea un bot con",
+    "telegramInstructionsTail": "y pega el token abajo.",
+    "telegramTokenLabel": "Token del Bot",
+    "telegramTokenPlaceholder": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+    "telegramConnectButton": "Probar y Conectar",
+    "telegramConnectingButton": "Conectando...",
+    "telegramConnectedSuffixActive": " — activo ahora",
+    "telegramConnectedSuffixDeferred": " — se activará en el próximo inicio",
+    "telegramConnectionFailed": "La conexión falló",
+    "telegramConnectedTo": "Conectado a @{{username}}",
+    "signalTitle": "Signal",
+    "signalComingSoon": "Próximamente",
+    "skipForNow": "Omitir por ahora",
+    "continueButton": "Continuar"
+  },
+  "firstChat": {
+    "title": "Saluda",
+    "subtitle": "Esta es una conversación real alimentada por {{provider}} ({{model}}). Todo permanece en esta máquina.",
+    "thinking": "{{name}} está pensando...",
+    "inputPlaceholder": "Escribe tu primer mensaje...",
+    "exploreButton": "Explorar Panel",
+    "skipButton": "Saltar al Panel",
+    "errorReply": "No pude responder ahora. Puedes intentar de nuevo o explorar el panel."
+  }
+}

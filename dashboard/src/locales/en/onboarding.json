@@ -1,0 +1,100 @@
+{
+  "page": {
+    "step": "Step {{step}} of {{total}}",
+    "skipAll": "I'll configure manually"
+  },
+  "voice": {
+    "title": "Set up Voice",
+    "subtitle": "Optional — enable local speech-to-text and text-to-speech.",
+    "skipForNow": "Skip for now",
+    "enableButton": "Enable Voice",
+    "enablingButton": "Enabling...",
+    "continueButton": "Continue",
+    "successMessage": "Voice pipeline enabled. You can talk to your companion.",
+    "missingDepsTitle": "Voice packages not installed",
+    "missingDepsHint": "Run this command in your terminal, then restart Sovyx:",
+    "copyCommandAria": "Copy command",
+    "errors": {
+      "tooManyRequests": "Too many requests — wait a moment and try again.",
+      "noAudio": "No audio hardware detected. Connect a microphone and speakers.",
+      "enableFailed": "Failed to enable voice",
+      "pipelineFailed": "Failed to enable voice pipeline"
+    }
+  },
+  "providers": {
+    "title": "Choose Your Brain",
+    "subtitle": "Select an LLM provider to power your companion.",
+    "detected": "Detected",
+    "local": "Local",
+    "cloud": "Cloud",
+    "modelLabel": "Model",
+    "auto": "auto",
+    "modelLine": "Model: {{model}}",
+    "ollamaModelLabel": "Model",
+    "ollamaNotRunning": "Ollama is not running. Install and start it, then refresh.",
+    "ollamaDownload": "Download",
+    "apiKeyLabel": "API Key",
+    "apiKeyPlaceholder": "Paste your API key",
+    "getKey": "Get your key",
+    "testButton": "Test Connection",
+    "testingButton": "Testing...",
+    "continueButton": "Continue",
+    "connectedMessage": "Connected - {{model}}"
+  },
+  "personality": {
+    "titleWithName": "Meet {{name}}",
+    "subtitle": "How should your companion communicate?",
+    "presets": {
+      "warm": {
+        "name": "Warm & Friendly",
+        "description": "Like a thoughtful friend who always has time for you"
+      },
+      "direct": {
+        "name": "Direct & Concise",
+        "description": "Straight to the point. No filler. Maximum signal."
+      },
+      "playful": {
+        "name": "Playful & Creative",
+        "description": "Witty, curious, loves exploring ideas together"
+      },
+      "professional": {
+        "name": "Professional",
+        "description": "Formal, precise, business-ready"
+      }
+    },
+    "companionNameLabel": "Companion name",
+    "languageLabel": "Language",
+    "userNameLabel": "Your name (optional)",
+    "userNamePlaceholder": "How should it address you?",
+    "skipForNow": "Skip for now",
+    "continueButton": "Continue"
+  },
+  "channels": {
+    "title": "Connect Channels",
+    "subtitle": "Optional — set up messaging channels now or configure them later in Settings.",
+    "telegramTitle": "Telegram",
+    "telegramInstructionsLead": "Chat with {{mindName}} via Telegram. Create a bot with",
+    "telegramInstructionsTail": "and paste the token below.",
+    "telegramTokenLabel": "Bot Token",
+    "telegramTokenPlaceholder": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+    "telegramConnectButton": "Test & Connect",
+    "telegramConnectingButton": "Connecting...",
+    "telegramConnectedSuffixActive": " — active now",
+    "telegramConnectedSuffixDeferred": " — will activate next start",
+    "telegramConnectionFailed": "Connection failed",
+    "telegramConnectedTo": "Connected to @{{username}}",
+    "signalTitle": "Signal",
+    "signalComingSoon": "Coming soon",
+    "skipForNow": "Skip for now",
+    "continueButton": "Continue"
+  },
+  "firstChat": {
+    "title": "Say Hello",
+    "subtitle": "This is a real conversation powered by {{provider}} ({{model}}). Everything stays on this machine.",
+    "thinking": "{{name}} is thinking...",
+    "inputPlaceholder": "Type your first message...",
+    "exploreButton": "Explore Dashboard",
+    "skipButton": "Skip to Dashboard",
+    "errorReply": "I couldn't respond right now. You can try again or explore the dashboard."
+  }
+}

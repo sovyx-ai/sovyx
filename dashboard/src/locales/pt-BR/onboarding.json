@@ -1,0 +1,100 @@
+{
+  "page": {
+    "step": "Passo {{step}} de {{total}}",
+    "skipAll": "Vou configurar manualmente"
+  },
+  "voice": {
+    "title": "Configurar Voz",
+    "subtitle": "Opcional — habilite reconhecimento e síntese de fala locais.",
+    "skipForNow": "Pular por enquanto",
+    "enableButton": "Habilitar Voz",
+    "enablingButton": "Habilitando...",
+    "continueButton": "Continuar",
+    "successMessage": "Pipeline de voz habilitado. Você pode falar com seu companheiro.",
+    "missingDepsTitle": "Pacotes de voz não instalados",
+    "missingDepsHint": "Execute este comando no seu terminal e reinicie o Sovyx:",
+    "copyCommandAria": "Copiar comando",
+    "errors": {
+      "tooManyRequests": "Muitas requisições — aguarde um momento e tente de novo.",
+      "noAudio": "Nenhum hardware de áudio detectado. Conecte um microfone e alto-falantes.",
+      "enableFailed": "Falha ao habilitar voz",
+      "pipelineFailed": "Falha ao habilitar pipeline de voz"
+    }
+  },
+  "providers": {
+    "title": "Escolha seu Cérebro",
+    "subtitle": "Selecione um provedor LLM para alimentar seu companheiro.",
+    "detected": "Detectado",
+    "local": "Local",
+    "cloud": "Nuvem",
+    "modelLabel": "Modelo",
+    "auto": "auto",
+    "modelLine": "Modelo: {{model}}",
+    "ollamaModelLabel": "Modelo",
+    "ollamaNotRunning": "Ollama não está rodando. Instale e inicie, depois atualize.",
+    "ollamaDownload": "Baixar",
+    "apiKeyLabel": "Chave de API",
+    "apiKeyPlaceholder": "Cole sua chave de API",
+    "getKey": "Obtenha sua chave",
+    "testButton": "Testar Conexão",
+    "testingButton": "Testando...",
+    "continueButton": "Continuar",
+    "connectedMessage": "Conectado - {{model}}"
+  },
+  "personality": {
+    "titleWithName": "Conheça {{name}}",
+    "subtitle": "Como seu companheiro deve se comunicar?",
+    "presets": {
+      "warm": {
+        "name": "Caloroso e Amigável",
+        "description": "Como um amigo atencioso que sempre tem tempo para você"
+      },
+      "direct": {
+        "name": "Direto e Conciso",
+        "description": "Direto ao ponto. Sem rodeios. Máximo sinal."
+      },
+      "playful": {
+        "name": "Brincalhão e Criativo",
+        "description": "Espirituoso, curioso, adora explorar ideias junto"
+      },
+      "professional": {
+        "name": "Profissional",
+        "description": "Formal, preciso, pronto para o trabalho"
+      }
+    },
+    "companionNameLabel": "Nome do companheiro",
+    "languageLabel": "Idioma",
+    "userNameLabel": "Seu nome (opcional)",
+    "userNamePlaceholder": "Como deve se dirigir a você?",
+    "skipForNow": "Pular por enquanto",
+    "continueButton": "Continuar"
+  },
+  "channels": {
+    "title": "Conectar Canais",
+    "subtitle": "Opcional — configure canais de mensagens agora ou depois em Configurações.",
+    "telegramTitle": "Telegram",
+    "telegramInstructionsLead": "Converse com {{mindName}} pelo Telegram. Crie um bot com",
+    "telegramInstructionsTail": "e cole o token abaixo.",
+    "telegramTokenLabel": "Token do Bot",
+    "telegramTokenPlaceholder": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+    "telegramConnectButton": "Testar e Conectar",
+    "telegramConnectingButton": "Conectando...",
+    "telegramConnectedSuffixActive": " — ativo agora",
+    "telegramConnectedSuffixDeferred": " — ativará na próxima inicialização",
+    "telegramConnectionFailed": "Conexão falhou",
+    "telegramConnectedTo": "Conectado a @{{username}}",
+    "signalTitle": "Signal",
+    "signalComingSoon": "Em breve",
+    "skipForNow": "Pular por enquanto",
+    "continueButton": "Continuar"
+  },
+  "firstChat": {
+    "title": "Diga Olá",
+    "subtitle": "Esta é uma conversa real alimentada por {{provider}} ({{model}}). Tudo permanece nesta máquina.",
+    "thinking": "{{name}} está pensando...",
+    "inputPlaceholder": "Digite sua primeira mensagem...",
+    "exploreButton": "Explorar Painel",
+    "skipButton": "Pular para o Painel",
+    "errorReply": "Não consegui responder agora. Tente novamente ou explore o painel."
+  }
+}

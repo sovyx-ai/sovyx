@@ -30,6 +30,7 @@ const NAMESPACES = [
   "about",
   "chat",
   "plugins",
+  "onboarding",
 ] as const;
 
 type ResourceTree = Record<string, unknown>;

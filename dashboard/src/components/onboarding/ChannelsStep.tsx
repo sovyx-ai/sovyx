@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   LoaderIcon,
   CheckCircle2Icon,
@@ -17,6 +18,7 @@ interface ChannelsStepProps {
 }
 
 export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepProps) {
+  const { t } = useTranslation("onboarding");
   const [token, setToken] = useState("");
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{
@@ -41,13 +43,15 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
       if (resp.ok) {
         setResult({
           ok: true,
-          message: `Connected to @${resp.bot_username}`,
+          message: t("channels.telegramConnectedTo", {
+            username: resp.bot_username,
+          }),
           botName: resp.bot_name,
           hotStarted: resp.hot_started,
         });
       }
     } catch (err) {
-      let msg = "Connection failed";
+      let msg = t("channels.telegramConnectionFailed");
       if (err instanceof ApiError) {
         try {
           const body = JSON.parse(err.message) as { error?: string };
@@ -60,16 +64,16 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
     } finally {
       setTesting(false);
     }
-  }, [token]);
+  }, [token, t]);
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-[var(--svx-color-text-primary)]">
-          Connect Channels
+          {t("channels.title")}
         </h2>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
-          Optional — set up messaging channels now or configure them later in Settings.
+          {t("channels.subtitle")}
         </p>
       </div>
 
@@ -78,11 +82,11 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
         <div className="flex items-center gap-2">
           <SendIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
           <h3 className="text-sm font-semibold text-[var(--svx-color-text-primary)]">
-            Telegram
+            {t("channels.telegramTitle")}
           </h3>
         </div>
         <p className="text-xs text-[var(--svx-color-text-secondary)]">
-          Chat with {mindName} via Telegram. Create a bot with
+          {t("channels.telegramInstructionsLead", { mindName })}
           {" "}
           <a
             href="https://t.me/BotFather"
@@ -93,12 +97,12 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
             @BotFather
             <ExternalLinkIcon className="ml-0.5 inline size-3" />
           </a>
-          {" "}and paste the token below.
+          {" "}{t("channels.telegramInstructionsTail")}
         </p>
 
         <div>
           <label className="mb-1 block text-xs font-medium text-[var(--svx-color-text-secondary)]">
-            Bot Token
+            {t("channels.telegramTokenLabel")}
           </label>
           <input
             type="password"
@@ -107,7 +111,7 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
               setToken(e.target.value);
               setResult(null);
             }}
-            placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+            placeholder={t("channels.telegramTokenPlaceholder")}
             className="w-full rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3 py-2 font-mono text-sm text-[var(--svx-color-text-primary)] placeholder:text-[var(--svx-color-text-disabled)]"
           />
         </div>
@@ -127,8 +131,8 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
             )}
             <span>
               {result.message}
-              {result.ok && result.hotStarted && " — active now"}
-              {result.ok && !result.hotStarted && " — will activate next start"}
+              {result.ok && result.hotStarted && t("channels.telegramConnectedSuffixActive")}
+              {result.ok && !result.hotStarted && t("channels.telegramConnectedSuffixDeferred")}
             </span>
           </div>
         )}
@@ -140,7 +144,7 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
             size="sm"
           >
             {testing && <LoaderIcon className="mr-1.5 size-3.5 animate-spin" />}
-            {testing ? "Connecting..." : "Test & Connect"}
+            {testing ? t("channels.telegramConnectingButton") : t("channels.telegramConnectButton")}
           </Button>
         )}
       </div>
@@ -150,10 +154,10 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
         <div className="flex items-center gap-2">
           <MessageSquareIcon className="size-4 text-[var(--svx-color-text-tertiary)]" />
           <h3 className="text-sm font-semibold text-[var(--svx-color-text-tertiary)]">
-            Signal
+            {t("channels.signalTitle")}
           </h3>
           <span className="rounded-full bg-[var(--svx-color-bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--svx-color-text-tertiary)]">
-            Coming soon
+            {t("channels.signalComingSoon")}
           </span>
         </div>
       </div>
@@ -165,10 +169,10 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
           onClick={onSkip}
           className="text-xs text-[var(--svx-color-text-tertiary)] hover:text-[var(--svx-color-text-secondary)]"
         >
-          Skip for now
+          {t("channels.skipForNow")}
         </button>
         <Button onClick={onConfigured}>
-          Continue
+          {t("channels.continueButton")}
         </Button>
       </div>
     </div>
