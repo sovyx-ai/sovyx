@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
 from sovyx.observability.saga import current_event_id, current_saga_id
-from sovyx.observability.tasks import spawn
+from sovyx.observability.tasks import mark_consumed, spawn
 
 if TYPE_CHECKING:  # pragma: no cover
     from sovyx.engine.events import Event, EventBus
@@ -57,7 +57,18 @@ class PluginEventEmitter:
             # The spawned task inherits this frame's contextvars (PEP
             # 567), so saga_id / event_id bound here remain visible
             # inside _emit_with_logging and downstream EventBus.emit.
-            spawn(self._emit_with_logging(event), name="plugin-event-emit")
+            #
+            # Plugin lifecycle emission is intentional fire-and-forget:
+            # the manager doesn't await the EventBus dispatch and never
+            # observes the result. ``mark_consumed`` honours the
+            # ``observability.tasks`` contract that any successful task
+            # whose result is never observed should be flagged as a
+            # leak via ``task.orphaned``. Without this call every
+            # plugin lifecycle event surfaces as a 30-second-delayed
+            # WARNING in operator logs (~12 false positives observed
+            # in a 4-minute session under v0.30.7).
+            task = spawn(self._emit_with_logging(event), name="plugin-event-emit")
+            mark_consumed(task)
         except Exception:  # noqa: BLE001  # nosec B110
             # Event emission must never crash the manager.
             return
