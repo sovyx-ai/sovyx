@@ -147,14 +147,21 @@ class TestExactResolution:
         assert "lucia" not in result.registered_minds
 
 
-# ── NONE path — refuse-to-start (D3 amendment, STT-fallback DEFERRED) ─
+# ── NONE path — refuse-to-start (D3 amendment) ────────────────────────
 
 
 class TestNoneStrategyRaises:
-    """When ``wake_word_enabled=True`` but no ONNX matches, the helper
-    raises VoiceError with a clear remediation message. Refuse-to-start
-    beats silent failure (mission D3 amendment — STT-fallback deferred
-    to v0.28.3)."""
+    """When ``wake_word_enabled=True`` but no ONNX matches AND
+    ``stt_fallback_for_none_strategy`` is OFF (default per
+    ``feedback_staged_adoption``), the helper raises VoiceError with a
+    clear remediation message. Refuse-to-start beats silent failure.
+
+    History: STT-fallback was deferred at v0.28.3 with a
+    refuse-to-start contract. Mission ``MISSION-wake-word-stt-fallback-
+    2026-05-04`` shipped the opt-in wire-up at v0.30.6; the raise still
+    fires when the flag is OFF, but the remediation message now lists
+    the flag flip as one of the four operator paths instead of citing
+    a deferred mission."""
 
     def test_no_pretrained_pool_raises(self, tmp_path: Path) -> None:
         _write_mind_yaml(tmp_path, "aria", wake_word="Aria", wake_word_enabled=True)
@@ -165,8 +172,11 @@ class TestNoneStrategyRaises:
         msg = str(exc_info.value)
         assert "wake_word_enabled=True" in msg
         assert "aria" in msg.lower()
-        assert "STT-fallback" in msg
-        assert "v0.28.3" in msg
+        # Either spelling is operator-readable; the remediation must
+        # cite the opt-in env var so operators have a discoverable
+        # one-line fix without grepping the codebase.
+        assert "STT fallback" in msg or "STT-fallback" in msg
+        assert "STT_FALLBACK_FOR_NONE_STRATEGY" in msg
 
     def test_pretrained_pool_missing_target_raises(self, tmp_path: Path) -> None:
         _write_mind_yaml(tmp_path, "aria", wake_word="Aria", wake_word_enabled=True)

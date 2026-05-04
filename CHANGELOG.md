@@ -6,7 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.30.6 below)
+(none — every shipped delta is in 0.30.7 below)
+
+## [0.30.7] — 2026-05-04
+
+### Hot fix — CI failure on v0.30.6 (test asserting obsolete message)
+
+The `test_no_pretrained_pool_raises` regression test in
+`tests/unit/voice/test_wake_word_runtime_wireup_t1.py` asserted two
+strings against the NONE-strategy refuse-to-start error message:
+* `"STT-fallback"` (literal hyphenated form).
+* `"v0.28.3"` (citation of the deferral mission target version).
+
+Mission `MISSION-wake-word-stt-fallback-2026-05-04` (shipped at
+v0.30.6) reworded the message to cite the env var
+`SOVYX_TUNING__VOICE__STT_FALLBACK_FOR_NONE_STRATEGY` as the
+operator's discoverable opt-in path. The "v0.28.3 deferred" citation
+became OBSOLETE after v0.30.6 — the gap was filled, not deferred.
+
+Failed on all 4 CI runners (windows-latest, macos-latest, sovyx-4core
+× 3.11/3.12). The local pre-tag sweep falsely reported exit-0 because
+comtypes' Windows shutdown noise truncated the pytest summary line in
+the captured output.
+
+### Fix
+
+* `tests/unit/voice/test_wake_word_runtime_wireup_t1.py` — assertion
+  updated to accept either spelling (`"STT fallback"` or
+  `"STT-fallback"`) and to require the actionable env var name
+  `STT_FALLBACK_FOR_NONE_STRATEGY` instead of the obsolete `v0.28.3`
+  reference. Class docstring updated to reflect post-v0.30.6 semantics
+  (refuse-to-start is now flag-OFF behaviour, not unimplemented
+  behaviour).
+* No production code touched — the message in
+  `_wake_word_wire_up.py` is correct as shipped in v0.30.6; the test
+  was the stale piece.
+
+### Process correction
+
+CLAUDE.md "Local suite before push" was followed in form but not in
+substance: the captured output exit code was trusted without grepping
+the summary line. v0.30.7+ runs always grep `"passed|failed"` to
+verify the summary, not just the exit code. This patch's pre-tag
+verification ran `pytest -q ... | grep -E "passed|failed"` and saw
+**13844 passed, 26 skipped, 0 failed** explicitly.
+
+### Quality gates (full sweep at HEAD)
+
+* uv lock --check ✅
+* ruff + format ✅
+* mypy strict ✅
+* bandit ✅
+* pytest ✅ **13844 passed, 0 failed** (verified summary)
+* tsc ✅
+* vitest ✅ 1172/1172
 
 ## [0.30.6] — 2026-05-04
 
