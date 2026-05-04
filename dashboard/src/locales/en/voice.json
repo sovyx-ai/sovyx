@@ -78,6 +78,42 @@
     "dismiss": "Dismiss",
     "phoneticMatch": "Matched as {{file}} (distance: {{distance}})"
   },
+  "mind": {
+    "forget": {
+      "title": "Forget this mind",
+      "subtitle": "Right-to-erasure (GDPR Art. 17 / LGPD Art. 18 VI). Wipes all data; preserves config.",
+      "openButton": "Forget…",
+      "warningTitle": "This action wipes data permanently.",
+      "warningBody": "Every concept, episode, conversation, embedding and consent-ledger entry for this mind will be deleted. Mind configuration is preserved so you can re-onboard. Use preview mode first to see counts.",
+      "confirmLabel": "Type the mind id ({{mindId}}) to confirm",
+      "confirmAriaLabel": "Mind id confirmation input",
+      "dryRunLabel": "Preview only (do not delete — show counts)",
+      "previewButton": "Preview counts",
+      "submitButton": "Forget mind permanently",
+      "submittingButton": "Working…",
+      "cancelButton": "Cancel",
+      "closeButton": "Close",
+      "reportTitleDryRun": "Preview — no rows were deleted",
+      "reportTitleApplied": "Forget complete",
+      "totalLabel": "Total rows purged"
+    },
+    "retention": {
+      "title": "Retention prune",
+      "subtitle": "Time-based scheduled-policy prune. Removes only AGED records per the configured horizons.",
+      "openButton": "Manage retention…",
+      "previewButton": "Preview prune",
+      "applyButton": "Apply prune",
+      "submittingButton": "Working…",
+      "cancelButton": "Cancel",
+      "closeButton": "Close",
+      "horizonsLabel": "Effective horizons (days)",
+      "horizonsHint": "Server-computed from EngineConfig.tuning.retention.* + per-mind overrides. Zero means the surface is skipped.",
+      "reportTitleDryRun": "Preview — no rows were deleted",
+      "reportTitleApplied": "Prune complete",
+      "totalLabel": "Total rows purged",
+      "cutoffLabel": "Cutoff (UTC)"
+    }
+  },
   "wizard": {
     "title": "Voice Setup Wizard",
     "openHint": "Walk through 4 steps to pick + test your microphone.",

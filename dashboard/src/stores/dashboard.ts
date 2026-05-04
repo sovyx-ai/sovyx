@@ -37,6 +37,10 @@ import {
   type VoiceHealthSlice,
 } from "./slices/voiceHealth";
 import { createWakeWordSlice, type WakeWordSlice } from "./slices/wakeWord";
+import {
+  createMindManagementSlice,
+  type MindManagementSlice,
+} from "./slices/mindManagement";
 
 export type DashboardState = ActivitySlice &
   AuthSlice &
@@ -52,7 +56,8 @@ export type DashboardState = ActivitySlice &
   PluginsSlice &
   TrainingSlice &
   VoiceHealthSlice &
-  WakeWordSlice;
+  WakeWordSlice &
+  MindManagementSlice;
 
 export const useDashboardStore = create<DashboardState>()(
   devtools(
@@ -72,6 +77,7 @@ export const useDashboardStore = create<DashboardState>()(
       ...createTrainingSlice(...a),
       ...createVoiceHealthSlice(...a),
       ...createWakeWordSlice(...a),
+      ...createMindManagementSlice(...a),
     }),
     { name: "sovyx-dashboard" },
   ),
