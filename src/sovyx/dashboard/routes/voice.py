@@ -1790,7 +1790,25 @@ async def enable_voice(request: Request) -> JSONResponse:
     effective_device_name = input_device_name or mind_device_name or None
     effective_device_host_api = input_device_host_api or mind_device_host_api or None
 
+    # Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+    # §Phase 1 T1.2 — resolve the active mind id via the canonical
+    # resolver instead of a raw ``getattr`` against an attribute that
+    # production code never assigned. The (mind_id, source) tuple lets
+    # us emit ``voice.dashboard.voice_enable_mind_resolved`` so the
+    # provenance shows up in dashboards.
+    from sovyx.dashboard._shared import resolve_active_mind_id_for_request
     from sovyx.voice._capture_task import CaptureInoperativeError
+
+    resolved_mind_id, mind_id_source = await resolve_active_mind_id_for_request(
+        request,
+    )
+    logger.info(
+        "voice.dashboard.voice_enable_mind_resolved",
+        **{
+            "voice.mind_id": resolved_mind_id,
+            "voice.source": mind_id_source,
+        },
+    )
 
     try:
         bundle = await create_voice_pipeline(
@@ -1799,7 +1817,7 @@ async def enable_voice(request: Request) -> JSONResponse:
             language=effective_language,
             voice_id=effective_voice_id,
             wake_word_enabled=mind_wake_word_enabled,
-            mind_id=getattr(request.app.state, "mind_id", "default"),
+            mind_id=resolved_mind_id,
             input_device=input_device,
             input_device_name=effective_device_name,
             input_device_host_api=effective_device_host_api,

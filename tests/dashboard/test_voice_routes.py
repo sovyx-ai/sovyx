@@ -1554,3 +1554,225 @@ class TestCaptureExclusivePost:
         c = TestClient(app)
         resp = c.post("/api/voice/capture-exclusive", json={"enabled": True})
         assert resp.status_code == 401  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+# §Phase 1 T1.2 — mind_id propagation regression suite
+# ---------------------------------------------------------------------------
+#
+# Forensic anchor: the user's daemon (Linux Mint, mind ``jonny``) produced
+# every ``voice_pipeline_heartbeat`` carrying ``mind_id=default`` (logs_01
+# line 1342). Pre-T1.2 the dashboard ``/api/voice/enable`` route read
+# ``getattr(request.app.state, "mind_id", "default")``, but no production
+# code ever assigned ``app.state.mind_id`` — pipeline was always bound to
+# the phantom ``"default"`` mind. These tests pin every leg of the new
+# resolver: cached app.state, MindManager fallback, fresh-install
+# fallback, and the structured ``voice.dashboard.voice_enable_mind_resolved``
+# telemetry that surfaces the resolution provenance.
+
+
+class TestEnableVoiceMindIdResolution:
+    """Pin every leg of ``resolve_active_mind_id_for_request``.
+
+    The resolver lives at
+    :func:`sovyx.dashboard._shared.resolve_active_mind_id_for_request`
+    and is invoked exactly once per ``/api/voice/enable`` call from
+    :mod:`sovyx.dashboard.routes.voice`. The tests below exercise the
+    HTTP route end-to-end so they catch any future refactor that
+    bypasses the resolver (e.g. someone re-introducing a raw
+    ``getattr(app.state, "mind_id", "default")``).
+    """
+
+    def _build_factory_mock(self):  # type: ignore[no-untyped-def]
+        from sovyx.voice.factory import VoiceBundle
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+        return AsyncMock(return_value=bundle)
+
+    def _fake_sounddevice_module(self) -> ModuleType:
+        fake = ModuleType("sounddevice")
+        fake.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+        return fake
+
+    def test_app_state_mind_id_takes_precedence(
+        self,
+        app,  # noqa: ANN001
+        client: TestClient,
+    ) -> None:
+        """Cached ``app.state.mind_id`` is the zero-latency happy path."""
+        app.state.mind_id = "jonny"
+        factory_mock = self._build_factory_mock()
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sounddevice_module()}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        # Pipeline factory received the cached mind_id — NOT the
+        # ``"default"`` sentinel that the pre-T1.2 ``getattr`` would
+        # have returned.
+        assert factory_mock.call_args.kwargs["mind_id"] == "jonny"
+
+    def test_falls_back_to_mind_manager_when_app_state_is_default(
+        self,
+        app,  # noqa: ANN001
+        client: TestClient,
+    ) -> None:
+        """When the cache holds the literal ``"default"`` sentinel, the
+        resolver does a fresh ``MindManager.get_active_minds`` lookup —
+        the dashboard server's startup wire-up may not have run yet on
+        TestClient runs."""
+        app.state.mind_id = "default"
+
+        from sovyx.engine.bootstrap import MindManager
+
+        mind_manager = MagicMock(spec=MindManager)
+        mind_manager.get_active_minds = MagicMock(return_value=["jonny"])
+
+        def is_registered(cls):  # type: ignore[no-untyped-def]
+            return cls is MindManager
+
+        app.state.registry.is_registered.side_effect = is_registered
+        app.state.registry.resolve = AsyncMock(return_value=mind_manager)
+
+        factory_mock = self._build_factory_mock()
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sounddevice_module()}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert factory_mock.call_args.kwargs["mind_id"] == "jonny"
+
+    def test_falls_back_to_default_when_no_mind_at_all(
+        self,
+        client: TestClient,
+    ) -> None:
+        """Fresh-install case: no cache, no MindManager registered → the
+        sentinel ``"default"`` is returned and the route still succeeds.
+        This codifies the pre-T1.2 behaviour for the genuine empty
+        state."""
+        application = create_app(token=_TOKEN)
+        registry = MagicMock()
+        registry.is_registered.return_value = False
+        registry.resolve = AsyncMock()
+        application.state.registry = registry
+        application.state.mind_yaml_path = None
+        # Intentionally do NOT set application.state.mind_id.
+
+        factory_mock = self._build_factory_mock()
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sounddevice_module()}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+        ):
+            c = TestClient(application, headers={"Authorization": f"Bearer {_TOKEN}"})
+            resp = c.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert factory_mock.call_args.kwargs["mind_id"] == "default"
+
+    def test_emits_voice_enable_mind_resolved_event(
+        self,
+        app,  # noqa: ANN001
+        client: TestClient,
+    ) -> None:
+        """The route emits ``voice.dashboard.voice_enable_mind_resolved``
+        carrying both the resolved mind_id and its provenance source —
+        dashboards key on this to surface the routing decision.
+
+        Sovyx routes use structlog's ``BoundLoggerLazyProxy``, which
+        bypasses stdlib's ``logging`` chain and therefore is invisible
+        to ``caplog``. We assert via ``patch.object`` on the module's
+        logger (anti-pattern #11) — this is also more deterministic
+        because it intercepts the call site directly without depending
+        on the structlog → stdlib bridge configuration.
+        """
+        from sovyx.dashboard.routes import voice as voice_route_module
+
+        app.state.mind_id = "jonny"
+        factory_mock = self._build_factory_mock()
+
+        # Wrap the real logger so other emissions from the route
+        # (``voice_pipeline_hot_enabled`` etc.) keep working — only
+        # ``info`` is intercepted.
+        info_calls: list[tuple[str, dict[str, object]]] = []
+        real_info = voice_route_module.logger.info
+
+        def _spy_info(event: str, *args: object, **kwargs: object) -> object:
+            info_calls.append((event, dict(kwargs)))
+            return real_info(event, *args, **kwargs)
+
+        with (
+            patch.object(voice_route_module.logger, "info", side_effect=_spy_info),
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sounddevice_module()}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+        ):
+            resp = client.post("/api/voice/enable")
+            assert resp.status_code == 200  # noqa: PLR2004
+
+        target = "voice.dashboard.voice_enable_mind_resolved"
+        matches = [(evt, kwargs) for evt, kwargs in info_calls if evt == target]
+        assert len(matches) == 1, (
+            f"expected exactly one {target} call, got {len(matches)}; "
+            f"all info calls: {[evt for evt, _ in info_calls]}"
+        )
+        _, kwargs = matches[0]
+        assert kwargs["voice.mind_id"] == "jonny"
+        assert kwargs["voice.source"] == "app_state"

@@ -774,6 +774,42 @@ class DashboardServer:
             except Exception:  # noqa: BLE001
                 logger.debug("mind_yaml_path_wire_failed")
 
+            # Wire active mind_id for downstream routes (Mission
+            # ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+            # §Phase 1 T1.2).
+            #
+            # Pre-fix: ``dashboard/routes/voice.py`` read
+            # ``getattr(request.app.state, "mind_id", "default")``
+            # without anywhere in production code assigning that
+            # attribute → the voice pipeline always launched under
+            # the phantom ``"default"`` mind. Forensic anchor:
+            # ``c:\\Users\\guipe\\Downloads\\logs_01.txt`` line 1342
+            # (every ``voice_pipeline_heartbeat`` shows
+            # ``mind_id=default`` despite the operator's mind being
+            # ``jonny``).
+            #
+            # We populate the cache here so the resolver in
+            # ``_shared.resolve_active_mind_id_for_request`` has a
+            # zero-latency happy path; multi-mind reroutes still work
+            # because the resolver does a live MindManager lookup
+            # whenever the cache is absent or matches the fallback
+            # sentinel.
+            try:
+                from sovyx.engine.bootstrap import MindManager
+
+                if self._registry.is_registered(MindManager):
+                    mind_manager = await self._registry.resolve(MindManager)
+                    actives = mind_manager.get_active_minds()
+                    if actives:
+                        self._app.state.mind_id = actives[0]
+                        logger.debug(
+                            "mind_id_wired",
+                            mind_id=actives[0],
+                            active_count=len(actives),
+                        )
+            except Exception:  # noqa: BLE001 — defensive per anti-pattern #33
+                logger.debug("mind_id_wire_failed")
+
         # Wire log file path for log queries.
         # Resolve from registry first (same config the bootstrap used),
         # fall back to a fresh EngineConfig only if registry is unavailable.
