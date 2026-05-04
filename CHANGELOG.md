@@ -6,7 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.30.1 below)
+(none — every shipped delta is in 0.30.2 below)
+
+## [0.30.2] — 2026-05-04
+
+### Mind-management UI pattern migration
+
+Phase 2 of `MISSION-claude-autonomous-batch-2026-05-03` (gitignored).
+Migrates the two mind-mutation endpoints (`/forget` and
+`/retention/prune`) from CLI-only to dashboard surfaces using the
+per-mind card pattern established by v0.29.0's wake-word UI.
+
+### Added
+
+* **T2.1 — `PerMindForgetCard` with typed-confirm UX** (`f096c7b`).
+  Destructive right-to-erasure card. Mirrors GitHub's repo-deletion
+  pattern + the backend's defense-in-depth (`routes/mind.py:173`
+  requires `confirm: <mind_id>` typed verbatim). Dry-run by default
+  so first click previews counts; operator un-checks + re-confirms
+  to actually delete. Per-table count breakdown after success so
+  operator forensically verifies what was wiped.
+* **T2.2 — `PerMindRetentionCard` with preview-then-apply UX**
+  (`570f5f8`). Time-based scheduled-policy prune card. No `confirm`
+  field (retention removes only AGED records, not arbitrary rows).
+  Two-step UX is operator-side, not backend-required: the
+  `effective_horizons` map is server-computed, so operators must
+  preview to know what gets pruned. After preview lands, button
+  switches to "Apply prune" with warning tone. Collapsible horizons
+  details surface per-surface days in the report panel.
+* **T2.3 — Mount mind-management cards in voice.tsx per-mind grid**
+  (`52213de`). New Section after the wake-word per-mind grid. Section
+  visible only when `perMindStatus.length > 0` (reuses the wake-word
+  list as the canonical "minds onboarded" signal). Each mind gets
+  both cards stacked vertically.
+
+### Slice
+
+New `mindManagement` Zustand slice (`dashboard/src/stores/slices/mindManagement.ts`):
+per-mind keyed state for `forgetReports` / `forgetPending` /
+`forgetErrors` and `retentionReports` / `retentionPending` /
+`retentionErrors`. Pessimistic updates (destructive ops MUST NOT be
+optimistic). Mirrors the wakeWord slice's zod-schema-validation +
+ApiError-detail-extraction contract.
+
+### i18n
+
+New key namespaces under `voice.json`:
+* `mind.forget.*` — title, subtitle, warning banner copy, button
+  labels (preview / submit / cancel / close), report panel labels.
+* `mind.retention.*` — title, subtitle, button labels, horizons
+  copy, cutoff label, report panel titles.
+
+All shipped in en only — pt-BR + es land in Phase 3 (`v0.30.3`).
+
+### Tests
+
+14 new vitest cases:
+* `PerMindForgetCard.test.tsx` (7) — collapsed default, expand-to-
+  reveal, disable-until-match, button-label-flips, submit-fires-
+  slice-with-typed-value, report-panel-renders, error-banner.
+* `PerMindRetentionCard.test.tsx` (7) — collapsed default, expand-
+  to-preview-only, preview-fires-dry-run-true, apply-replaces-
+  preview, apply-fires-dry-run-false, horizons-map-renders, error-
+  banner.
+
+### Out of scope (deferred to D22 batch)
+
+Browser-pilot validation of the new UI surfaces flagged for the
+next D22 batch run alongside v0.30.0's Train UI + Wizard +
+v0.30.1's onboarding integration.
 
 ## [0.30.1] — 2026-05-03
 
