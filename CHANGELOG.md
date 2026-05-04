@@ -6,7 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.30.2 below)
+(none — every shipped delta is in 0.30.3 below)
+
+## [0.30.3] — 2026-05-04
+
+### Multi-locale i18n (pt-BR + es) + Settings switcher + auto-detect
+
+Phase 3 of `MISSION-claude-autonomous-batch-2026-05-03` (gitignored).
+Adds Brazilian Portuguese and Spanish dashboard locales, the
+operator-facing language picker in Settings, and a first-visit
+auto-detect with one-click toast undo.
+
+### Added
+
+* **T3.1 + T3.2 — Full pt-BR + es translations** (`bf42a39`). 20 new
+  JSON files (10 namespaces × 2 locales) covering every key in the
+  English source. Technical-term fidelity glossary anchored: wake
+  word → palavra de ativação / palabra de activación; STT/TTS/VAD/
+  ONNX/WASAPI/Wyoming/Kokoro preserved as technical acronyms; Mind
+  → Mente; brain → cérebro/cerebro; embedding kept English. GDPR
+  and LGPD article references preserved verbatim.
+* **T3.3 — `LanguageSelector` in Settings + i18n registration**
+  (`76dbfd8`). 3-option dropdown ("English" / "Português (Brasil)"
+  / "Español") under "Display & Language" section. Native option
+  labels kept untranslated by design — operators who broke their UX
+  by selecting an unfamiliar language can still find the way back.
+  Persists choice to `localStorage["sovyx_locale"]`.
+* **T3.4 — First-visit auto-detect + `LocaleAutoDetectToast`**
+  (next commit). Silent BCP 47 prefix-matching detection in
+  `lib/i18n-detect.ts` (pt-PT → pt-BR, es-MX → es) with toast undo
+  ("Use English") when detection picks anything other than en.
+  StrictMode-safe via consume-once accessor. Toast auto-dismisses
+  after 5 s.
+* **T3.5 — Translation-completeness CI gate** (`356cbe2`).
+  Recursive key-parity assertion across all 10 namespaces × 3
+  locales (40 vitest cases). Adding a new EN key without translating
+  fails CI with a concrete diff: "Missing pt-BR keys in voice:
+  mind.forget.newKey". Bidirectional — also catches stale keys
+  carried over from removed EN entries.
+
+### Operator decisions ratified (D5 / D6)
+
+* **D5: locale switcher in Settings, NOT navbar.** Operators change
+  language ~once. Navbar is for primary actions; burying infrequent
+  settings matches Apple/GitHub/Slack conventions.
+* **D6: auto-detect with toast undo, NOT opt-in prompt.** Modal
+  prompts annoy operators who already know their language; silent
+  switches surprise those who don't want browser language used. Toast
+  + undo threads the needle: acknowledges + escapes + non-blocking.
+
+### Out of scope
+
+* Onboarding components (`VoiceStep`, `ProviderStep`, `PersonalityStep`,
+  `ChannelsStep`, `FirstChatStep`) still carry hardcoded English.
+  Migration deferred to a sibling mission tied to the next
+  onboarding refresh — known gap, not blocking v0.30.3 ship.
+* Browser-pilot validation flagged for the next D22 batch run
+  alongside Phase 1 + Phase 2 surfaces.
 
 ## [0.30.2] — 2026-05-04
 
