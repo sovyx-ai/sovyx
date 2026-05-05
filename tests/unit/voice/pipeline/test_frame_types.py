@@ -194,14 +194,19 @@ class TestCaptureRestartReason:
         assert CaptureRestartReason.APO_DEGRADED == "apo_degraded"
         assert CaptureRestartReason.OVERFLOW == "overflow"
         assert CaptureRestartReason.MANUAL == "manual"
+        # Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
+        # §Phase 2 T2.4 — added for hot-failover after endpoint
+        # quarantine.
+        assert CaptureRestartReason.ENDPOINT_QUARANTINED == "endpoint_quarantined"
 
-    def test_all_four_variants_present(self) -> None:
+    def test_all_variants_present(self) -> None:
         """Pin the variant set so a future addition / rename is loud."""
         assert {r.value for r in CaptureRestartReason} == {
             "device_changed",
             "apo_degraded",
             "overflow",
             "manual",
+            "endpoint_quarantined",
         }
 
 

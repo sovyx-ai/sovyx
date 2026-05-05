@@ -210,6 +210,21 @@ class CaptureRestartReason(StrEnum):
       No bypass involvement; counted in the underrun-rate SLO.
     * ``MANUAL`` — operator-driven restart from the dashboard or
       ``sovyx doctor voice``. Excluded from automatic SLO counters.
+    * ``ENDPOINT_QUARANTINED`` — Mission
+      ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+      §Phase 2 T2.4. The deaf-signal coordinator exhausted every
+      eligible bypass strategy and quarantined the endpoint via
+      :class:`sovyx.voice.health._quarantine.EndpointQuarantine`. The
+      runtime-failover helper at
+      :mod:`sovyx.voice.health._runtime_failover` then dispatched
+      :meth:`AudioCaptureTask.request_device_change_restart` against
+      the next non-quarantined boot candidate. ``bypass_tier=0``
+      (no APO bypass — the change is the device itself);
+      ``old_signal_processing_mode == new_signal_processing_mode``
+      (typically both ``"shared"``). Pre-T2.4 the pipeline stayed
+      deaf on the quarantined endpoint until the next process boot;
+      this discriminator surfaces the in-process recovery in the
+      dashboard's restart-history timeline.
 
     StrEnum because of CLAUDE.md anti-pattern #9 — value-based
     comparison + xdist namespace duplication immunity. The frame's
@@ -221,6 +236,7 @@ class CaptureRestartReason(StrEnum):
     APO_DEGRADED = "apo_degraded"
     OVERFLOW = "overflow"
     MANUAL = "manual"
+    ENDPOINT_QUARANTINED = "endpoint_quarantined"
 
 
 @dataclass(frozen=True, slots=True)
