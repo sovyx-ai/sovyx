@@ -248,7 +248,12 @@ select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM", "TCH", "BLE"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/sovyx/cognitive/safety_i18n.py" = ["E501"]
-"tests/**/*.py" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN205", "ANN401", "E501", "N806", "N817", "B017", "TC003", "SIM114", "E402", "UP007", "UP045", "F841", "BLE001"]
+# Calibration rule modules use the convention ``R<NN>_<slug>.py`` (e.g.
+# ``R10_mic_attenuated.py``) for visual distinction in directory listings
+# and to mirror the rule_id field. The leading uppercase ``R`` trips
+# ruff's PEP-8 module-name check (N999); allowed by exception here.
+"src/sovyx/voice/calibration/rules/R*.py" = ["N999"]
+"tests/**/*.py" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN205", "ANN401", "E501", "N806", "N817", "N999", "B017", "TC003", "SIM114", "E402", "UP007", "UP045", "F841", "BLE001"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

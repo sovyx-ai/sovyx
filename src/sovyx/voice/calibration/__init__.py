@@ -22,14 +22,23 @@ Schema (this commit):
 Provenance (this commit):
     * :class:`ProvenanceRecorder` -- engine-internal trace builder
 
+Engine + Rules (T2.4 + T2.5.R10):
+    * :class:`CalibrationEngine` -- forward-chaining rule engine
+    * :class:`EngineMode` -- APPLY | DRY_RUN | EXPLAIN
+    * :class:`CalibrationRule` -- rule Protocol
+    * :class:`RuleContext` -- per-evaluation inputs
+    * :class:`RuleEvaluation` -- per-firing output
+    * :func:`iter_rules` -- discovery helper
+    * :data:`RULE_SET_VERSION` -- bumped on rule set changes
+    * Rule R10_mic_attenuated -- first rule (Linux mixer attenuation)
+
 Future commits in v0.30.15:
-    * T2.4 -- :class:`CalibrationEngine` + :class:`RuleContext` + Rule Protocol
     * T2.7 -- ``load_calibration_profile`` + ``save_calibration_profile``
       with Ed25519 signing (LENIENT mode default)
     * T2.8 -- :class:`CalibrationApplier` with atomic apply + rollback
     * T2.2 -- ``capture_fingerprint`` extending health/_fingerprint
     * T2.3 -- targeted measurer reusing the bash diag with --only flags
-    * T2.5 -- rules/{R10..R50}_*.py (issue-driven decision rules)
+    * T2.5 -- rules/{R20..R50}_*.py (4 more issue-driven rules)
     * T2.9 -- ``sovyx doctor voice --calibrate`` CLI
 
 Design contracts (ratified per mission spec):
@@ -50,6 +59,14 @@ Design contracts (ratified per mission spec):
 from __future__ import annotations
 
 from sovyx.voice.calibration._provenance import ProvenanceRecorder
+from sovyx.voice.calibration.engine import CalibrationEngine, EngineMode
+from sovyx.voice.calibration.rules import (
+    RULE_SET_VERSION,
+    CalibrationRule,
+    RuleContext,
+    RuleEvaluation,
+    iter_rules,
+)
 from sovyx.voice.calibration.schema import (
     CALIBRATION_PROFILE_SCHEMA_VERSION,
     HARDWARE_FINGERPRINT_SCHEMA_VERSION,
@@ -66,11 +83,18 @@ __all__ = [
     "CALIBRATION_PROFILE_SCHEMA_VERSION",
     "HARDWARE_FINGERPRINT_SCHEMA_VERSION",
     "MEASUREMENT_SNAPSHOT_SCHEMA_VERSION",
+    "RULE_SET_VERSION",
     "CalibrationConfidence",
     "CalibrationDecision",
+    "CalibrationEngine",
     "CalibrationProfile",
+    "CalibrationRule",
+    "EngineMode",
     "HardwareFingerprint",
     "MeasurementSnapshot",
     "ProvenanceRecorder",
     "ProvenanceTrace",
+    "RuleContext",
+    "RuleEvaluation",
+    "iter_rules",
 ]
