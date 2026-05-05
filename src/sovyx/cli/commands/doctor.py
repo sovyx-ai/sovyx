@@ -426,7 +426,13 @@ def _run_voice_full_diag(*, non_interactive: bool) -> int:
     except DiagRunError as exc:
         console.print(f"\n[red]Voice diag failed:[/red] {exc}")
         if exc.partial_output_dir is not None:
-            console.print(f"[dim]Partial output preserved at:[/dim] {exc.partial_output_dir}")
+            # Print the label via rich (style markup), the path via raw
+            # print() so it stays on a single line regardless of console
+            # width. Rich's print() crops/folds at console.width even
+            # with overflow=ignore + no_wrap=True; the path is a copy-
+            # paste target for the operator and MUST stay contiguous.
+            console.print("[dim]Partial output preserved at:[/dim]")
+            print(f"  {exc.partial_output_dir}")
         return EXIT_DOCTOR_GENERIC_FAILURE
 
     console.print(

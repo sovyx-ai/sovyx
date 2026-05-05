@@ -183,6 +183,12 @@ class TestDiagFailure:
     def test_partial_output_dir_surfaced(self, tmp_path: Path) -> None:
         partial = tmp_path / "sovyx-diag-partial"
         partial.mkdir()
+        # Pin terminal width to a deliberately narrow column count via
+        # COLUMNS env var to reproduce the CI-Linux failure mode where
+        # /tmp/pytest-of-runner/... paths exceed 80 cols and rich's
+        # default soft-fold splits the leaf name mid-token. This pins the
+        # regression: production code MUST emit the path with no_wrap so
+        # the full path stays contiguous regardless of terminal width.
         with patch(
             "sovyx.cli.commands.doctor.run_full_diag",
             side_effect=DiagRunError("selftest aborted", exit_code=3, partial_output_dir=partial),
@@ -190,13 +196,16 @@ class TestDiagFailure:
             result = runner.invoke(
                 app,
                 ["doctor", "voice", "--full-diag", "--non-interactive"],
+                env={"COLUMNS": "60"},
             )
         assert result.exit_code == 1
-        # Path may wrap across lines in narrow terminals; assert on the
-        # operator-visible label + the directory's leaf name (unique to
-        # this fixture and stable regardless of width).
+        # The label always appears on its own line (independent of path).
         assert "Partial output preserved" in result.output
-        assert "sovyx-diag-partial" in result.output
+        # Critical invariant: the FULL path stays contiguous even on a
+        # narrow terminal (no_wrap=True + overflow=ignore). Operators
+        # rely on copy-paste; if rich split this across lines, the
+        # paste would silently break.
+        assert str(partial) in result.output
 
 
 # ====================================================================
