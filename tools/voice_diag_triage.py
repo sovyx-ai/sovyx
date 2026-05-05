@@ -5,7 +5,17 @@ Ingests a tarball/zip from any of the 3 toolkits (Linux v4.3, Windows v2,
 macOS v1), validates schema, cross-correlates artifacts, and emits a
 ranked RCA report in markdown.
 
-Usage:
+Public API (post-T1.2 of MISSION-voice-self-calibrating-system-2026-05-05):
+    * :class:`TriageResult` -- structured triage verdict (frozen dataclass)
+    * :class:`HypothesisVerdict` -- one ranked hypothesis with confidence
+    * :class:`HypothesisId` -- closed enum of supported hypotheses
+    * :class:`SchemaValidation` -- schema validation outcome
+    * :class:`AlertsSummary` -- alerts severity breakdown
+    * :func:`triage_tarball` -- analyze a diag tarball, return TriageResult
+    * :func:`render_markdown` -- render TriageResult as operator markdown
+
+Usage::
+
     python tools/voice_diag_triage.py <tarball_path> [--out report.md]
     python tools/voice_diag_triage.py --extract-dir <already_extracted_dir>
 
@@ -17,9 +27,9 @@ Output:
     - Specific actionable recommendations
 
 Exit codes:
-    0 — analysis complete (regardless of voice bug status)
-    1 — schema validation failed
-    2 — tarball extract/read failed
+    0 -- analysis complete (regardless of voice bug status)
+    1 -- schema validation failed (missing required field) or SUMMARY.json absent
+    2 -- tarball extract/read failed
 """
 
 from __future__ import annotations
@@ -27,20 +37,165 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import re
 import sys
 import tarfile
 import tempfile
 import zipfile
 from collections import Counter
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # Windows console (cp1252) doesn't handle Unicode glyphs; force UTF-8.
 if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-        sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
-        pass
+    with contextlib.suppress(Exception):
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+        sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+
+
+# ====================================================================
+# Public types — closed-enum verdicts + frozen dataclasses
+# ====================================================================
+
+
+class HypothesisId(StrEnum):
+    """Closed enum of supported triage hypotheses.
+
+    Each enum value is the short ID rendered in markdown (``H1``..``H10``).
+    The full title, evidence rules, and confidence weighting live in
+    :func:`_evaluate_hypotheses`. New hypotheses MUST be appended here
+    (never re-numbered) so OTel telemetry cardinality stays bounded.
+    """
+
+    H1_MIC_DESTROYED = "H1"
+    H2_VOICE_CLARITY_APO = "H2"
+    H3_MACOS_HAL_INTERCEPTOR = "H3"
+    H4_LINUX_DESTRUCTIVE_FILTER = "H4"
+    H5_MIC_PERMISSION_DENIED = "H5"
+    H6_SELFTEST_FAILED = "H6"
+    H7_NETWORK_BLOCKED_PROVIDER = "H7"
+    H8_DAEMON_CRASH = "H8"
+    H9_HARDWARE_GAP = "H9"
+    H10_LINUX_MIXER_ATTENUATED = "H10"
+
+
+@dataclass(frozen=True, slots=True)
+class HypothesisVerdict:
+    """One ranked hypothesis with its evidence + confidence + suggested action."""
+
+    hid: HypothesisId
+    title: str
+    confidence: float
+    evidence_for: tuple[str, ...]
+    evidence_against: tuple[str, ...]
+    recommended_action: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaValidation:
+    """Outcome of validating SUMMARY.json against required+recommended fields."""
+
+    ok: bool
+    missing_required: tuple[str, ...]
+    missing_recommended: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AlertsSummary:
+    """Severity breakdown of alerts.jsonl plus the error-level messages."""
+
+    error_count: int
+    warn_count: int
+    info_count: int
+    error_messages: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TriageResult:
+    """Structured output of one triage run.
+
+    All fields are populated from the diag tarball at analysis time;
+    the dataclass is fully self-contained, immutable, and sufficient
+    to render the operator-facing markdown via :func:`render_markdown`
+    without re-reading the tarball.
+    """
+
+    schema_version: int
+    toolkit: str
+    tarball_root: Path
+
+    tool_name: str
+    tool_version: str
+    host: str
+    captured_at_utc: str
+    os_descriptor: str
+
+    status: str
+    exit_code: str
+    selftest_status: str
+    steps: Mapping[str, Any]
+    skip_captures: bool
+
+    schema_validation: SchemaValidation
+    alerts: AlertsSummary
+
+    hypotheses: tuple[HypothesisVerdict, ...]
+
+    @property
+    def winner(self) -> HypothesisVerdict | None:
+        """Highest-confidence hypothesis with confidence >= 0.5; ``None`` otherwise.
+
+        Used by callers (``sovyx doctor voice --full-diag``) to decide
+        whether to surface a fix command directly to the operator. The
+        0.5 threshold matches the markdown renderer's "high-confidence"
+        cutoff (>0.7 for "Highest-confidence root cause", >0.3 for
+        "Most likely (medium confidence)").
+        """
+        if not self.hypotheses:
+            return None
+        top = self.hypotheses[0]
+        return top if top.confidence >= 0.5 else None
+
+
+# Operator-facing fix commands keyed by hypothesis. Used by callers
+# that render verdicts in non-markdown formats (e.g. the new
+# ``sovyx doctor voice --full-diag`` CLI). The markdown renderer
+# preserves its existing ``→`` recommendation block verbatim for
+# byte-equivalence with the v0.30.13 output.
+_RECOMMENDED_ACTIONS: dict[HypothesisId, str] = {
+    HypothesisId.H1_MIC_DESTROYED: (
+        "Cross-check H2/H3/H4 (OS-specific) for the root cause of the silence."
+    ),
+    HypothesisId.H2_VOICE_CLARITY_APO: (
+        "Enable `capture_wasapi_exclusive=true` in `system.yaml` "
+        "(Windows-specific Voice Clarity APO bypass per anti-pattern #21)."
+    ),
+    HypothesisId.H3_MACOS_HAL_INTERCEPTOR: (
+        "Disable detected HAL interceptor OR set Sovyx mic device to "
+        "bypass aggregate (Audio MIDI Setup > select physical mic)."
+    ),
+    HypothesisId.H4_LINUX_DESTRUCTIVE_FILTER: (
+        "Unload destructive PipeWire filter modules; check "
+        "`~/.config/wireplumber/` for filter-chain config."
+    ),
+    HypothesisId.H5_MIC_PERMISSION_DENIED: (
+        "Grant mic permission to Sovyx Python (Settings > Privacy)."
+    ),
+    HypothesisId.H10_LINUX_MIXER_ATTENUATED: (
+        "Run `sovyx doctor voice --fix --yes` to lift the attenuated mixer controls."
+    ),
+}
+
+
+# ====================================================================
+# Schema constants
+# ====================================================================
 
 
 REQUIRED_SUMMARY_FIELDS = [
@@ -55,7 +210,7 @@ RECOMMENDED_SUMMARY_FIELDS = [
 ]
 
 
-def _has_either(summary: dict, key_alts: str) -> bool:
+def _has_either(summary: dict[str, Any], key_alts: str) -> bool:
     return any(k in summary for k in key_alts.split("|"))
 
 
@@ -89,7 +244,7 @@ def extract_archive(archive: Path) -> Path:
                 rejected = [m.name for m in tar.getmembers() if not _safe_member_path(m.name)]
                 raise ValueError(f"tarball contains unsafe paths: {rejected[:5]}")
             try:
-                tar.extractall(tmp, members=safe_members, filter="data")  # type: ignore[arg-type]
+                tar.extractall(tmp, members=safe_members, filter="data")
             except TypeError:
                 # Python <3.12: members already validated above by _safe_member_path.
                 tar.extractall(tmp, members=safe_members)  # nosec B202
@@ -119,13 +274,13 @@ def find_summary(root: Path) -> Path | None:
     return None
 
 
-def load_jsonl(path: Path) -> list[dict]:
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
     """Load JSONL file (one JSON object per line)."""
-    out = []
+    out: list[dict[str, Any]] = []
     if not path.exists():
         return out
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         with contextlib.suppress(json.JSONDecodeError):
@@ -138,26 +293,29 @@ def load_jsonl(path: Path) -> list[dict]:
 # ====================================================================
 
 
-def validate_schema(summary: dict) -> dict:
-    result = {
-        "ok": True,
-        "missing_required": [],
-        "missing_recommended": [],
-        "warnings": [],
-    }
+def _validate_schema(summary: dict[str, Any]) -> SchemaValidation:
+    missing_required: list[str] = []
+    missing_recommended: list[str] = []
+    warnings: list[str] = []
+
     for field in REQUIRED_SUMMARY_FIELDS:
         if field not in summary:
-            result["missing_required"].append(field)
-            result["ok"] = False
+            missing_required.append(field)
     for field in RECOMMENDED_SUMMARY_FIELDS:
         if not _has_either(summary, field):
-            result["missing_recommended"].append(field)
+            missing_recommended.append(field)
     if summary.get("schema_version") != 1:
-        result["warnings"].append(f"schema_version={summary.get('schema_version')} — expected 1")
-    return result
+        warnings.append(f"schema_version={summary.get('schema_version')} — expected 1")
+
+    return SchemaValidation(
+        ok=not missing_required,
+        missing_required=tuple(missing_required),
+        missing_recommended=tuple(missing_recommended),
+        warnings=tuple(warnings),
+    )
 
 
-def _summary_get(summary: dict, *keys: str, default: str = "?") -> str:
+def _summary_get(summary: dict[str, Any], *keys: str, default: str = "?") -> str:
     """Get first available key from summary (handles v4.3 vs D1-spec naming)."""
     for k in keys:
         v = summary.get(k)
@@ -166,7 +324,7 @@ def _summary_get(summary: dict, *keys: str, default: str = "?") -> str:
     return default
 
 
-def detect_toolkit(summary: dict) -> str:
+def _detect_toolkit(summary: dict[str, Any]) -> str:
     tool = (summary.get("tool", "") or summary.get("script_name", "") or "").lower()
     if "windows" in tool or "voice-diagnostic" in tool:
         return "windows"
@@ -182,18 +340,22 @@ def detect_toolkit(summary: dict) -> str:
 
 
 # ====================================================================
-# Hypothesis ranking
+# Hypothesis builder + evaluator (internal — converted to HypothesisVerdict at boundary)
 # ====================================================================
 
 
-class Hypothesis:
+class _HypothesisBuilder:
+    """Mutable scratchpad used by :func:`_evaluate_hypotheses` to accumulate
+    evidence per hypothesis. Frozen into :class:`HypothesisVerdict` at the
+    boundary of :func:`triage_tarball`.
+    """
+
     def __init__(self, hid: str, title: str) -> None:
         self.hid = hid
         self.title = title
         self.evidence_for: list[str] = []
         self.evidence_against: list[str] = []
         self.confidence = 0.0  # 0.0 to 1.0
-        self.actionable = ""
 
     def add_for(self, evidence: str, weight: float = 0.2) -> None:
         self.evidence_for.append(evidence)
@@ -204,14 +366,14 @@ class Hypothesis:
         self.confidence = max(0.0, self.confidence - weight)
 
 
-def evaluate_hypotheses(
-    root: Path, summary: dict, toolkit: str, alerts: list[dict]
-) -> list[Hypothesis]:
-    hyps: dict[str, Hypothesis] = {}
+def _evaluate_hypotheses(
+    root: Path, summary: dict[str, Any], toolkit: str, alerts: list[dict[str, Any]]
+) -> list[_HypothesisBuilder]:
+    hyps: dict[str, _HypothesisBuilder] = {}
 
-    def get(hid: str, title: str) -> Hypothesis:
+    def get(hid: str, title: str) -> _HypothesisBuilder:
         if hid not in hyps:
-            hyps[hid] = Hypothesis(hid, title)
+            hyps[hid] = _HypothesisBuilder(hid, title)
         return hyps[hid]
 
     # --- H1: Mic dead/muted/APO-destroyed (cross-OS) ---
@@ -228,7 +390,7 @@ def evaluate_hypotheses(
         h1.add_for(f"alert: {a['message'][:200]}", weight=0.5)
     # Look at capture analysis files.
     capture_files = list(root.rglob("analysis.json"))
-    voice_captures = []
+    voice_captures: list[tuple[Path, float | None, str | None]] = []
     for cf in capture_files:
         if "silence" in str(cf).lower() or "W14" in cf.name:
             continue
@@ -351,9 +513,10 @@ def evaluate_hypotheses(
     h8 = get("H8", "Sovyx daemon crashed or threw unhandled exception in voice pipeline")
     sovyx_log_paths = list(root.rglob("sovyx.log")) + list(root.rglob("sovyx_log_tail.txt"))
     for log_path in sovyx_log_paths[:3]:  # cap to avoid huge scans
-        try:
+        content: str | None = None
+        with contextlib.suppress(Exception):
             content = log_path.read_text(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
+        if content is None:
             continue
         # Heuristic patterns for Python crashes / Sovyx-specific failures.
         crash_patterns = [
@@ -367,8 +530,6 @@ def evaluate_hypotheses(
             (r"FileNotFoundError.*\.onnx", 0.4, "ONNX model file missing"),
         ]
         for pattern, weight, label in crash_patterns:
-            import re
-
             if re.search(pattern, content):
                 h8.add_for(f"{label} found in {log_path.name}", weight=weight)
                 break  # one match per log file is enough
@@ -420,11 +581,12 @@ def evaluate_hypotheses(
         # Look for doctor_voice output files in the tarball.
         doctor_voice_files = list(root.rglob("doctor_voice.txt"))
         for dv_file in doctor_voice_files:
-            try:
-                content = dv_file.read_text(encoding="utf-8", errors="replace")
-            except Exception:  # noqa: BLE001
+            dv_content: str | None = None
+            with contextlib.suppress(Exception):
+                dv_content = dv_file.read_text(encoding="utf-8", errors="replace")
+            if dv_content is None:
                 continue
-            if "linux_mixer_saturated" in content and "attenuated" in content.lower():
+            if "linux_mixer_saturated" in dv_content and "attenuated" in dv_content.lower():
                 h10.add_for(
                     f"`sovyx doctor voice` reports linux_mixer_saturated (attenuation "
                     f"regime) in {dv_file.name}",
@@ -434,18 +596,16 @@ def evaluate_hypotheses(
         # Also scan amixer dumps for the signature pattern.
         amixer_files = list(root.rglob("amixer_card*_scontents.txt"))
         for ax_file in amixer_files[:2]:
-            try:
-                content = ax_file.read_text(encoding="utf-8", errors="replace")
-            except Exception:  # noqa: BLE001
+            ax_content: str | None = None
+            with contextlib.suppress(Exception):
+                ax_content = ax_file.read_text(encoding="utf-8", errors="replace")
+            if ax_content is None:
                 continue
-            # Pattern: "Mic Boost" with current 0 (zeroed) AND "Capture" present.
-            import re
-
-            # 'Mic Boost',0  ... Front Left: 0 [0%]
+            # Pattern: 'Mic Boost',0  ... Front Left: 0 [0%]
             mic_boost_zero = bool(
                 re.search(
                     r"'Mic Boost'.*?Front Left:\s*0\s*\[0%\]",
-                    content,
+                    ax_content,
                     re.DOTALL,
                 )
             )
@@ -459,42 +619,140 @@ def evaluate_hypotheses(
     return list(hyps.values())
 
 
+def _to_verdict(b: _HypothesisBuilder) -> HypothesisVerdict:
+    """Freeze a builder into a public :class:`HypothesisVerdict`."""
+    try:
+        hid = HypothesisId(b.hid)
+    except ValueError as exc:  # pragma: no cover -- guard against unknown IDs
+        raise ValueError(f"unknown hypothesis id: {b.hid!r} (not in HypothesisId enum)") from exc
+    return HypothesisVerdict(
+        hid=hid,
+        title=b.title,
+        confidence=b.confidence,
+        evidence_for=tuple(b.evidence_for),
+        evidence_against=tuple(b.evidence_against),
+        recommended_action=_RECOMMENDED_ACTIONS.get(hid),
+    )
+
+
 # ====================================================================
-# Report rendering
+# Public API
 # ====================================================================
 
 
-def render_report(
-    summary: dict,
-    toolkit: str,
-    validation: dict,
-    alerts: list[dict],
-    hyps: list[Hypothesis],
-    root: Path,
-) -> str:
-    lines = []
-    lines.append("# Voice Diagnostic Triage Report")
-    lines.append("")
-    lines.append(f"**Source:** `{root}`")
+def triage_tarball(archive_or_dir: Path, *, is_extracted_dir: bool = False) -> TriageResult:
+    """Analyze a diag tarball (or already-extracted directory) and return a TriageResult.
+
+    Args:
+        archive_or_dir: Path to the diag ``.tar.gz`` / ``.zip`` archive,
+            or to an already-extracted root directory if
+            ``is_extracted_dir=True``.
+        is_extracted_dir: If ``True``, ``archive_or_dir`` is treated as
+            the already-extracted root directory and no extraction is
+            performed. Useful when the caller has already untarred the
+            archive (e.g. for repeated analysis without re-extracting).
+
+    Returns:
+        A frozen :class:`TriageResult` containing schema validation,
+        alerts summary, ranked hypotheses (highest-confidence first),
+        and all metadata needed by :func:`render_markdown`.
+
+    Raises:
+        FileNotFoundError: if ``archive_or_dir`` does not exist.
+        ValueError: if the archive type is unsupported, contains unsafe
+            paths (CWE-22), or its ``SUMMARY.json`` is missing/malformed.
+    """
+    if is_extracted_dir:
+        if not archive_or_dir.is_dir():
+            raise FileNotFoundError(f"not a directory: {archive_or_dir}")
+        root = archive_or_dir
+    else:
+        if not archive_or_dir.exists():
+            raise FileNotFoundError(f"archive not found: {archive_or_dir}")
+        root = extract_archive(archive_or_dir)
+
+    summary_path = find_summary(root)
+    if summary_path is None:
+        raise ValueError(f"SUMMARY.json not found under {root}")
+    try:
+        summary = json.loads(summary_path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"SUMMARY.json malformed: {exc}") from exc
+
+    validation = _validate_schema(summary)
+    toolkit = _detect_toolkit(summary)
+
+    alerts = load_jsonl(root / "_diagnostics" / "alerts.jsonl")
+    if not alerts:
+        for alt in ("alerts.jsonl",):
+            for p in root.rglob(alt):
+                alerts.extend(load_jsonl(p))
+
+    builders = _evaluate_hypotheses(root, summary, toolkit, alerts)
+    verdicts = tuple(sorted((_to_verdict(b) for b in builders), key=lambda v: -v.confidence))
+
+    by_severity = Counter(a.get("severity", "unknown") for a in alerts)
+    error_messages = tuple(a.get("message", "?") for a in alerts if a.get("severity") == "error")
+    alerts_summary = AlertsSummary(
+        error_count=by_severity.get("error", 0),
+        warn_count=by_severity.get("warn", 0),
+        info_count=by_severity.get("info", 0),
+        error_messages=error_messages,
+    )
+
+    # Header fields (preserve byte-equivalence with v0.30.13 render_report).
     tool_name = _summary_get(summary, "tool", "script_name", default="sovyx-voice-diag")
-    tool_ver = _summary_get(summary, "tool_version", "script_version")
-    lines.append(f"**Toolkit:** {tool_name} v{tool_ver}")
+    tool_version = _summary_get(summary, "tool_version", "script_version")
     kline = (summary.get("host_capability_summary", {}) or {}).get("kernel_line", "")
     os_str = _summary_get(summary, "os", "os_version", default=toolkit)
     if kline and os_str == toolkit:
+        # Preserve the v0.30.13 quirk: list slice is rendered via repr().
         os_str = f"{toolkit} ({kline.split()[0:6] if kline else ''})"
-    lines.append(f"**OS:** {os_str}")
-    lines.append(f"**Host:** {_summary_get(summary, 'host', 'hostname')}")
-    lines.append(f"**Captured:** {_summary_get(summary, 'captured_at_utc', 'started_utc_ns')}")
-    status = summary.get("status", "?")
-    exit_code = summary.get("final_exit_code", "?")
+
     selftest = (summary.get("calibration", {}) or {}).get(
         "analyzer_selftest_status", summary.get("analyzer_selftest_status", "?")
     )
-    steps = summary.get("steps", {})
-    lines.append(f"**Status:** {status} (exit={exit_code}) | selftest={selftest} | steps={steps}")
-    flags = summary.get("flags", {})
-    if flags.get("skip_captures"):
+
+    return TriageResult(
+        schema_version=int(summary.get("schema_version", 1) or 1),
+        toolkit=toolkit,
+        tarball_root=root,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        host=_summary_get(summary, "host", "hostname"),
+        captured_at_utc=_summary_get(summary, "captured_at_utc", "started_utc_ns"),
+        os_descriptor=os_str,
+        status=str(summary.get("status", "?")),
+        exit_code=str(summary.get("final_exit_code", "?")),
+        selftest_status=str(selftest),
+        steps=summary.get("steps", {}),
+        skip_captures=bool((summary.get("flags", {}) or {}).get("skip_captures", False)),
+        schema_validation=validation,
+        alerts=alerts_summary,
+        hypotheses=verdicts,
+    )
+
+
+def render_markdown(result: TriageResult) -> str:
+    """Render a :class:`TriageResult` as operator-facing markdown.
+
+    The output is byte-equivalent to the v0.30.13 ``render_report``
+    function for the same diag tarball; existing analyst workflows that
+    diff or grep the markdown continue to work without modification.
+    """
+    lines: list[str] = []
+    lines.append("# Voice Diagnostic Triage Report")
+    lines.append("")
+    lines.append(f"**Source:** `{result.tarball_root}`")
+    lines.append(f"**Toolkit:** {result.tool_name} v{result.tool_version}")
+    lines.append(f"**OS:** {result.os_descriptor}")
+    lines.append(f"**Host:** {result.host}")
+    lines.append(f"**Captured:** {result.captured_at_utc}")
+    lines.append(
+        f"**Status:** {result.status} (exit={result.exit_code}) | "
+        f"selftest={result.selftest_status} | steps={result.steps}"
+    )
+    if result.skip_captures:
         lines.append("")
         lines.append(
             "⚠️  **Phase 1 run** (`--skip-captures`) — no W captures, no audio "
@@ -505,42 +763,41 @@ def render_report(
     # Schema validation.
     lines.append("## Schema Validation")
     lines.append("")
-    if validation["ok"]:
+    if result.schema_validation.ok:
         lines.append("✅ Required fields present")
     else:
         lines.append("❌ Schema validation FAILED")
-        for f in validation["missing_required"]:
+        for f in result.schema_validation.missing_required:
             lines.append(f"  - missing required: `{f}`")
-    if validation["missing_recommended"]:
-        lines.append(f"⚠️  missing recommended: `{', '.join(validation['missing_recommended'])}`")
-    for w in validation["warnings"]:
+    if result.schema_validation.missing_recommended:
+        lines.append(
+            f"⚠️  missing recommended: `{', '.join(result.schema_validation.missing_recommended)}`"
+        )
+    for w in result.schema_validation.warnings:
         lines.append(f"⚠️  {w}")
     lines.append("")
 
     # Alerts summary.
     lines.append("## Alerts")
     lines.append("")
-    by_sev = Counter(a.get("severity", "unknown") for a in alerts)
-    lines.append(f"- error: {by_sev.get('error', 0)}")
-    lines.append(f"- warn:  {by_sev.get('warn', 0)}")
-    lines.append(f"- info:  {by_sev.get('info', 0)}")
+    lines.append(f"- error: {result.alerts.error_count}")
+    lines.append(f"- warn:  {result.alerts.warn_count}")
+    lines.append(f"- info:  {result.alerts.info_count}")
     lines.append("")
-    if by_sev.get("error", 0) > 0:
+    if result.alerts.error_count > 0:
         lines.append("### errors")
-        for a in alerts:
-            if a.get("severity") == "error":
-                lines.append(f"- {a.get('message', '?')}")
+        for msg in result.alerts.error_messages:
+            lines.append(f"- {msg}")
         lines.append("")
 
     # Hypothesis ranking.
     lines.append("## Hypothesis Ranking (by confidence)")
     lines.append("")
-    hyps_sorted = sorted(hyps, key=lambda h: -h.confidence)
-    for h in hyps_sorted:
+    for h in result.hypotheses:
         if h.confidence < 0.05 and not h.evidence_for and not h.evidence_against:
             continue
         emoji = "🔴" if h.confidence > 0.7 else "🟡" if h.confidence > 0.3 else "⚪"
-        lines.append(f"### {emoji} {h.hid}: {h.title} (confidence={h.confidence:.2f})")
+        lines.append(f"### {emoji} {h.hid.value}: {h.title} (confidence={h.confidence:.2f})")
         if h.evidence_for:
             lines.append("**Evidence FOR:**")
             for e in h.evidence_for:
@@ -554,28 +811,28 @@ def render_report(
     # Top recommendation.
     lines.append("## Recommendation")
     lines.append("")
-    top = hyps_sorted[0] if hyps_sorted else None
+    top = result.hypotheses[0] if result.hypotheses else None
     if top and top.confidence > 0.7:
         lines.append(f"**Highest-confidence root cause:** {top.title}")
         lines.append("")
-        if top.hid == "H2":
+        if top.hid == HypothesisId.H2_VOICE_CLARITY_APO:
             lines.append(
                 "→ Enable `capture_wasapi_exclusive=true` in `system.yaml` "
                 "(Windows-specific Voice Clarity APO bypass per anti-pattern #21)."
             )
-        elif top.hid == "H3":
+        elif top.hid == HypothesisId.H3_MACOS_HAL_INTERCEPTOR:
             lines.append(
                 "→ Disable detected HAL interceptor OR set Sovyx mic device "
                 "to bypass aggregate (Audio MIDI Setup > select physical mic)."
             )
-        elif top.hid == "H4":
+        elif top.hid == HypothesisId.H4_LINUX_DESTRUCTIVE_FILTER:
             lines.append(
                 "→ Unload destructive PipeWire filter modules; check "
                 "`~/.config/wireplumber/` for filter-chain config."
             )
-        elif top.hid == "H5":
+        elif top.hid == HypothesisId.H5_MIC_PERMISSION_DENIED:
             lines.append("→ Grant mic permission to Sovyx Python (Settings > Privacy).")
-        elif top.hid == "H1":
+        elif top.hid == HypothesisId.H1_MIC_DESTROYED:
             lines.append("→ Cross-check H2/H3/H4 (OS-specific) for the root cause of the silence.")
     elif top and top.confidence > 0.3:
         lines.append(
@@ -589,11 +846,11 @@ def render_report(
 
 
 # ====================================================================
-# Main
+# CLI
 # ====================================================================
 
 
-def main() -> int:
+def _cli_main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "archive", nargs="?", help="path to tarball/zip OR directory if --extract-dir"
@@ -611,41 +868,24 @@ def main() -> int:
     archive_path = Path(args.archive)
 
     try:
-        if args.extract_dir:
-            root = archive_path
-            if not root.is_dir():
-                print(f"ERROR: not a directory: {root}", file=sys.stderr)
-                return 2
-        else:
-            if not archive_path.exists():
-                print(f"ERROR: archive not found: {archive_path}", file=sys.stderr)
-                return 2
-            root = extract_archive(archive_path)
+        result = triage_tarball(archive_path, is_extracted_dir=args.extract_dir)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    except ValueError as e:
+        # Distinguish "SUMMARY.json missing/malformed" (exit 1) from
+        # "extract failed" (exit 2) to preserve the v0.30.13 contract.
+        msg = str(e)
+        if "SUMMARY.json" in msg:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+        print(f"ERROR: extract failed: {e}", file=sys.stderr)
+        return 2
     except Exception as e:  # noqa: BLE001
         print(f"ERROR: extract failed: {e}", file=sys.stderr)
         return 2
 
-    summary_path = find_summary(root)
-    if not summary_path:
-        print(f"ERROR: SUMMARY.json not found under {root}", file=sys.stderr)
-        return 1
-    try:
-        summary = json.loads(summary_path.read_text())
-    except Exception as e:  # noqa: BLE001
-        print(f"ERROR: SUMMARY.json malformed: {e}", file=sys.stderr)
-        return 1
-
-    validation = validate_schema(summary)
-    toolkit = detect_toolkit(summary)
-    alerts = load_jsonl(root / "_diagnostics" / "alerts.jsonl")
-    if not alerts:
-        # Try alternate locations.
-        for alt in ("alerts.jsonl",):
-            for p in root.rglob(alt):
-                alerts.extend(load_jsonl(p))
-
-    hyps = evaluate_hypotheses(root, summary, toolkit, alerts)
-    report = render_report(summary, toolkit, validation, alerts, hyps, root)
+    report = render_markdown(result)
 
     if args.out == "-":
         print(report)
@@ -656,4 +896,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cli_main())
