@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import sys
 import threading
 import time
 from collections import OrderedDict
@@ -384,6 +385,56 @@ def _analyse_audio(
     }
 
 
+def _no_audio_hint(platform_key: str) -> str:
+    """Return a platform-aware ``no_audio`` remediation hint.
+
+    Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+    §Phase 2 T2.7. Pre-T2.7 the wizard returned a single generic
+    "Check the mic is connected, unmuted, and selected in your OS
+    sound settings" hint regardless of platform. The forensic case
+    proved this is operationally insufficient on Linux+PipeWire — the
+    operator opens Cinnamon Sound Settings, sees the mic at 100 %
+    volume, "not muted", concludes the wizard is wrong. The actual
+    problem is in deeper layers (ALSA mixer ``Capture`` switch off,
+    WirePlumber default-source routed to a ``.monitor``, codec quirk
+    with no UCM profile) that no end-user GUI exposes.
+
+    On Linux this returns a 3-step actionable recipe with the exact
+    shell commands from the OPERATOR-DEBT-MASTER D24 playbook. Shell
+    commands are deliberately language-neutral so this single English
+    string serves operators regardless of UI locale (a future
+    revision can split into per-locale variants if needed).
+
+    On Windows and macOS the original generic hint is preserved —
+    those platforms have GUI-native mute / device-pick controls that
+    the operator can navigate without shell commands. Future work may
+    add Windows-specific hints (Privacy & Security → Microphone, App
+    permissions, exclusive-mode contention) and macOS-specific hints
+    (System Settings → Privacy & Security → Microphone).
+    """
+    if platform_key.startswith("linux"):
+        return (
+            "No usable signal captured. On Linux+PipeWire this is "
+            "almost always either an ALSA mixer state issue OR a "
+            "WirePlumber default-source routing issue, NOT what the "
+            "Cinnamon / GNOME sound applet shows. Run these 3 checks:\n"
+            "1) Confirm card index: arecord -l (mic is usually card 1)\n"
+            "2) Fix ALSA mixer + persist: amixer -c<N> sset 'Capture' cap; "
+            "amixer -c<N> sset 'Capture' 80%; amixer -c<N> sset "
+            "'Internal Mic Boost' 67%; sudo alsactl store <N>\n"
+            "3) Verify WirePlumber default source is the real mic (not a "
+            "monitor): pactl get-default-source — if it ends in '.monitor', "
+            "run: wpctl status (find the mic source ID), then: "
+            "wpctl set-default <ID>; pactl set-source-mute @DEFAULT_SOURCE@ 0; "
+            "pactl set-source-volume @DEFAULT_SOURCE@ 80%\n"
+            "Then re-run the wizard test."
+        )
+    return (
+        "No usable signal captured. Check the mic is connected, "
+        "unmuted, and selected in your OS sound settings."
+    )
+
+
 def _diagnose(
     *,
     peak_dbfs: float | None,
@@ -408,8 +459,7 @@ def _diagnose(
     if silent:
         return (
             "no_audio",
-            "No usable signal captured. Check the mic is connected, "
-            "unmuted, and selected in your OS sound settings.",
+            _no_audio_hint(sys.platform),
             False,
             True,
         )

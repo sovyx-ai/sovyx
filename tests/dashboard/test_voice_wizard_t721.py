@@ -248,6 +248,10 @@ class TestTestRecord:
         assert data["diagnosis"] == "no_audio"
         assert data["session_id"]  # non-empty
         assert data["error"] is None
+        # T2.7 — diagnosis_hint MUST be non-empty (the operator-facing
+        # remediation paragraph). On any platform the hint exists; on
+        # Linux it must include the actionable shell-command recipe.
+        assert data["diagnosis_hint"], "no_audio MUST carry a non-empty hint"
 
     def test_clipping_capture_diagnoses_clipping(self) -> None:
         # Saturated waveform — peak ≥ -0.1 dBFS triggers clipping.
@@ -523,6 +527,124 @@ class TestDiagnostic:
         data = response.json()
         assert data["voice_clarity_active"] is False
         assert data["ready"] is True
+
+
+# ── T2.7 — Platform-aware no_audio hint ─────────────────────────────
+
+
+class TestNoAudioHintT27:
+    """Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+    §Phase 2 T2.7 — pin the platform-aware ``no_audio`` hint contract.
+
+    Pre-T2.7 the wizard returned a single generic hint regardless of
+    platform. Forensic evidence (logsx.txt 2026-05-05): on Linux+
+    PipeWire the hint sent operators to "OS sound settings" where they
+    saw the mic at 100 % volume + unmuted in Cinnamon and concluded the
+    wizard was lying. The actual problem was 1-2 layers below the GUI
+    (ALSA Capture switch off, WirePlumber routing). T2.7 makes the hint
+    platform-aware so Linux operators get the exact 3-step shell-command
+    recipe from D24.
+    """
+
+    def test_linux_hint_includes_alsa_recipe(self) -> None:
+        from sovyx.dashboard.routes.voice_wizard import _no_audio_hint
+
+        hint = _no_audio_hint("linux")
+        assert "amixer" in hint, "Linux hint must mention amixer (ALSA mixer fix)"
+        assert "Capture" in hint, "Linux hint must mention the Capture control"
+        assert "Internal Mic Boost" in hint, (
+            "Linux hint must mention Internal Mic Boost (the boost control "
+            "the operator typically needs to lift)"
+        )
+
+    def test_linux_hint_includes_wireplumber_recipe(self) -> None:
+        from sovyx.dashboard.routes.voice_wizard import _no_audio_hint
+
+        hint = _no_audio_hint("linux")
+        assert "pactl" in hint, "Linux hint must mention pactl"
+        assert "wpctl" in hint, "Linux hint must mention wpctl"
+        assert ".monitor" in hint, (
+            "Linux hint must call out the '.monitor' default-source pitfall "
+            "(WirePlumber routing the default source to a monitor sink)"
+        )
+
+    def test_linux_hint_includes_persistence_step(self) -> None:
+        from sovyx.dashboard.routes.voice_wizard import _no_audio_hint
+
+        hint = _no_audio_hint("linux")
+        assert "alsactl store" in hint, (
+            "Linux hint MUST tell the operator to persist with "
+            "'sudo alsactl store <N>' — the forensic case proved that "
+            "without persist the next boot reverts the fix"
+        )
+
+    def test_linux_hint_works_for_linux2_kernel_str(self) -> None:
+        # sys.platform on Linux can be "linux" or historically "linux2"
+        # (though "linux2" is gone since Python 3.3, defensive coding
+        # is cheap and matches the .startswith("linux") guard).
+        from sovyx.dashboard.routes.voice_wizard import _no_audio_hint
+
+        assert "amixer" in _no_audio_hint("linux2")
+
+    def test_windows_hint_falls_back_to_generic(self) -> None:
+        from sovyx.dashboard.routes.voice_wizard import _no_audio_hint
+
+        hint = _no_audio_hint("win32")
+        # No Linux-specific commands leak into Windows hint.
+        assert "amixer" not in hint
+        assert "pactl" not in hint
+        assert "wpctl" not in hint
+        # But the generic text MUST still tell the operator something
+        # actionable.
+        assert "mic" in hint.lower() or "microphone" in hint.lower()
+        assert "OS sound settings" in hint
+
+    def test_macos_hint_falls_back_to_generic(self) -> None:
+        from sovyx.dashboard.routes.voice_wizard import _no_audio_hint
+
+        hint = _no_audio_hint("darwin")
+        assert "amixer" not in hint
+        assert "OS sound settings" in hint
+
+    def test_unknown_platform_falls_back_to_generic(self) -> None:
+        # Defensive: any future platform key (e.g. freebsd) gets the
+        # generic hint instead of crashing or returning empty.
+        from sovyx.dashboard.routes.voice_wizard import _no_audio_hint
+
+        hint = _no_audio_hint("freebsd")
+        assert hint  # non-empty
+        assert "amixer" not in hint  # no Linux-specific commands
+
+    def test_diagnose_routes_no_audio_through_helper_on_linux(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Integration: when sys.platform=='linux', _diagnose() returns
+        the actionable Linux hint (not the generic one)."""
+        import sys as _sys
+
+        from sovyx.dashboard.routes.voice_wizard import _diagnose
+
+        monkeypatch.setattr(_sys, "platform", "linux")
+        diagnosis, hint, clipping, silent = _diagnose(peak_dbfs=-83.0, snr_db=None)
+        assert diagnosis == "no_audio"
+        assert silent is True
+        assert clipping is False
+        assert "amixer" in hint
+        assert "wpctl" in hint
+
+    def test_diagnose_routes_no_audio_through_helper_on_windows(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys as _sys
+
+        from sovyx.dashboard.routes.voice_wizard import _diagnose
+
+        monkeypatch.setattr(_sys, "platform", "win32")
+        _, hint, _, _ = _diagnose(peak_dbfs=-83.0, snr_db=None)
+        assert "amixer" not in hint
+        assert "OS sound settings" in hint
 
 
 # ── Integration smoke ───────────────────────────────────────────────
