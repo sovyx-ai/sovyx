@@ -7,7 +7,12 @@ Composes three doctor surfaces under one command:
 * ``sovyx doctor voice`` — Voice Capture Health Lifecycle diagnostics
   per ADR §4.8. Runs the L5 pre-flight (the subset the CLI can drive
   standalone) and surfaces per-step results with a non-zero exit code
-  equal to the number of failing steps.
+  equal to the number of failing steps. Adds two opt-in flags:
+    * ``--fix`` -- apply safe remediations (Linux ALSA mixer reset).
+    * ``--full-diag`` -- run the full bundled diag toolkit (8-12 min,
+      interactive) and triage the result tarball in-process. Wires the
+      :mod:`sovyx.voice.diagnostics` package introduced in T1.4 of
+      MISSION-voice-self-calibrating-system-2026-05-05.
 * ``sovyx doctor cascade`` — invokes :func:`run_startup_cascade` in
   operator mode (no daemon boot), captures the log slice by ``saga_id``,
   and renders it as a human-readable timeline. This is the
@@ -44,6 +49,13 @@ from sovyx.observability.health import (
     CheckStatus,
     HealthRegistry,
     create_offline_registry,
+)
+from sovyx.voice.diagnostics import (
+    DiagPrerequisiteError,
+    DiagRunError,
+    TriageResult,
+    run_full_diag,
+    triage_tarball,
 )
 from sovyx.voice.health import (
     PreflightReport,
@@ -258,13 +270,30 @@ def doctor_voice(
         help="With --fix: restrict the reset to one ALSA card index "
         "(from /proc/asound/cards). Default resets every saturated card.",
     ),
+    full_diag: bool = typer.Option(
+        False,
+        "--full-diag",
+        help="Run the full bundled voice diagnostic toolkit "
+        "(8-12 min, interactive — will ask you to speak in short "
+        "windows) and triage the result in-process. Linux-only. "
+        "Mutually exclusive with --fix; chain them in separate "
+        "invocations if needed.",
+    ),
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        help="With --full-diag: skip every operator-prompt window in "
+        "the bash diag (cegamente captures whatever audio is on the "
+        "mic at probe time). REQUIRED when stdin is not a TTY (CI, "
+        "systemd, cron). Reduces forensic coverage; prefer interactive.",
+    ),
 ) -> None:
     """Voice Capture Health Lifecycle diagnostics (ADR §4.8 + v1.3 §4.4).
 
-    Without ``--fix`` the command is diagnostic-only: it runs the
-    standalone subset of L5 pre-flight (PortAudio host-API sanity +
-    Linux ALSA mixer saturation) and returns the count of failing
-    steps so CI pipelines can gate on voice readiness.
+    Without ``--fix`` or ``--full-diag`` the command is diagnostic-only:
+    it runs the standalone subset of L5 pre-flight (PortAudio host-API
+    sanity + Linux ALSA mixer saturation) and returns the count of
+    failing steps so CI pipelines can gate on voice readiness.
 
     With ``--fix`` the command becomes remediating: on a saturated
     Linux mixer it invokes :func:`apply_mixer_reset` to drive the
@@ -272,7 +301,21 @@ def doctor_voice(
     preflight to confirm, and clears the boot marker file (L7) on
     success. Exit codes (see module-level constants) distinguish the
     outcomes so shell wrappers can branch.
+
+    With ``--full-diag`` (Linux-only) the command runs the bundled
+    forensic diagnostic toolkit end-to-end (8-12 min interactive),
+    captures a multi-MB tarball with hardware/kernel/PipeWire/PortAudio
+    snapshots + recorded audio, then runs the typed triage analyzer
+    in-process and renders a verdict + the suggested fix command (if
+    any). Mutually exclusive with ``--fix``: full-diag observes,
+    ``--fix`` mutates; chain them in separate invocations.
     """
+    if full_diag and fix:
+        raise typer.BadParameter(
+            "--full-diag and --fix are mutually exclusive. "
+            "Run --full-diag first to observe, then --fix to remediate "
+            "based on the verdict."
+        )
     exit_code = _run_voice_doctor(
         output_json=output_json,
         device=device,
@@ -280,6 +323,8 @@ def doctor_voice(
         yes=yes,
         dry_run=dry_run,
         card_index=card_index,
+        full_diag=full_diag,
+        non_interactive=non_interactive,
     )
     raise typer.Exit(exit_code)
 
@@ -292,8 +337,13 @@ def _run_voice_doctor(
     yes: bool = False,
     dry_run: bool = False,
     card_index: int | None = None,
+    full_diag: bool = False,
+    non_interactive: bool = False,
 ) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
+    if full_diag:
+        return _run_voice_full_diag(non_interactive=non_interactive)
+
     report = _run_voice_preflight()
     _render_voice_report(report, output_json=output_json, device=device)
 
@@ -326,6 +376,125 @@ def _run_voice_doctor(
         yes=yes,
         dry_run=dry_run,
         card_index=card_index,
+    )
+
+
+def _run_voice_full_diag(*, non_interactive: bool) -> int:
+    """Execute the bundled forensic diag toolkit + in-process triage.
+
+    Wires :func:`sovyx.voice.diagnostics.run_full_diag` (extract bash
+    package data + interactive subprocess) to
+    :func:`sovyx.voice.diagnostics.triage_tarball` (typed verdict),
+    then renders the verdict via rich and surfaces the operator-facing
+    fix command for the highest-confidence hypothesis.
+
+    Returns the doctor-voice exit code:
+        * EXIT_DOCTOR_OK on a clean run with verdict rendered.
+        * EXIT_DOCTOR_UNSUPPORTED on non-Linux / missing bash.
+        * EXIT_DOCTOR_USER_ABORTED on a non-TTY shell without
+          ``--non-interactive`` (the diag would dead-lock waiting for
+          speech prompts).
+        * EXIT_DOCTOR_GENERIC_FAILURE on diag-script failure (rc!=0).
+    """
+    if not sys.stdin.isatty() and not non_interactive:
+        console.print(
+            "\n[red]--full-diag requires an interactive TTY for the speech-prompt "
+            "windows.[/red]\n"
+            "Pass [bold]--non-interactive[/bold] to bypass (reduces forensic coverage), "
+            "or run from a terminal where stdin is a TTY."
+        )
+        return EXIT_DOCTOR_USER_ABORTED
+
+    console.print(
+        "\n[bold cyan]Running full voice diagnostic[/bold cyan] "
+        "[dim](8-12 min, interactive — speak when prompted)[/dim]\n"
+    )
+
+    extra_args: tuple[str, ...] = ()
+    if non_interactive:
+        extra_args = ("--non-interactive",)
+
+    try:
+        diag_result = run_full_diag(extra_args=extra_args)
+    except DiagPrerequisiteError as exc:
+        console.print(f"\n[red]Voice diag prerequisites not met:[/red] {exc}")
+        console.print(
+            "\n[dim]On macOS or Windows, use [bold]sovyx doctor voice[/bold] "
+            "(cross-platform health checks) instead.[/dim]"
+        )
+        return EXIT_DOCTOR_UNSUPPORTED
+    except DiagRunError as exc:
+        console.print(f"\n[red]Voice diag failed:[/red] {exc}")
+        if exc.partial_output_dir is not None:
+            console.print(f"[dim]Partial output preserved at:[/dim] {exc.partial_output_dir}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    console.print(
+        f"\n[green]Diag completed[/green] in {diag_result.duration_s:.1f}s\n"
+        f"[dim]Result tarball:[/dim] {diag_result.tarball_path}\n"
+    )
+
+    try:
+        triage = triage_tarball(diag_result.tarball_path)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"\n[red]Triage failed:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    _render_full_diag_verdict(triage)
+    return EXIT_DOCTOR_OK
+
+
+def _render_full_diag_verdict(result: TriageResult) -> None:
+    """Render the triage verdict via rich + surface fix command for the winner."""
+    summary_table = Table(
+        title="Triage hypotheses",
+        title_style="bold",
+        show_lines=False,
+    )
+    summary_table.add_column("ID", style="cyan", no_wrap=True)
+    summary_table.add_column("Title")
+    summary_table.add_column("Confidence", justify="right")
+    summary_table.add_column("", no_wrap=True)
+
+    for h in result.hypotheses:
+        if h.confidence < 0.05 and not h.evidence_for and not h.evidence_against:
+            continue
+        if h.confidence > 0.7:
+            marker = "[red]●[/red]"
+        elif h.confidence > 0.3:
+            marker = "[yellow]●[/yellow]"
+        else:
+            marker = "[dim]○[/dim]"
+        summary_table.add_row(
+            h.hid.value,
+            h.title,
+            f"{h.confidence:.2f}",
+            marker,
+        )
+
+    console.print(summary_table)
+
+    winner = result.winner
+    if winner is not None:
+        console.print(
+            f"\n[bold red]Highest-confidence hypothesis:[/bold red] "
+            f"[bold]{winner.hid.value}[/bold] — {winner.title} "
+            f"(confidence={winner.confidence:.2f})"
+        )
+        if winner.recommended_action:
+            console.print(
+                f"\n[bold green]Recommended action:[/bold green] {winner.recommended_action}"
+            )
+    else:
+        console.print(
+            "\n[green]No high-confidence hypothesis detected.[/green] "
+            "[dim]Voice subsystem appears healthy.[/dim]"
+        )
+
+    console.print(
+        f"\n[dim]Full markdown report: "
+        f"[bold]python -m sovyx.voice.diagnostics.triage {result.tarball_root}[/bold] "
+        f"--extract-dir[/dim]"
     )
 
 
