@@ -173,6 +173,14 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+# Exclude the bundled bash diag toolkit's standalone Python helpers
+# from strict type-checking. They are not part of the Sovyx import
+# surface (no ``__init__.py`` in ``_bash/``) and are executed via
+# subprocess by the bash orchestrator. See ``[tool.ruff]`` extend-exclude
+# and ``src/sovyx/voice/diagnostics/__init__.py`` docstring for context.
+exclude = [
+    "^src/sovyx/voice/diagnostics/_bash/",
+]
 
 [[tool.mypy.overrides]]
 module = "sovyx.plugins.hot_reload"
@@ -228,6 +236,12 @@ warn_unused_ignores = false
 [tool.ruff]
 target-version = "py311"
 line-length = 99
+# Exclude the bundled bash diag toolkit's Python helpers — they are
+# standalone scripts executed by the bash orchestrator via ``python3``
+# subprocess invocation, not part of the Sovyx import surface. They
+# pre-date the project's typing+style conventions and are kept verbatim
+# in the wheel for forensic equivalence with the dist tarball v4.3.
+extend-exclude = ["src/sovyx/voice/diagnostics/_bash"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM", "TCH", "BLE"]

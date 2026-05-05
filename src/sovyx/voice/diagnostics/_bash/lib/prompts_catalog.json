@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "prompts": [
+    {
+      "prompt_id": "W1_listen",
+      "priority": "P1",
+      "category": "audio_listen_describe",
+      "hypothesis": "C4/C5",
+      "prompt_text": "ESCUTE a captura W1 (ALSA plughw direto — bypass completo de PipeWire/PortAudio). Descreva em 1-2 frases: volume, clareza, artefatos (reverb, breathing, clicks). Esta é a referência de 'mic + ADC + kernel driver' crus.",
+      "artifact_paths": [
+        "C_alsa/captures/W1_plughw*/capture.wav"
+      ],
+      "response_schema": "free_text",
+      "required_for_verdict": true
+    },
+    {
+      "prompt_id": "W11_listen",
+      "priority": "P1",
+      "category": "audio_listen_describe",
+      "hypothesis": "D1/D6/E_P1",
+      "prompt_text": "ESCUTE a captura W11 (PortAudio via default — caminho do Sovyx). Descreva volume, clareza, artefatos. COMPARE com W1 que você escutou antes: está igual? pior? melhor? Se diferente, que tipo de degradação?",
+      "artifact_paths": [
+        "E_portaudio/captures/W11_pa_default_16k_1ch/capture.wav"
+      ],
+      "response_schema": "free_text",
+      "required_for_verdict": true
+    },
+    {
+      "prompt_id": "W4b_listen",
+      "priority": "P1",
+      "category": "audio_listen_describe",
+      "hypothesis": "C4/intermittency",
+      "prompt_text": "ESCUTE a captura W4b (intermitência — gravada 30s após W4). Há cortes no meio da frase? Volume muda durante a captura? Ruído começa e para?",
+      "artifact_paths": [
+        "C_alsa/captures/W4b_intermittency*/capture.wav"
+      ],
+      "response_schema": "free_text",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "Kokoro_listen",
+      "priority": "P1",
+      "category": "audio_listen_describe",
+      "hypothesis": "K3",
+      "prompt_text": "ESCUTE o WAV sintetizado pelo Kokoro TTS. Playback limpo? Distorção, truncamento, robotização excessiva, skips? Isso valida a cadeia de OUTPUT.",
+      "artifact_paths": [
+        "K_output/kokoro_synth_output.wav"
+      ],
+      "response_schema": "free_text",
+      "required_for_verdict": true
+    },
+    {
+      "prompt_id": "self_feedback_H",
+      "priority": "P1",
+      "category": "subjective_recall",
+      "hypothesis": "self-feedback/E17",
+      "prompt_text": "Durante os rounds do H (pipeline live com voz real), você ouviu sua própria voz saindo dos alto-falantes (self-feedback)? Se sim, era baixo ou alto? Começava depois de quantos segundos falando?",
+      "artifact_paths": [],
+      "response_schema": "free_text",
+      "required_for_verdict": true
+    },
+    {
+      "prompt_id": "ambient_noise",
+      "priority": "P2",
+      "category": "environment_note",
+      "hypothesis": "C1/C4/baseline",
+      "prompt_text": "Qual o ambiente durante as capturas de fala? Escolha o mais próximo: [silent_room] [office_hum] [fan_noise] [traffic_outside] [tv_background] [music_background] [other:...]. Se other, descreva.",
+      "artifact_paths": [],
+      "response_schema": "free_text",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "mic_led_activity",
+      "priority": "P2",
+      "category": "subjective_recall",
+      "hypothesis": "A1",
+      "prompt_text": "Durante as capturas de fala, o LED/indicador físico do microfone (se existir) acendeu/piscou? OU o indicador OS (ex: bolinha vermelha na barra de status) apareceu? [yes_physical_led] [yes_os_indicator] [both] [no_neither] [not_sure]",
+      "artifact_paths": [],
+      "response_schema": "free_text",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "extra_audio_hardware",
+      "priority": "P2",
+      "category": "environment_note",
+      "hypothesis": "A6",
+      "prompt_text": "Além do microfone interno do laptop, tem algo conectado? [bluetooth_headset] [usb_mic] [usb_headset] [hdmi_monitor_with_speakers] [dock_station] [other:...] [none]. Se múltiplos, liste todos.",
+      "artifact_paths": [],
+      "response_schema": "free_text",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "response_delay_H",
+      "priority": "P2",
+      "category": "subjective_recall",
+      "hypothesis": "H2",
+      "prompt_text": "Entre o comando 'sovyx start' e o momento em que voice ficou realmente funcional, demorou mais do que o usual? Se sim, quanto (1-5s / 5-30s / >30s / infinito-nunca-funcionou)?",
+      "artifact_paths": [],
+      "response_schema": "free_text",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "pipewire_custom_configs",
+      "priority": "P2",
+      "category": "visual_inspect_file",
+      "hypothesis": "D7",
+      "prompt_text": "Liste arquivos em ~/.config/pipewire/ e ~/.config/wireplumber/ (se existirem). Cole output: ls -la ~/.config/pipewire/ ~/.config/wireplumber/ 2>/dev/null",
+      "artifact_paths": [],
+      "response_schema": "free_text",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "dashboard_status_during_H",
+      "priority": "P3",
+      "category": "external_screenshot",
+      "hypothesis": "H1",
+      "prompt_text": "(Se você tinha o dashboard Voice page aberto durante H rounds) — que status o dashboard mostrava? 'Running green'? 'Stopped red'? 'Warning amber'? Se tiver screenshot, indique caminho (será copiado para operator_attachments/); senão descreva em texto.",
+      "artifact_paths": [],
+      "response_schema": "free_text_or_path",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "bios_mic_flag",
+      "priority": "P3",
+      "category": "external_screenshot",
+      "hypothesis": "A3/A5",
+      "prompt_text": "(OPCIONAL — requer reboot) — BIOS → Advanced/Audio settings tem 'Internal Microphone' disabled/enabled? Se acessível AGORA sem perder contexto do bug, reboot + screenshot + cole caminho. Senão, SKIP com razão 'reboot_unsafe_now' — verdict A3/A5 será INCONCLUSIVE.",
+      "artifact_paths": [],
+      "response_schema": "free_text_or_path",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "notification_during_K",
+      "priority": "P3",
+      "category": "subjective_recall",
+      "hypothesis": "K2",
+      "prompt_text": "Durante os testes de playback K1-K4, houve algum notification sound do sistema tocando (email, chat, etc) que poderia ter mascarado o tom 440Hz? [yes] [no] [not_sure]",
+      "artifact_paths": [],
+      "response_schema": "free_text",
+      "required_for_verdict": false
+    },
+    {
+      "prompt_id": "anything_else_operator",
+      "priority": "P3",
+      "category": "free_form",
+      "hypothesis": "unclassified",
+      "prompt_text": "Algo que você observou que o script NÃO perguntou e pode ser relevante? Ex: 'mic funcionava antes do update X', 'só quebra quando laptop bateria < 20%', 'funciona com headset mas não com mic interno'. Qualquer dica. Deixe vazio se não.",
+      "artifact_paths": [],
+      "response_schema": "free_text",
+      "required_for_verdict": false
+    }
+  ]
+}
