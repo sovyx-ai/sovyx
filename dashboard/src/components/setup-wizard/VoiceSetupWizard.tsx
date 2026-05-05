@@ -431,6 +431,24 @@ function _ResultsStep({
         }`}
       >
         <div className="font-semibold">{t(`wizard.results.diagnosis.${result.diagnosis}`)}</div>
+        {/*
+          Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
+          §Phase 2 T2.7 — render the backend's diagnosis_hint below
+          the diagnosis label. Pre-T2.7 the hint was emitted by the
+          backend but never rendered, so operators only saw the short
+          i18n label (e.g. "Nenhum áudio capturado") with no actionable
+          recipe. The hint carries platform-aware shell commands when
+          relevant (Linux+PipeWire ALSA mixer + WirePlumber recipes),
+          so operators have a concrete next action right next to the
+          failure verdict.
+          whitespace-pre-line preserves the newlines the backend
+          embeds in the multi-step recipe.
+        */}
+        {result.diagnosis_hint && !isOk && (
+          <p className="mt-1.5 whitespace-pre-line text-[11px] leading-relaxed opacity-90">
+            {result.diagnosis_hint}
+          </p>
+        )}
       </div>
       <dl className="grid grid-cols-2 gap-2 text-xs">
         <dt className="text-[var(--svx-color-text-tertiary)]">{t("wizard.results.rms")}</dt>

@@ -138,6 +138,90 @@ describe("VoiceSetupWizard — record + results flow", () => {
     expect(screen.getByText("Save selection")).toBeInTheDocument();
   });
 
+  it("renders backend diagnosis_hint as actionable paragraph for non-ok diagnoses (T2.7)", async () => {
+    // Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
+    // §Phase 2 T2.7 — when the backend returns a non-empty
+    // diagnosis_hint on a failure verdict, the results step MUST
+    // render it as a paragraph below the diagnosis label. Pre-T2.7
+    // the hint was emitted but never rendered, so operators saw
+    // only the short i18n label and had no actionable next step.
+    const TEST_RESULT_NO_AUDIO_LINUX = {
+      session_id: "s-2",
+      success: true,
+      duration_actual_s: 3.0,
+      sample_rate_hz: 16000,
+      level_rms_dbfs: -83.0,
+      level_peak_dbfs: -78.0,
+      snr_db: null,
+      clipping_detected: false,
+      silent_capture: true,
+      diagnosis: "no_audio",
+      diagnosis_hint:
+        "No usable signal captured. On Linux+PipeWire this is " +
+        "almost always either an ALSA mixer state issue OR a " +
+        "WirePlumber default-source routing issue. Run amixer + wpctl.",
+    };
+    mockGet.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/devices") return Promise.resolve(DEVICES_RESPONSE);
+      if (path === "/api/voice/wizard/diagnostic") return Promise.resolve(DIAGNOSTIC_RESPONSE);
+      return Promise.reject(new Error("unknown path"));
+    });
+    mockPost.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/test-record") {
+        return Promise.resolve(TEST_RESULT_NO_AUDIO_LINUX);
+      }
+      return Promise.resolve({});
+    });
+
+    render(<VoiceSetupWizard />);
+    await waitFor(() => {
+      expect(screen.getByText("Built-in Microphone")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Built-in Microphone"));
+    fireEvent.click(screen.getByText("Start 3-second recording"));
+
+    // The actionable hint paragraph should appear below the diagnosis
+    // label. We assert on the unique substring the backend embeds for
+    // Linux platforms.
+    await waitFor(() => {
+      expect(screen.getByText(/amixer.*wpctl/i)).toBeInTheDocument();
+    });
+  });
+
+  it("does NOT render diagnosis_hint paragraph for ok diagnosis (T2.7)", async () => {
+    // OK verdict carries a hint too ("Microphone looks good.") but
+    // the success badge already conveys the message — rendering both
+    // would be visually noisy. Guard: hint paragraph hidden when isOk.
+    mockGet.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/devices") return Promise.resolve(DEVICES_RESPONSE);
+      if (path === "/api/voice/wizard/diagnostic") return Promise.resolve(DIAGNOSTIC_RESPONSE);
+      return Promise.reject(new Error("unknown path"));
+    });
+    const TEST_RESULT_OK_WITH_HINT = {
+      ...TEST_RESULT_OK,
+      diagnosis_hint: "Microphone looks good.",
+    };
+    mockPost.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/test-record") {
+        return Promise.resolve(TEST_RESULT_OK_WITH_HINT);
+      }
+      return Promise.resolve({});
+    });
+
+    render(<VoiceSetupWizard />);
+    await waitFor(() => {
+      expect(screen.getByText("Built-in Microphone")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Built-in Microphone"));
+    fireEvent.click(screen.getByText("Start 3-second recording"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Recording looks good.")).toBeInTheDocument();
+    });
+    // Hint paragraph should be absent for ok verdict.
+    expect(screen.queryByText("Microphone looks good.")).not.toBeInTheDocument();
+  });
+
   it("retry returns from results → record", async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === "/api/voice/wizard/devices") return Promise.resolve(DEVICES_RESPONSE);
