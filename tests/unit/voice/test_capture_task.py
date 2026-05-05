@@ -2865,6 +2865,166 @@ class TestCaptureRestartFrameEmissionT32:
             await task.stop()
 
 
+class TestRequestDeviceChangeRestartT25:  # noqa: N801 — T25 = mission task ID
+    """Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
+    §Phase 2 T2.5 — pin the ``request_device_change_restart`` contract.
+
+    Driven at runtime by the failover helper at
+    :func:`sovyx.voice.health._runtime_failover._try_runtime_failover`
+    when the deaf-signal coordinator exhausts every eligible bypass
+    strategy and quarantines the endpoint. Pre-T2.5 the pipeline
+    stayed deaf on the quarantined endpoint until next process boot;
+    these tests pin the in-process device-rebind path.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_happy_path_emits_endpoint_quarantined_frame(self) -> None:
+        """Successful rebind emits a CaptureRestartFrame with
+        reason=ENDPOINT_QUARANTINED + bypass_tier=0 + new_device_id
+        reflects the target."""
+        from sovyx.voice._capture_task import (
+            DeviceChangeRestartVerdict,
+        )
+        from sovyx.voice.pipeline._frame_types import (
+            CaptureRestartFrame,
+            CaptureRestartReason,
+        )
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[CaptureRestartFrame] = []
+        pipeline.record_capture_restart = MagicMock(
+            side_effect=lambda f: recorded.append(f),
+        )
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        source = _input_entry(index=7, rate=16_000, host_api="ALSA", name="default")
+        target = _input_entry(
+            index=4,
+            rate=16_000,
+            host_api="ALSA",
+            name="HD-Audio Generic: SN6180 Analog (hw:1,0)",
+            is_default=False,
+        )
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=7,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [source, target],
+        )
+        try:
+            await task.start()
+            recorded.clear()  # discard frames from start
+
+            result = await task.request_device_change_restart(target)
+
+            assert result.verdict is DeviceChangeRestartVerdict.DEVICE_CHANGED_SUCCESS
+            assert result.engaged is True
+            assert result.target_device_index == 4  # noqa: PLR2004
+            assert result.source_device_index == 7  # noqa: PLR2004
+            assert result.new_endpoint_guid != ""
+            assert len(recorded) == 1, (
+                f"expected exactly one CaptureRestartFrame; got {len(recorded)}"
+            )
+            frame = recorded[0]
+            assert frame.frame_type == "CaptureRestart"
+            assert frame.restart_reason == CaptureRestartReason.ENDPOINT_QUARANTINED.value
+            assert frame.bypass_tier == 0
+            assert frame.new_signal_processing_mode == "shared"
+            assert frame.old_signal_processing_mode == "shared"
+            # new_device_id should reflect the target's resolved name.
+            assert "SN6180" in frame.new_device_id
+            assert frame.timestamp_monotonic > 0.0
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_endpoint_guid_is_recomputed_for_target(self) -> None:
+        """CRITICAL invariant — ``self._endpoint_guid`` MUST reflect the
+        target after a successful rebind. Without this, a re-deaf on
+        the new device would quarantine the OLD GUID and the failover
+        loop would never converge (the helper excludes the OLD guid
+        from candidate selection by design)."""
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        pipeline.record_capture_restart = MagicMock()
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        source = _input_entry(index=7, rate=16_000, host_api="ALSA", name="default")
+        target = _input_entry(
+            index=4,
+            rate=16_000,
+            host_api="ALSA",
+            name="HD-Audio Generic: SN6180 Analog (hw:1,0)",
+            is_default=False,
+        )
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=7,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [source, target],
+        )
+        try:
+            await task.start()
+            old_guid = task._endpoint_guid  # type: ignore[attr-defined]
+
+            result = await task.request_device_change_restart(target)
+            assert result.engaged
+
+            new_guid = task._endpoint_guid  # type: ignore[attr-defined]
+            assert new_guid != ""
+            assert new_guid != old_guid, (
+                "endpoint_guid must be recomputed for the target — without "
+                "this, re-deaf would quarantine the OLD guid and failover "
+                "would loop forever"
+            )
+            # The result also surfaces the same guid for the caller.
+            assert result.new_endpoint_guid == new_guid
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_not_running_returns_not_running_no_frame(self) -> None:
+        """Calling before ``start()`` returns NOT_RUNNING + no frame."""
+        from sovyx.voice._capture_task import (
+            DeviceChangeRestartVerdict,
+        )
+        from sovyx.voice.pipeline._frame_types import CaptureRestartFrame  # noqa: TC001
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[CaptureRestartFrame] = []
+        pipeline.record_capture_restart = MagicMock(
+            side_effect=lambda f: recorded.append(f),
+        )
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        target = _input_entry(index=4, rate=16_000, host_api="ALSA", name="target")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=7,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [target],
+        )
+        # No start() — task not running.
+        result = await task.request_device_change_restart(target)
+        assert result.verdict is DeviceChangeRestartVerdict.NOT_RUNNING
+        assert result.engaged is False
+        assert len(recorded) == 0
+
+
 class TestRequestHostApiRotateT28:
     """T28 — pin the request_host_api_rotate contract.
 

@@ -40,6 +40,8 @@ __all__ = [
     "_LINUX_SESSION_MANAGER_HOST_APIS",
     "AlsaHwDirectRestartResult",
     "AlsaHwDirectRestartVerdict",
+    "DeviceChangeRestartResult",
+    "DeviceChangeRestartVerdict",
     "ExclusiveRestartResult",
     "ExclusiveRestartVerdict",
     "HostApiRotateResult",
@@ -49,6 +51,7 @@ __all__ = [
     "SharedRestartResult",
     "SharedRestartVerdict",
     "_emit_alsa_hw_direct_restart_metric",
+    "_emit_device_change_restart_metric",
     "_emit_exclusive_restart_metric",
     "_emit_host_api_rotate_metric",
     "_emit_session_manager_restart_metric",
@@ -525,6 +528,132 @@ class HostApiRotateResult:
     device: int | str | None = None
     sample_rate: int | None = None
     detail: str | None = None
+
+
+class DeviceChangeRestartVerdict(StrEnum):
+    """Verdict of :meth:`AudioCaptureTask.request_device_change_restart`.
+
+    Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+    §Phase 2 T2.5. The runtime-failover helper at
+    :mod:`sovyx.voice.health._runtime_failover` invokes this when the
+    deaf-signal coordinator exhausts every eligible bypass strategy and
+    quarantines the endpoint — the helper resolves the next non-
+    quarantined boot candidate via
+    :func:`sovyx.voice.health._factory_integration.select_alternative_endpoint`
+    and asks this method to rebind the capture stream to it. Pre-T2.5
+    the pipeline stayed deaf on the quarantined endpoint until the
+    next process boot; this restart class makes the failover happen
+    in-process.
+
+    Members:
+        DEVICE_CHANGED_SUCCESS: Stream reopened against the requested
+            target device. ``self._input_device``,
+            ``self._host_api_name``, ``self._resolved_device_name`` and
+            ``self._endpoint_guid`` all reflect the new device. The
+            coordinator should be reset (via
+            :meth:`VoicePipeline.reset_coordinator_after_failover`) so
+            the next deaf heartbeat re-engages on the NEW endpoint.
+        DOWNGRADED_TO_SOURCE: The target-device open raised and the
+            secondary :meth:`_reopen_stream_after_device_error` recovered
+            on the source device. The pipeline is alive on the OLD
+            (quarantined) endpoint — same deaf state as before. Failover
+            should advance to the next candidate via cooldown.
+        OPEN_FAILED_NO_STREAM: Both the target-device open and the
+            source-fallback raised. The stream is closed and the consumer
+            task has been signalled to exit (``_running=False``).
+            Upstream supervisors MUST detect this and rebuild the
+            capture task or surface a hard ``CaptureInoperativeError``.
+        NO_TARGET_CANDIDATE: The caller supplied ``None`` for the
+            target — defensive guard. Existing stream preserved. The
+            failover helper should treat this as ``exhausted``.
+        NOT_RUNNING: Called while the task is stopped — no-op.
+    """
+
+    DEVICE_CHANGED_SUCCESS = "device_changed_success"
+    DOWNGRADED_TO_SOURCE = "downgraded_to_source"
+    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
+    NO_TARGET_CANDIDATE = "no_target_candidate"
+    NOT_RUNNING = "not_running"
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceChangeRestartResult:
+    """Structured outcome of :meth:`AudioCaptureTask.request_device_change_restart`.
+
+    Mission §Phase 2 T2.5. Mirrors :class:`HostApiRotateResult` shape
+    so the runtime-failover helper can interrogate the verdict +
+    ``engaged`` flag uniformly with the existing restart machinery.
+
+    Attributes:
+        verdict: The :class:`DeviceChangeRestartVerdict` describing what
+            happened. Anything other than ``DEVICE_CHANGED_SUCCESS``
+            means the failover did not engage on the target.
+        engaged: Convenience flag — ``True`` iff
+            ``verdict == DEVICE_CHANGED_SUCCESS``.
+        target_device_index: Resolved PortAudio index of the target
+            device the failover attempted to bind to.
+        target_host_api: Host_api label of the target device.
+        source_device_index: ``self._input_device`` BEFORE the call;
+            preserved on every verdict for telemetry symmetry.
+        source_host_api: ``self._host_api_name`` BEFORE the call.
+        host_api: Effective host_api of the resulting stream. Equal to
+            ``target_host_api`` on success; falls back to
+            ``source_host_api`` on ``DOWNGRADED_TO_SOURCE``; ``None``
+            when the stream is down.
+        device: Resolved PortAudio device index of the resulting stream.
+        sample_rate: Effective sample rate of the resulting stream.
+        new_endpoint_guid: The :func:`derive_endpoint_guid` value of the
+            target device — populated regardless of success so the
+            failover helper can pass it to the quarantine subsystem on
+            re-deaf.
+        detail: Human-readable error / downgrade reason. ``None`` on
+            successful engagement.
+    """
+
+    verdict: DeviceChangeRestartVerdict
+    engaged: bool
+    target_device_index: int | str | None = None
+    target_host_api: str | None = None
+    source_device_index: int | str | None = None
+    source_host_api: str | None = None
+    host_api: str | None = None
+    device: int | str | None = None
+    sample_rate: int | None = None
+    new_endpoint_guid: str = ""
+    detail: str | None = None
+
+
+def _emit_device_change_restart_metric(
+    result: DeviceChangeRestartResult,
+) -> None:
+    """Record a ``voice.capture.device_change_restart.verdicts`` counter event.
+
+    Mission §Phase 2 T2.5 — symmetric twin of
+    :func:`_emit_host_api_rotate_metric`. The counter is emitted
+    regardless of whether the failover engaged so dashboards can split
+    "failover tried + engaged", "failover tried + downgraded",
+    "failover tried + dead-stream", and "failover skipped" cleanly.
+    """
+    try:
+        import sys
+
+        from sovyx.observability.metrics import get_metrics
+
+        registry = get_metrics()
+        counter = getattr(registry, "voice_capture_device_change_restart_verdicts", None)
+        if counter is None:
+            return
+        counter.add(
+            1,
+            attributes={
+                "verdict": result.verdict.value,
+                "target_host_api": result.target_host_api or "none",
+                "host_api": result.host_api or "none",
+                "platform": sys.platform,
+            },
+        )
+    except Exception:  # noqa: BLE001 — metrics must never break capture
+        logger.debug("voice_capture_device_change_restart_metric_failed", exc_info=True)
 
 
 def _emit_host_api_rotate_metric(result: HostApiRotateResult) -> None:

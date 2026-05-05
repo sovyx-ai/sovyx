@@ -152,6 +152,12 @@ from sovyx.voice.capture._restart import (
     AlsaHwDirectRestartVerdict as AlsaHwDirectRestartVerdict,
 )
 from sovyx.voice.capture._restart import (
+    DeviceChangeRestartResult as DeviceChangeRestartResult,
+)
+from sovyx.voice.capture._restart import (
+    DeviceChangeRestartVerdict as DeviceChangeRestartVerdict,
+)
+from sovyx.voice.capture._restart import (
     ExclusiveRestartResult as ExclusiveRestartResult,
 )
 from sovyx.voice.capture._restart import (

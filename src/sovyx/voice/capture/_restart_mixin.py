@@ -59,6 +59,8 @@ from sovyx.voice.capture._restart import (
     _LINUX_SESSION_MANAGER_HOST_APIS,
     AlsaHwDirectRestartResult,
     AlsaHwDirectRestartVerdict,
+    DeviceChangeRestartResult,
+    DeviceChangeRestartVerdict,
     ExclusiveRestartResult,
     ExclusiveRestartVerdict,
     HostApiRotateResult,
@@ -68,6 +70,7 @@ from sovyx.voice.capture._restart import (
     SharedRestartResult,
     SharedRestartVerdict,
     _emit_alsa_hw_direct_restart_metric,
+    _emit_device_change_restart_metric,
     _emit_exclusive_restart_metric,
     _emit_host_api_rotate_metric,
     _emit_session_manager_restart_metric,
@@ -1499,6 +1502,306 @@ class RestartMixin:
             sample_rate=self._sample_rate,
         )
         _emit_host_api_rotate_metric(result)
+        return result
+
+    async def request_device_change_restart(
+        self,
+        target: DeviceEntry,
+        *,
+        reason: str = "endpoint_quarantined",
+    ) -> DeviceChangeRestartResult:
+        """Rebind the capture stream to ``target`` (different device).
+
+        Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+        §Phase 2 T2.5. Driven by
+        :func:`sovyx.voice.health._runtime_failover._try_runtime_failover`
+        when the deaf-signal coordinator exhausts every eligible bypass
+        strategy and quarantines the current endpoint. Pre-T2.5 the
+        pipeline stayed deaf on the quarantined endpoint until the
+        next process boot; this method makes the failover happen
+        in-process.
+
+        The structural skeleton mirrors :meth:`request_host_api_rotate`:
+        snapshot pre-rotation substrate → ``_close_stream`` on the
+        PortAudio thread (anti-pattern #14 — ``sd.InputStream.close()``
+        is sync) → drain queue → :func:`open_input_stream` against the
+        target → on failure attempt :meth:`_reopen_stream_after_device_error`
+        on the source → on success update mutable substrate state
+        (``_input_device``, ``_host_api_name``, ``_resolved_device_name``,
+        and crucially ``_endpoint_guid`` via :func:`derive_endpoint_guid`)
+        → rebuild :class:`FrameNormalizer` with the new sample rate /
+        channel count → emit :class:`CaptureRestartFrame` with
+        ``restart_reason="endpoint_quarantined"`` BEFORE
+        :meth:`_allocate_ring_buffer` (anti-pattern #29 — frame BEFORE
+        epoch increment) → :meth:`_emit_stream_opened`.
+
+        Critical invariant — ``self._endpoint_guid`` MUST be recomputed
+        for the new device, otherwise a re-deaf on the new endpoint
+        would quarantine the OLD GUID and the failover loop would
+        never converge. The runtime-failover helper relies on the
+        GUID-keyed quarantine to skip already-tried candidates.
+
+        Args:
+            target: The :class:`DeviceEntry` resolved by
+                :func:`select_alternative_endpoint` — the next
+                non-quarantined boot candidate.
+            reason: Free-form reason for the restart, recorded on the
+                :class:`CaptureRestartFrame` if a future caller wants
+                to distinguish failover-driven changes from manual
+                operator-driven device swaps. Defaults to
+                ``"endpoint_quarantined"`` (the only caller in v0.30.10).
+
+        Returns:
+            A :class:`DeviceChangeRestartResult` describing the outcome.
+            ``DEVICE_CHANGED_SUCCESS`` is the only "engaged" verdict;
+            everything else means the failover should advance to the
+            next candidate via cooldown OR the pipeline is dead and
+            the supervisor must rebuild it.
+        """
+        source_device = self._input_device
+        source_host_api = self._host_api_name
+
+        if not self._running:
+            logger.debug("audio_capture_device_change_restart_skipped_not_running")
+            result = DeviceChangeRestartResult(
+                verdict=DeviceChangeRestartVerdict.NOT_RUNNING,
+                engaged=False,
+                target_device_index=target.index if target is not None else None,
+                target_host_api=target.host_api_name if target is not None else None,
+                source_device_index=source_device,
+                source_host_api=source_host_api,
+                detail="capture task is not running",
+            )
+            _emit_device_change_restart_metric(result)
+            return result
+
+        if target is None:
+            logger.warning(
+                "audio_capture_device_change_restart_no_target",
+                device=source_device,
+                source_host_api=source_host_api,
+            )
+            result = DeviceChangeRestartResult(
+                verdict=DeviceChangeRestartVerdict.NO_TARGET_CANDIDATE,
+                engaged=False,
+                source_device_index=source_device,
+                source_host_api=source_host_api,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail="caller passed None target — no candidate available",
+            )
+            _emit_device_change_restart_metric(result)
+            return result
+
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
+        from sovyx.voice.health._factory_integration import derive_endpoint_guid
+
+        # Pre-compute the new GUID so the result carries it on every
+        # path — the failover helper threads it back into the
+        # quarantine subsystem on re-deaf even when the open failed.
+        try:
+            new_endpoint_guid = derive_endpoint_guid(target)
+        except Exception:  # noqa: BLE001 — defensive only; identity is best-effort
+            logger.debug("audio_capture_device_change_restart_guid_derive_failed", exc_info=True)
+            new_endpoint_guid = ""
+
+        target_host_api = target.host_api_name
+        target_index = target.index
+
+        # T32 / anti-pattern #29 — snapshot pre-restart substrate for
+        # the CaptureRestartFrame emission BEFORE any mutation.
+        old_host_api = self._host_api_name or ""
+        old_device_id = self._resolved_device_name or str(self._input_device or "")
+
+        logger.warning(
+            "audio_capture_device_change_restart_begin",
+            source_device_index=source_device,
+            source_host_api=source_host_api,
+            target_device_index=target_index,
+            target_host_api=target_host_api,
+            target_name=target.name,
+            reason=reason,
+        )
+
+        base_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+
+        # Tear down the existing stream on the PortAudio thread before
+        # reopening on the target — same close/reopen pattern used by
+        # request_host_api_rotate (anti-pattern #14 compliance —
+        # sd.InputStream.close() is sync).
+        await asyncio.to_thread(self._close_stream, "device_change")
+        while not self._queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._queue.get_nowait()
+
+        try:
+            stream, info = await open_input_stream(
+                device=target,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=self._audio_callback,
+                tuning=base_tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+                validate_fn=None,
+                # Pin the resulting stream to the target's host_api so
+                # the unified-opener fallback chain doesn't silently
+                # drift to the source (mirrors the rotate strategy's
+                # preferred_host_api guard).
+                preferred_host_api=target_host_api,
+            )
+        except StreamOpenError as exc:
+            logger.error(
+                "audio_capture_device_change_restart_failed",
+                error=str(exc),
+                source_device_index=source_device,
+                source_host_api=source_host_api,
+                target_device_index=target_index,
+                target_host_api=target_host_api,
+            )
+            # Defensive recovery: try the source via the existing
+            # device-error reopen helper. If that also fails, the
+            # consumer task is signalled to exit via
+            # _signal_consumer_shutdown (mirrors host_api_rotate).
+            try:
+                await self._reopen_stream_after_device_error()
+            except Exception as fallback_exc:  # noqa: BLE001
+                logger.error(
+                    "audio_capture_device_change_restart_fallback_failed",
+                    error=str(fallback_exc),
+                )
+                self._signal_consumer_shutdown()
+                result = DeviceChangeRestartResult(
+                    verdict=DeviceChangeRestartVerdict.OPEN_FAILED_NO_STREAM,
+                    engaged=False,
+                    target_device_index=target_index,
+                    target_host_api=target_host_api,
+                    source_device_index=source_device,
+                    source_host_api=source_host_api,
+                    new_endpoint_guid=new_endpoint_guid,
+                    detail=(
+                        f"target device {target_index!r} open failed ({exc}); "
+                        f"source-device fallback also failed ({fallback_exc})"
+                    ),
+                )
+                _emit_device_change_restart_metric(result)
+                return result
+            result = DeviceChangeRestartResult(
+                verdict=DeviceChangeRestartVerdict.DOWNGRADED_TO_SOURCE,
+                engaged=False,
+                target_device_index=target_index,
+                target_host_api=target_host_api,
+                source_device_index=source_device,
+                source_host_api=source_host_api,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                new_endpoint_guid=new_endpoint_guid,
+                detail=(
+                    f"target device {target_index!r} open failed ({exc}); "
+                    f"recovered to source device {source_device!r}"
+                ),
+            )
+            _emit_device_change_restart_metric(result)
+            return result
+
+        # Success — apply the new substrate state.
+        self._stream = stream
+        self._sample_rate = info.sample_rate
+        self._input_device = info.device_index
+        self._host_api_name = info.host_api
+        self._resolved_device_name = target.name
+        # CRITICAL — recompute endpoint_guid for the NEW device so the
+        # quarantine subsystem keys on the right identity on re-deaf.
+        # Without this, a re-deaf on the new device would quarantine
+        # the OLD guid (the one the failover helper just excluded),
+        # creating an infinite loop where every failover attempt
+        # re-targets the same already-quarantined endpoint.
+        if new_endpoint_guid:
+            self._endpoint_guid = new_endpoint_guid
+
+        # Rebuild the normalizer for the new sample rate / channel count
+        # — same shape as request_host_api_rotate's rebuild block at
+        # _restart_mixin.py:1410-1435.
+        _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        from sovyx.voice._agc2_adaptive_floor import build_agc2_adaptive_floor
+
+        self._normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=_agc2_tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+                adaptive_floor=build_agc2_adaptive_floor(
+                    enabled=_agc2_tuning.voice_agc2_adaptive_floor_enabled,
+                    window_seconds=_agc2_tuning.voice_agc2_adaptive_floor_window_seconds,
+                    quantile=_agc2_tuning.voice_agc2_adaptive_floor_quantile,
+                    sample_rate=info.sample_rate,
+                ),
+                vad_feedback_enabled=_agc2_tuning.voice_agc2_vad_feedback_enabled,
+            ),
+            aec=self._aec,
+            render_provider=self._render_provider,
+            double_talk_detector=self._double_talk_detector,
+            noise_suppressor=self._noise_suppressor,
+            snr_estimator=self._snr_estimator,
+            dither_enabled=self._dither_enabled,
+            dither_amplitude_lsb=self._dither_amplitude_lsb,
+            wiener_entropy_check_enabled=self._wiener_entropy_check_enabled,
+            wiener_entropy_threshold=self._wiener_entropy_threshold,
+            resample_peak_check_enabled=self._resample_peak_check_enabled,
+            phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+        )
+
+        # Anti-pattern #29 — emit the CaptureRestartFrame BEFORE
+        # _allocate_ring_buffer increments the epoch. The dashboard's
+        # restart-history widget renders this in its timeline so
+        # operators can correlate the failover with the deaf-signal
+        # event that triggered it. bypass_tier=0 (no APO bypass —
+        # the change is the device itself); both signal-processing-
+        # mode fields default to "shared" because failover does not
+        # alter the WASAPI exclusive state.
+        self._pipeline.record_capture_restart(
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=time.monotonic(),
+                restart_reason=CaptureRestartReason.ENDPOINT_QUARANTINED.value,
+                old_host_api=old_host_api,
+                new_host_api=self._host_api_name or "",
+                old_device_id=old_device_id,
+                new_device_id=self._resolved_device_name or str(self._input_device or ""),
+                old_signal_processing_mode="shared",
+                new_signal_processing_mode="shared",
+                bypass_tier=0,
+            ),
+        )
+        self._allocate_ring_buffer(base_tuning)
+        self._emit_stream_opened(info, apo_bypass_attempted=False)
+
+        logger.warning(
+            "audio_capture_device_change_restart_ok",
+            source_device_index=source_device,
+            source_host_api=source_host_api,
+            target_device_index=info.device_index,
+            target_host_api=info.host_api,
+            sample_rate=self._sample_rate,
+            channels=info.channels,
+            new_endpoint_guid=new_endpoint_guid,
+        )
+        result = DeviceChangeRestartResult(
+            verdict=DeviceChangeRestartVerdict.DEVICE_CHANGED_SUCCESS,
+            engaged=True,
+            target_device_index=target_index,
+            target_host_api=target_host_api,
+            source_device_index=source_device,
+            source_host_api=source_host_api,
+            host_api=self._host_api_name,
+            device=self._input_device,
+            sample_rate=self._sample_rate,
+            new_endpoint_guid=new_endpoint_guid,
+        )
+        _emit_device_change_restart_metric(result)
         return result
 
     def _find_sibling_with_host_api(self, host_api: str) -> DeviceEntry | None:
