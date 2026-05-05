@@ -58,6 +58,17 @@ Design contracts (ratified per mission spec):
 
 from __future__ import annotations
 
+from sovyx.voice.calibration._applier import (
+    ApplyError,
+    ApplyResult,
+    CalibrationApplier,
+)
+from sovyx.voice.calibration._persistence import (
+    CalibrationProfileLoadError,
+    load_calibration_profile,
+    profile_path,
+    save_calibration_profile,
+)
 from sovyx.voice.calibration._provenance import ProvenanceRecorder
 from sovyx.voice.calibration.engine import CalibrationEngine, EngineMode
 from sovyx.voice.calibration.rules import (
@@ -84,10 +95,14 @@ __all__ = [
     "HARDWARE_FINGERPRINT_SCHEMA_VERSION",
     "MEASUREMENT_SNAPSHOT_SCHEMA_VERSION",
     "RULE_SET_VERSION",
+    "ApplyError",
+    "ApplyResult",
+    "CalibrationApplier",
     "CalibrationConfidence",
     "CalibrationDecision",
     "CalibrationEngine",
     "CalibrationProfile",
+    "CalibrationProfileLoadError",
     "CalibrationRule",
     "EngineMode",
     "HardwareFingerprint",
@@ -97,4 +112,7 @@ __all__ = [
     "RuleContext",
     "RuleEvaluation",
     "iter_rules",
+    "load_calibration_profile",
+    "profile_path",
+    "save_calibration_profile",
 ]
