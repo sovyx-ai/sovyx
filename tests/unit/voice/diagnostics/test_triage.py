@@ -1,8 +1,13 @@
-"""Tests for tools/voice_diag_triage.py — analyst-side RCA tool.
+"""Subprocess-level regression tests for the triage analyzer.
 
-Validates schema + 7 hypotheses against synthetic tarballs simulating
-Linux/Windows/macOS toolkit outputs. Ensures the triage script works
-correctly before real pilot tarballs arrive.
+Exercises the legacy ``tools/voice_diag_triage.py`` wrapper (which now
+imports from :mod:`sovyx.voice.diagnostics.triage`) end-to-end via
+``subprocess.run`` to guarantee back-compat with analyst workflows that
+shell out to the script. Direct in-process tests for the typed public
+API live alongside this module in ``test_triage_api.py``.
+
+Validates schema + the H1..H10 hypotheses against synthetic tarballs
+simulating Linux / Windows / macOS toolkit outputs.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 TRIAGE_SCRIPT = REPO_ROOT / "tools" / "voice_diag_triage.py"
 
 

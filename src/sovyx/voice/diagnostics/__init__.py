@@ -4,8 +4,7 @@ This package owns the in-process voice diagnostic surface that ships
 with Sovyx. The bash diag toolkit (``sovyx-voice-diag.sh`` + ``lib/``)
 is bundled as wheel data under :mod:`sovyx.voice.diagnostics._bash`
 and exposed at runtime via :mod:`importlib.resources`. The triage
-analyzer ports the standalone ``tools/voice_diag_triage.py`` into a
-typed Python module (:mod:`sovyx.voice.diagnostics.triage`).
+analyzer is :mod:`sovyx.voice.diagnostics.triage`.
 
 Public surface (post-Layer 1, mission
 ``MISSION-voice-self-calibrating-system-2026-05-05.md``):
@@ -13,11 +12,14 @@ Public surface (post-Layer 1, mission
 * :class:`TriageResult` -- structured triage verdict
 * :class:`HypothesisVerdict` -- one ranked hypothesis with confidence
 * :class:`HypothesisId` -- closed enum of supported hypotheses
+* :class:`SchemaValidation` -- schema validation outcome
+* :class:`AlertsSummary` -- alerts severity breakdown
 * :func:`triage_tarball` -- analyze a diag tarball, return TriageResult
 * :func:`render_markdown` -- render TriageResult as operator markdown
-* :func:`run_full_diag` -- orchestrate end-to-end diag run + triage
-* :class:`DiagRunResult` -- result of a successful diag run
-* :class:`DiagRunError` -- raised on selftest fail or non-zero exit
+
+T1.4 will add :func:`run_full_diag`, :class:`DiagRunResult`, and
+:class:`DiagRunError` for end-to-end diag orchestration; T1.5 wires
+``sovyx doctor voice --full-diag`` against this surface.
 
 The bash toolkit lives under :mod:`sovyx.voice.diagnostics._bash` as
 package data. Its standalone Python helpers under ``_bash/lib/py/``
@@ -28,3 +30,23 @@ configuration.
 """
 
 from __future__ import annotations
+
+from sovyx.voice.diagnostics.triage import (
+    AlertsSummary,
+    HypothesisId,
+    HypothesisVerdict,
+    SchemaValidation,
+    TriageResult,
+    render_markdown,
+    triage_tarball,
+)
+
+__all__ = [
+    "AlertsSummary",
+    "HypothesisId",
+    "HypothesisVerdict",
+    "SchemaValidation",
+    "TriageResult",
+    "render_markdown",
+    "triage_tarball",
+]
