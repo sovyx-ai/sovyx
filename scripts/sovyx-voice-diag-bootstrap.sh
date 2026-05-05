@@ -45,7 +45,7 @@ set -euo pipefail
 # Pinned release metadata — bump these together when shipping a new tarball.
 # ─────────────────────────────────────────────────────────────────────────
 
-readonly BOOTSTRAP_VERSION="1.0.0"
+readonly BOOTSTRAP_VERSION="1.1.0"
 readonly DIAG_VERSION="4.3"
 readonly RELEASE_TAG="v0.30.13"
 readonly REPO="sovyx-ai/sovyx"
@@ -423,6 +423,26 @@ EOF
 # Main
 # ─────────────────────────────────────────────────────────────────────────
 
+_print_internalized_tip() {
+    # Operators with sovyx >=0.30.14 installed have an integrated path
+    # that does the same diag + triage in-process and surfaces the
+    # verdict + fix command directly in the terminal. The bootstrap
+    # remains the canonical entry for hosts where (a) sovyx is not yet
+    # installed, or (b) the sovyx CLI itself is broken too badly to run.
+    # Both audiences benefit from knowing the simpler path exists.
+    if command -v sovyx >/dev/null 2>&1; then
+        local sovyx_version
+        sovyx_version=$(sovyx --version 2>/dev/null | awk '{print $NF}')
+        printf "%s[TIP]%s sovyx %s detected on this host.\n" "${YLW}" "${RST}" "${sovyx_version:-?}"
+        printf "       For sovyx >=0.30.14, the integrated path runs the same\n"
+        printf "       diag + triage in-process and surfaces the verdict + fix\n"
+        printf "       command directly:\n\n"
+        printf "         %ssovyx doctor voice --full-diag%s\n\n" "${BLD}" "${RST}"
+        printf "       This bootstrap remains useful for offline / pre-install\n"
+        printf "       hosts and for cases where the sovyx CLI itself is broken.\n\n"
+    fi
+}
+
 main() {
     parse_args "$@"
     _init_colors
@@ -430,6 +450,8 @@ main() {
     printf "%sSovyx Voice Diagnostic Bootstrap v%s%s\n" "${BLD}" "${BOOTSTRAP_VERSION}" "${RST}"
     printf "%s(installs sovyx-voice-diag v%s from release %s)%s\n\n" \
         "${BLD}" "${DIAG_VERSION}" "${RELEASE_TAG_OVERRIDE:-$RELEASE_TAG}" "${RST}"
+
+    _print_internalized_tip
 
     # Compute INSTALL_DIR after flag parsing so --install-dir wins.
     if [[ -z "${INSTALL_DIR}" ]]; then
