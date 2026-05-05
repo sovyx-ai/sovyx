@@ -76,9 +76,11 @@ def _build_bypass_strategies(platform_key: str) -> list[PlatformBypassStrategy]:
         return [WindowsWASAPIExclusiveBypass()]
     if platform_key == "linux":
         from sovyx.voice.health.bypass import (
+            LinuxALSACaptureSwitchBypass,
             LinuxALSAMixerResetBypass,
             LinuxPipeWireDirectBypass,
             LinuxSessionManagerEscapeBypass,
+            LinuxWirePlumberDefaultSourceBypass,
         )
 
         # Strategy order matters: cheapest + most specific first.
@@ -98,9 +100,26 @@ def _build_bypass_strategies(platform_key: str) -> list[PlatformBypassStrategy]:
         #    ``linux_pipewire_direct_bypass_enabled=True`` because
         #    engaging the bypass steals the device from every other
         #    desktop app.
+        # 4. ``LinuxWirePlumberDefaultSourceBypass`` — Mission §Phase 2
+        #    T2.1 (v0.30.12). Reroutes the WirePlumber default source
+        #    when it points at a ``.monitor`` / muted / near-zero-volume
+        #    source. Default-OFF + lenient-on (telemetry only) per
+        #    feedback_staged_adoption — opt-in via SOVYX_TUNING__VOICE__
+        #    LINUX_WIREPLUMBER_DEFAULT_SOURCE_BYPASS_ENABLED=true. v0.31.0
+        #    flips the default. Runs AFTER the existing 3 because it
+        #    mutates host-wide audio routing (riskier than per-card
+        #    mixer resets) so should only fire when nothing cheaper worked.
+        # 5. ``LinuxALSACaptureSwitchBypass`` — Mission §Phase 2 T2.2
+        #    (v0.30.12). Engages ALSA Capture switch when [off] +
+        #    lifts Internal Mic Boost when at min raw value. Default-OFF
+        #    + lenient-on. Runs LAST because it iterates ALL input cards
+        #    (highest-cost probe of the Linux strategies) and mutates
+        #    multiple controls per card.
         return [
             LinuxALSAMixerResetBypass(),
             LinuxSessionManagerEscapeBypass(),
             LinuxPipeWireDirectBypass(),
+            LinuxWirePlumberDefaultSourceBypass(),
+            LinuxALSACaptureSwitchBypass(),
         ]
     return []

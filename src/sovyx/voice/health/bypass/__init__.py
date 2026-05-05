@@ -42,6 +42,9 @@ from sovyx.voice.health.bypass._strategy import (
 )
 
 if TYPE_CHECKING:
+    from sovyx.voice.health.bypass._linux_alsa_capture_switch import (
+        LinuxALSACaptureSwitchBypass,
+    )
     from sovyx.voice.health.bypass._linux_alsa_mixer import (
         LinuxALSAMixerResetBypass,
     )
@@ -50,6 +53,9 @@ if TYPE_CHECKING:
     )
     from sovyx.voice.health.bypass._linux_session_manager_escape import (
         LinuxSessionManagerEscapeBypass,
+    )
+    from sovyx.voice.health.bypass._linux_wireplumber_default_source import (
+        LinuxWirePlumberDefaultSourceBypass,
     )
     from sovyx.voice.health.bypass._win_host_api_rotate_then_exclusive import (
         WindowsHostApiRotateThenExclusiveBypass,
@@ -63,9 +69,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BypassApplyError",
+    "LinuxALSACaptureSwitchBypass",
     "LinuxALSAMixerResetBypass",
     "LinuxPipeWireDirectBypass",
     "LinuxSessionManagerEscapeBypass",
+    "LinuxWirePlumberDefaultSourceBypass",
     "PlatformBypassStrategy",
     "WindowsHostApiRotateThenExclusiveBypass",
     "WindowsRawCommunicationsBypass",
@@ -80,9 +88,13 @@ __all__ = [
 # until first attribute access breaks it without changing the public
 # surface. Pattern mirrors ``sovyx.observability.__init__``.
 _LAZY_EXPORTS: dict[str, str] = {
+    "LinuxALSACaptureSwitchBypass": "sovyx.voice.health.bypass._linux_alsa_capture_switch",
     "LinuxALSAMixerResetBypass": "sovyx.voice.health.bypass._linux_alsa_mixer",
     "LinuxPipeWireDirectBypass": "sovyx.voice.health.bypass._linux_pipewire_direct",
     "LinuxSessionManagerEscapeBypass": ("sovyx.voice.health.bypass._linux_session_manager_escape"),
+    "LinuxWirePlumberDefaultSourceBypass": (
+        "sovyx.voice.health.bypass._linux_wireplumber_default_source"
+    ),
     "WindowsHostApiRotateThenExclusiveBypass": (
         "sovyx.voice.health.bypass._win_host_api_rotate_then_exclusive"
     ),
