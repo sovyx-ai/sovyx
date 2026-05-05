@@ -1,0 +1,76 @@
+"""Voice calibration: forensic-driven config decision pipeline.
+
+This package owns the proactive auto-configuration surface that turns
+the L1 :mod:`sovyx.voice.diagnostics` toolkit (forensic observation
+only) into a self-calibrating pipeline that captures hardware
+fingerprint + targeted measurements, evaluates a deterministic
+forward-chaining rule engine, and produces a signed
+:class:`CalibrationProfile` -- a structured config diff to apply
+atomically with snapshot+rollback semantics.
+
+Public surface (post-T2.1, mission
+``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 2):
+
+Schema (this commit):
+    * :class:`CalibrationConfidence` -- HIGH | MEDIUM | LOW | EXPERIMENTAL
+    * :class:`HardwareFingerprint` -- audio-stack-aware identity
+    * :class:`MeasurementSnapshot` -- targeted diag artifacts subset
+    * :class:`ProvenanceTrace` -- per-rule-firing audit log entry
+    * :class:`CalibrationDecision` -- one config field change
+    * :class:`CalibrationProfile` -- complete signed verdict
+
+Provenance (this commit):
+    * :class:`ProvenanceRecorder` -- engine-internal trace builder
+
+Future commits in v0.30.15:
+    * T2.4 -- :class:`CalibrationEngine` + :class:`RuleContext` + Rule Protocol
+    * T2.7 -- ``load_calibration_profile`` + ``save_calibration_profile``
+      with Ed25519 signing (LENIENT mode default)
+    * T2.8 -- :class:`CalibrationApplier` with atomic apply + rollback
+    * T2.2 -- ``capture_fingerprint`` extending health/_fingerprint
+    * T2.3 -- targeted measurer reusing the bash diag with --only flags
+    * T2.5 -- rules/{R10..R50}_*.py (issue-driven decision rules)
+    * T2.9 -- ``sovyx doctor voice --calibrate`` CLI
+
+Design contracts (ratified per mission spec):
+
+* All decisions are deterministic and rule-based; NO ML / learned
+  policy in v0.30.x or v0.31.0. Same inputs -> byte-identical output.
+* ``EXPERIMENTAL``-confidence decisions are surfaced via ``--explain``
+  but never auto-applied; promotion is a code change.
+* Signing follows the ``_mixer_kb`` precedent: LENIENT mode in
+  v0.30.15-17 (warns on missing/invalid signature, accepts), STRICT
+  in v0.31.x.
+* Per-mind isolation: profiles persisted to
+  ``<data_dir>/<mind_id>/calibration.json``; no global mutation.
+* Atomicity: pre-apply snapshot, apply, validate, persist; rollback
+  on any sub-step failure (mirrors ``_linux_mixer_apply.py``).
+"""
+
+from __future__ import annotations
+
+from sovyx.voice.calibration._provenance import ProvenanceRecorder
+from sovyx.voice.calibration.schema import (
+    CALIBRATION_PROFILE_SCHEMA_VERSION,
+    HARDWARE_FINGERPRINT_SCHEMA_VERSION,
+    MEASUREMENT_SNAPSHOT_SCHEMA_VERSION,
+    CalibrationConfidence,
+    CalibrationDecision,
+    CalibrationProfile,
+    HardwareFingerprint,
+    MeasurementSnapshot,
+    ProvenanceTrace,
+)
+
+__all__ = [
+    "CALIBRATION_PROFILE_SCHEMA_VERSION",
+    "HARDWARE_FINGERPRINT_SCHEMA_VERSION",
+    "MEASUREMENT_SNAPSHOT_SCHEMA_VERSION",
+    "CalibrationConfidence",
+    "CalibrationDecision",
+    "CalibrationProfile",
+    "HardwareFingerprint",
+    "MeasurementSnapshot",
+    "ProvenanceRecorder",
+    "ProvenanceTrace",
+]
