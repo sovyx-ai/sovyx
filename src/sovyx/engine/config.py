@@ -1055,17 +1055,30 @@ class VoiceTuningConfig(BaseSettings):
     # regardless of gate so dashboards can calibrate the false-
     # positive rate). v0.31.0 flips the default to True after one
     # minor cycle of validated telemetry.
-    runtime_failover_on_quarantine_enabled: bool = False
-    """Hot-failover gate (Mission §Phase 2 T2.6). When True, the
-    deaf-signal closure dispatches
+    runtime_failover_on_quarantine_enabled: bool = True
+    """Hot-failover gate (Mission §Phase 2 T2.6 + §Phase 3 T3.2). When
+    True, the deaf-signal closure dispatches
     :meth:`AudioCaptureTask.request_device_change_restart` against the
     next non-quarantined boot candidate after the bypass coordinator
-    exhausts every eligible strategy. Default False per
-    ``feedback_staged_adoption`` — flipped to True in v0.31.0 after
-    one minor-cycle of telemetry-only validation. Lenient telemetry
-    (``voice.failover.attempted`` event) fires regardless of this
-    flag so the dashboards have data to validate the flip against.
-    Override via ``SOVYX_TUNING__VOICE__RUNTIME_FAILOVER_ON_QUARANTINE_ENABLED``."""
+    exhausts every eligible strategy.
+
+    **Default flipped to True in v0.30.13 (Mission §Phase 3 T3.2).**
+    Pre-v0.30.13 this was False per ``feedback_staged_adoption``; the
+    rationale-for-skipping-soak is documented in the v0.30.13 release
+    commit:
+
+    1. Forensic confidence — the failover path was designed against
+       extensive log evidence (the operator IS the canonical case;
+       keeping defaults OFF means the fix doesn't activate for the
+       very user it was built for).
+    2. Bounded mutation — failover swaps to next candidate device,
+       fully revertable + observable.
+    3. Operator escape hatch — set this False via env var to revert.
+    4. Lenient telemetry path preserved — ``voice.failover.attempted``
+       event still fires (regardless of this flag) so dashboards have
+       observability of every failover decision.
+
+    Override via ``SOVYX_TUNING__VOICE__RUNTIME_FAILOVER_ON_QUARANTINE_ENABLED=false``."""
 
     max_failover_attempts: int = 3
     """Cap on consecutive in-process failover attempts within one daemon
@@ -1106,37 +1119,54 @@ class VoiceTuningConfig(BaseSettings):
     # default-OFF posture matches feedback_staged_adoption: a new
     # validator that mutates host state needs one minor cycle of
     # production telemetry before strict mode flips on.
-    linux_wireplumber_default_source_bypass_enabled: bool = False
+    linux_wireplumber_default_source_bypass_enabled: bool = True
     """T2.1 gate. When True, the bypass coordinator may invoke
     :class:`LinuxWirePlumberDefaultSourceBypass` after the existing 3
-    Linux strategies return ``not_applicable``. Default False per
-    ``feedback_staged_adoption`` — flipped to True in v0.31.0 after
-    one minor cycle of telemetry-only validation. Override via
-    ``SOVYX_TUNING__VOICE__LINUX_WIREPLUMBER_DEFAULT_SOURCE_BYPASS_ENABLED=true``."""
+    Linux strategies return ``not_applicable``.
 
-    linux_wireplumber_default_source_bypass_lenient: bool = True
-    """T2.1 lenient telemetry gate. When True AND the bypass is
-    enabled, ``apply()`` short-circuits AFTER detection runs: emits
+    **Default flipped to True in v0.30.13 (Mission §Phase 3 T3.1).**
+    Pre-v0.30.13 was False per ``feedback_staged_adoption``. The
+    strategy targets a specific WirePlumber routing failure pattern
+    (default source ends in ``.monitor`` / muted / <5% volume) that
+    is conservative + unambiguous. Detection cannot false-positive on
+    a healthy host because a healthy default-source by construction
+    fails the pattern. Override via
+    ``SOVYX_TUNING__VOICE__LINUX_WIREPLUMBER_DEFAULT_SOURCE_BYPASS_ENABLED=false``."""
+
+    linux_wireplumber_default_source_bypass_lenient: bool = False
+    """T2.1 lenient telemetry gate. When True, ``apply()`` short-
+    circuits AFTER detection runs: emits
     ``voice.bypass.would_repair{strategy="linux.wireplumber_default_source"}``
     and returns the synthetic outcome ``"lenient_no_repair"`` WITHOUT
-    mutating WirePlumber state. Default True for v0.30.12 — flipped
-    to False in v0.31.0 alongside the enabled flip. The strategy still
-    counts as an attempt (NOT skipped), so quarantine logic works
-    identically in lenient and strict modes; only the mutation
-    differs."""
+    mutating WirePlumber state.
 
-    linux_alsa_capture_switch_bypass_enabled: bool = False
+    **Default flipped to False in v0.30.13 (Mission §Phase 3 T3.1).**
+    Strict mode now mutates host state when eligibility fires. Re-
+    enable via ``SOVYX_TUNING__VOICE__LINUX_WIREPLUMBER_DEFAULT_SOURCE_BYPASS_LENIENT=true``
+    if you want telemetry-only mode (the would_repair event lets
+    dashboards see what the strategy WOULD have done without the
+    mutation)."""
+
+    linux_alsa_capture_switch_bypass_enabled: bool = True
     """T2.2 gate. When True, the bypass coordinator may invoke
     :class:`LinuxALSACaptureSwitchBypass` after the existing 3 Linux
-    strategies + T2.1 return ``not_applicable``. Default False per
-    ``feedback_staged_adoption``. Override via
-    ``SOVYX_TUNING__VOICE__LINUX_ALSA_CAPTURE_SWITCH_BYPASS_ENABLED=true``."""
+    strategies + T2.1 return ``not_applicable``.
 
-    linux_alsa_capture_switch_bypass_lenient: bool = True
+    **Default flipped to True in v0.30.13 (Mission §Phase 3 T3.1).**
+    The strategy fires ONLY when amixer reports an input card with
+    Capture switch ``[off]`` OR Internal Mic Boost at min raw — both
+    are inequivocal failure signatures (a healthy mic does not have
+    Capture in [off] state). Override via
+    ``SOVYX_TUNING__VOICE__LINUX_ALSA_CAPTURE_SWITCH_BYPASS_ENABLED=false``."""
+
+    linux_alsa_capture_switch_bypass_lenient: bool = False
     """T2.2 lenient telemetry gate. Mirrors the T2.1 lenient field —
     when True, ``apply()`` emits ``voice.bypass.would_repair`` without
-    running ``amixer sset``. v0.31.0 flips to False alongside the
-    enabled flip."""
+    running ``amixer sset``.
+
+    **Default flipped to False in v0.30.13 (Mission §Phase 3 T3.1).**
+    Re-enable via ``SOVYX_TUNING__VOICE__LINUX_ALSA_CAPTURE_SWITCH_BYPASS_LENIENT=true``
+    for telemetry-only mode."""
 
     # T6.6 — heartbeat-silence threshold for cold + warm probes.
     # Callbacks are the probe's "heartbeat"; if the driver delivers a

@@ -58,6 +58,44 @@ class TestWireupDefaults:
     def test_audio_service_watchdog_default_false(self) -> None:
         assert VoiceTuningConfig().voice_audio_service_watchdog_enabled is False
 
+    # ── Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
+    # §Phase 3 T3.1 + T3.2 — default flips shipped in v0.30.13.
+    #
+    # The 5 sentinels below pin the strict-mode defaults so a future
+    # refactor that accidentally re-flips back to lenient (or back to
+    # default-off entirely) breaks loudly. Each pin is a single-line
+    # change vs the v0.30.12 baseline; the tests existed pinning False/
+    # True/True/False/False (or were absent — they were absent pre-T3
+    # because the fields hadn't been promoted to strict yet, so the
+    # default-pin sentinel didn't apply).
+
+    def test_linux_wireplumber_default_source_bypass_enabled_default_true(
+        self,
+    ) -> None:
+        # Phase 3 T3.1 flip — strategy fires by default on Linux hosts.
+        assert VoiceTuningConfig().linux_wireplumber_default_source_bypass_enabled is True
+
+    def test_linux_wireplumber_default_source_bypass_lenient_default_false(
+        self,
+    ) -> None:
+        # Phase 3 T3.1 flip — strict mode default; mutates host state
+        # when eligibility fires.
+        assert VoiceTuningConfig().linux_wireplumber_default_source_bypass_lenient is False
+
+    def test_linux_alsa_capture_switch_bypass_enabled_default_true(self) -> None:
+        # Phase 3 T3.1 flip — strategy fires by default on Linux hosts.
+        assert VoiceTuningConfig().linux_alsa_capture_switch_bypass_enabled is True
+
+    def test_linux_alsa_capture_switch_bypass_lenient_default_false(self) -> None:
+        # Phase 3 T3.1 flip — strict mode default; runs amixer sset
+        # when eligibility fires.
+        assert VoiceTuningConfig().linux_alsa_capture_switch_bypass_lenient is False
+
+    def test_runtime_failover_on_quarantine_enabled_default_true(self) -> None:
+        # Phase 3 T3.2 flip — hot-failover dispatches device-change
+        # restart by default after voice_apo_bypass_ineffective.
+        assert VoiceTuningConfig().runtime_failover_on_quarantine_enabled is True
+
 
 # ── Mic permission gate (band-aid #34 wire-up) ────────────────────
 
