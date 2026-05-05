@@ -17,9 +17,14 @@ Public surface (post-Layer 1, mission
 * :func:`triage_tarball` -- analyze a diag tarball, return TriageResult
 * :func:`render_markdown` -- render TriageResult as operator markdown
 
-T1.4 will add :func:`run_full_diag`, :class:`DiagRunResult`, and
-:class:`DiagRunError` for end-to-end diag orchestration; T1.5 wires
-``sovyx doctor voice --full-diag`` against this surface.
+Public surface for diag orchestration (T1.4):
+
+* :func:`run_full_diag` -- orchestrate end-to-end diag run
+* :class:`DiagRunResult` -- frozen dataclass: tarball + duration + exit code
+* :class:`DiagRunError` -- raised on selftest fail / non-zero exit
+* :class:`DiagPrerequisiteError` -- raised on non-Linux / bash<4 host
+
+T1.5 wires ``sovyx doctor voice --full-diag`` against this surface.
 
 The bash toolkit lives under :mod:`sovyx.voice.diagnostics._bash` as
 package data. Its standalone Python helpers under ``_bash/lib/py/``
@@ -31,6 +36,12 @@ configuration.
 
 from __future__ import annotations
 
+from sovyx.voice.diagnostics._runner import (
+    DiagPrerequisiteError,
+    DiagRunError,
+    DiagRunResult,
+    run_full_diag,
+)
 from sovyx.voice.diagnostics.triage import (
     AlertsSummary,
     HypothesisId,
@@ -43,10 +54,14 @@ from sovyx.voice.diagnostics.triage import (
 
 __all__ = [
     "AlertsSummary",
+    "DiagPrerequisiteError",
+    "DiagRunError",
+    "DiagRunResult",
     "HypothesisId",
     "HypothesisVerdict",
     "SchemaValidation",
     "TriageResult",
     "render_markdown",
+    "run_full_diag",
     "triage_tarball",
 ]
