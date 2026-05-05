@@ -154,6 +154,25 @@ class VoiceBundle:
     audio_service_watchdog: object = None  # AudioServiceWatchdog | None
 
 
+def _outcomes_have_applied_healthy(outcomes: list[BypassOutcome]) -> bool:
+    """Return True iff any outcome's verdict is :attr:`BypassVerdict.APPLIED_HEALTHY`.
+
+    Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04 §Phase 2 T2.6 —
+    used by the deaf-signal closure to decide whether to invoke the
+    runtime hot-failover helper. When ANY strategy reports
+    APPLIED_HEALTHY the bypass succeeded and no failover is needed;
+    otherwise the closure routes through
+    :func:`sovyx.voice.health._runtime_failover._try_runtime_failover`.
+
+    Lazy-imports :class:`BypassVerdict` so the factory's import-time
+    cost is unchanged for the (vast majority of) deaf-signal paths
+    that don't get this far.
+    """
+    from sovyx.voice.health.contract import BypassVerdict
+
+    return any(o.verdict is BypassVerdict.APPLIED_HEALTHY for o in outcomes)
+
+
 def _detect_os_noise_suppression(*, resolved_name: str | None = None) -> bool:
     """Detect whether the current capture path has OS-level NS active.
 
@@ -898,13 +917,61 @@ async def create_voice_pipeline(
     capture_holder: dict[str, AudioCaptureTask] = {}
     coordinator_holder: dict[str, CaptureIntegrityCoordinator] = {}
 
+    # Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
+    # §Phase 2 T2.6 — runtime hot-failover state. Owned by this
+    # closure scope so each pipeline instance gets its own attempt
+    # counter + cooldown + exhausted latch. The state is mutated in
+    # place by _try_runtime_failover.
+    from sovyx.voice.health._runtime_failover import (
+        RuntimeFailoverState,
+        _try_runtime_failover,
+    )
+
+    failover_state = RuntimeFailoverState()
+
     async def _on_deaf_signal() -> list[BypassOutcome]:
         coordinator = coordinator_holder.get("coordinator")
         if coordinator is None:
             logger.debug("voice_deaf_signal_callback_no_coordinator")
             return []
         outcomes = await coordinator.handle_deaf_signal()
-        return list(outcomes)
+        outcomes_list = list(outcomes)
+
+        # Mission §Phase 2 T2.6 — runtime hot-failover hook.
+        #
+        # When the coordinator returns a non-empty outcome list AND no
+        # outcome is APPLIED_HEALTHY, we are in the "ineffective" branch
+        # at _orchestrator.py::_invoke_deaf_signal — the same branch
+        # that pre-T2.6 emitted voice_apo_bypass_ineffective and
+        # quarantined the endpoint without further runtime recovery.
+        #
+        # _try_runtime_failover ALWAYS emits voice.failover.attempted
+        # (lenient telemetry mode) so dashboards can validate the
+        # rollout against real production deaf-signal events. Actual
+        # device-rebind only fires when
+        # tuning.runtime_failover_on_quarantine_enabled=True.
+        #
+        # Wrapped in try/except because runtime-failover failures must
+        # NEVER break the deaf-signal callback (which itself runs from
+        # the pipeline heartbeat path — an exception here would crash
+        # the heartbeat task and freeze the state machine).
+        if outcomes_list and not _outcomes_have_applied_healthy(outcomes_list):
+            task = capture_holder.get("task")
+            if task is not None:
+                try:
+                    await _try_runtime_failover(
+                        capture_task=task,
+                        pipeline=pipeline,
+                        tuning=tuning,
+                        state=failover_state,
+                    )
+                except Exception:  # noqa: BLE001 — runtime-failover isolation
+                    logger.exception(
+                        "voice.failover.helper_crashed",
+                        extra={"voice.mind_id": mind_id},
+                    )
+
+        return outcomes_list
 
     # §4.4.6 self-feedback ducking — build the gate with a late-bound
     # apply_duck closure that targets whichever capture task ends up in

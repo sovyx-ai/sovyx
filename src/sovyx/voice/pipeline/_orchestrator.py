@@ -635,6 +635,75 @@ class VoicePipeline:
         """
         self._record_frame(frame)
 
+    def reset_coordinator_after_failover(self) -> None:
+        """Clear the deaf-detection latch after a runtime device-rebind.
+
+        Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+        §Phase 2 T2.6. Called by
+        :func:`sovyx.voice.health._runtime_failover._try_runtime_failover`
+        after :meth:`AudioCaptureTask.request_device_change_restart`
+        returns ``engaged=True``. Without this reset, the orchestrator
+        keeps ``_coordinator_terminated=True`` (latched at
+        ``_invoke_deaf_signal`` line ~2839 when the bypass coordinator
+        ran out of strategies on the OLD endpoint) and the new
+        endpoint never gets its own deaf-detection cycle — silent
+        regression on the failover target would never re-trigger the
+        coordinator.
+
+        Resets the four counters that drive deaf detection:
+
+        * ``_coordinator_terminated`` — latched at terminal "ineffective"
+          on the previous endpoint; the new endpoint deserves a fresh
+          chance to engage strategies.
+        * ``_deaf_warnings_consecutive`` — accumulated deaf-warning
+          count on the OLD endpoint; irrelevant for the new device.
+        * ``_max_vad_prob_since_heartbeat`` /
+          ``_vad_frames_since_heartbeat`` — heartbeat-window stats; the
+          old window's data does not represent the new endpoint and
+          would otherwise immediately re-trigger the warning at the
+          next heartbeat.
+
+        Anti-pattern #29 compliance: this is observability-aware state
+        mutation (clears flags so downstream observability emits make
+        sense for the new substrate). It does NOT touch the
+        :class:`VoicePipelineState` machine — the authoritative
+        conversational state (IDLE / RECORDING / SPEAKING / THINKING)
+        is unaffected, only the deaf-detection counters that live
+        alongside it.
+
+        Safe to call from any thread (no asyncio primitives touched —
+        every mutation is a primitive assignment). Best-effort: catches
+        AttributeError so a future refactor that renames a counter
+        won't crash the failover helper before the reset method itself
+        is updated.
+        """
+        try:
+            self._coordinator_terminated = False
+            self._deaf_warnings_consecutive = 0
+            self._max_vad_prob_since_heartbeat = 0.0
+            self._vad_frames_since_heartbeat = 0
+        except AttributeError as exc:
+            logger.warning(
+                "voice.failover.coordinator_reset_attribute_error",
+                **{
+                    "voice.error": str(exc),
+                    "voice.action_required": (
+                        "VoicePipeline counter renamed without updating "
+                        "reset_coordinator_after_failover — see Mission "
+                        "MISSION-voice-linux-silent-mic-remediation-"
+                        "2026-05-04 §Phase 2 T2.6"
+                    ),
+                },
+            )
+            return
+        logger.warning(
+            "voice.failover.coordinator_reset",
+            **{
+                "voice.mind_id": self._config.mind_id,
+                "voice.reason": "runtime_failover_succeeded",
+            },
+        )
+
     # -- State property + saga lifecycle ------------------------------------
 
     @property
@@ -2885,14 +2954,22 @@ class VoicePipeline:
                     voice_clarity_active=self._voice_clarity_active,
                     hint=(
                         "CaptureIntegrityCoordinator exhausted every eligible "
-                        "bypass strategy. Endpoint quarantined for apo_quarantine_s; "
-                        "factory will fail over to an alternate capture device on "
-                        "next boot. Likely causes: firmware-level DSP on the mic, "
-                        "a virtual audio cable with a fixed format, a damaged "
-                        "capture element, or an APO not yet covered by a "
-                        "platform strategy. Try manually disabling all "
-                        "enhancements in the OS sound settings or switch capture "
-                        "device."
+                        "bypass strategy. Endpoint quarantined for apo_quarantine_s. "
+                        "When tuning.runtime_failover_on_quarantine_enabled=True "
+                        "(default v0.31.0+ per Mission "
+                        "MISSION-voice-linux-silent-mic-remediation-2026-05-04 "
+                        "§Phase 2 T2.6), the deaf-signal closure dispatches "
+                        "request_device_change_restart to the next non-quarantined "
+                        "boot candidate; until then, the factory will fail over "
+                        "only on next boot. Lenient telemetry "
+                        "voice.failover.attempted is emitted regardless of the "
+                        "gate so dashboards can validate the rollout. Likely "
+                        "causes: firmware-level DSP on the mic, a virtual audio "
+                        "cable with a fixed format, a damaged capture element, "
+                        "or an APO not yet covered by a platform strategy. "
+                        "Manual remediation: disable enhancements in the OS sound "
+                        "settings, fix the ALSA mixer state (Linux), or switch "
+                        "capture device."
                     ),
                 )
                 # "partial" verdict: at least one strategy applied cleanly but

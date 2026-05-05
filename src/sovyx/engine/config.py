@@ -1038,6 +1038,56 @@ class VoiceTuningConfig(BaseSettings):
     apo_quarantine_s: float = 3_600.0
     apo_quarantine_recheck_interval_s: float = 300.0
 
+    # ── Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
+    # §Phase 2 T2.6 — runtime hot failover after endpoint quarantine.
+    #
+    # Pre-T2.6 the deaf-signal coordinator quarantined the endpoint
+    # but the capture task kept emitting on it until the next process
+    # boot — see voice/pipeline/_orchestrator.py:2879's
+    # voice_apo_bypass_ineffective hint ("factory will fail over to
+    # an alternate capture device on next boot"). T2.6 adds an
+    # in-process device-rebind dispatch via
+    # voice/health/_runtime_failover._try_runtime_failover.
+    #
+    # Staged adoption (feedback_staged_adoption authority):
+    # v0.30.10 ships the foundation default-OFF + lenient telemetry-
+    # only mode (the helper always emits voice.failover.attempted
+    # regardless of gate so dashboards can calibrate the false-
+    # positive rate). v0.31.0 flips the default to True after one
+    # minor cycle of validated telemetry.
+    runtime_failover_on_quarantine_enabled: bool = False
+    """Hot-failover gate (Mission §Phase 2 T2.6). When True, the
+    deaf-signal closure dispatches
+    :meth:`AudioCaptureTask.request_device_change_restart` against the
+    next non-quarantined boot candidate after the bypass coordinator
+    exhausts every eligible strategy. Default False per
+    ``feedback_staged_adoption`` — flipped to True in v0.31.0 after
+    one minor-cycle of telemetry-only validation. Lenient telemetry
+    (``voice.failover.attempted`` event) fires regardless of this
+    flag so the dashboards have data to validate the flip against.
+    Override via ``SOVYX_TUNING__VOICE__RUNTIME_FAILOVER_ON_QUARANTINE_ENABLED``."""
+
+    max_failover_attempts: int = 3
+    """Cap on consecutive in-process failover attempts within one daemon
+    process (Mission §Phase 2 T2.6). Once reached, the helper emits
+    ``voice.failover.exhausted`` and stops further attempts; manual
+    operator intervention required (e.g. fix the underlying ALSA
+    mixer state, restart the daemon). Default 3 covers the common
+    "primary deaf → fallback to USB mic → fallback to PipeWire
+    virtual" exploration without thrashing. Bounded [1, 10] —
+    higher values are an anti-pattern (operator should fix the
+    environment, not chase failover loops)."""
+
+    failover_cooldown_s: float = 30.0
+    """Minimum monotonic seconds between consecutive failover attempts
+    (Mission §Phase 2 T2.6). Prevents thrash when the next candidate
+    is also degraded — the cooldown lets the new endpoint accumulate
+    enough heartbeats for a confident re-deaf signal before another
+    failover fires. Default 30 s ≈ 5x the deaf-warning window so a
+    transient device hiccup doesn't trigger a cascade. Bounded
+    [0, 600] — zero disables cooldown entirely (test/diagnostic
+    use only)."""
+
     # T6.6 — heartbeat-silence threshold for cold + warm probes.
     # Callbacks are the probe's "heartbeat"; if the driver delivers a
     # few buffers then goes silent for longer than this threshold the
