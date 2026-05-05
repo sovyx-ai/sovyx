@@ -1088,6 +1088,56 @@ class VoiceTuningConfig(BaseSettings):
     [0, 600] — zero disables cooldown entirely (test/diagnostic
     use only)."""
 
+    # ── Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
+    # §Phase 2 T2.1 + T2.2 + T2.3 — two new Linux bypass strategies
+    # that automate the two canonical Linux+PipeWire silent-mic
+    # patterns identified in the forensic case (logs_01.txt 2026-05-04
+    # + evodencias.txt 2026-05-04 + logsx.txt 2026-05-05):
+    #
+    #   #4 LinuxWirePlumberDefaultSourceBypass — default source ends
+    #      in .monitor / muted / zero-volume → reroute via wpctl + pactl
+    #   #5 LinuxALSACaptureSwitchBypass — Capture switch [off] OR
+    #      Internal Mic Boost at min on any input card → fix via
+    #      amixer sset cap + 80% + boost-lift, persist via alsactl store
+    #
+    # Both ship default-OFF with lenient telemetry-only mode (the
+    # strategy DETECTS but does NOT REPAIR — emits voice.bypass.would_repair
+    # so dashboards can validate the v0.31.0 default flip). The
+    # default-OFF posture matches feedback_staged_adoption: a new
+    # validator that mutates host state needs one minor cycle of
+    # production telemetry before strict mode flips on.
+    linux_wireplumber_default_source_bypass_enabled: bool = False
+    """T2.1 gate. When True, the bypass coordinator may invoke
+    :class:`LinuxWirePlumberDefaultSourceBypass` after the existing 3
+    Linux strategies return ``not_applicable``. Default False per
+    ``feedback_staged_adoption`` — flipped to True in v0.31.0 after
+    one minor cycle of telemetry-only validation. Override via
+    ``SOVYX_TUNING__VOICE__LINUX_WIREPLUMBER_DEFAULT_SOURCE_BYPASS_ENABLED=true``."""
+
+    linux_wireplumber_default_source_bypass_lenient: bool = True
+    """T2.1 lenient telemetry gate. When True AND the bypass is
+    enabled, ``apply()`` short-circuits AFTER detection runs: emits
+    ``voice.bypass.would_repair{strategy="linux.wireplumber_default_source"}``
+    and returns the synthetic outcome ``"lenient_no_repair"`` WITHOUT
+    mutating WirePlumber state. Default True for v0.30.12 — flipped
+    to False in v0.31.0 alongside the enabled flip. The strategy still
+    counts as an attempt (NOT skipped), so quarantine logic works
+    identically in lenient and strict modes; only the mutation
+    differs."""
+
+    linux_alsa_capture_switch_bypass_enabled: bool = False
+    """T2.2 gate. When True, the bypass coordinator may invoke
+    :class:`LinuxALSACaptureSwitchBypass` after the existing 3 Linux
+    strategies + T2.1 return ``not_applicable``. Default False per
+    ``feedback_staged_adoption``. Override via
+    ``SOVYX_TUNING__VOICE__LINUX_ALSA_CAPTURE_SWITCH_BYPASS_ENABLED=true``."""
+
+    linux_alsa_capture_switch_bypass_lenient: bool = True
+    """T2.2 lenient telemetry gate. Mirrors the T2.1 lenient field —
+    when True, ``apply()`` emits ``voice.bypass.would_repair`` without
+    running ``amixer sset``. v0.31.0 flips to False alongside the
+    enabled flip."""
+
     # T6.6 — heartbeat-silence threshold for cold + warm probes.
     # Callbacks are the probe's "heartbeat"; if the driver delivers a
     # few buffers then goes silent for longer than this threshold the
