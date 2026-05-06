@@ -34,16 +34,19 @@ History: introduced in v0.30.16 as T3.1 of mission
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
 from sovyx.voice.calibration._applier import ApplyError, CalibrationApplier
 from sovyx.voice.calibration._fingerprint import capture_fingerprint
+from sovyx.voice.calibration._kb_cache import lookup_profile, store_profile
 from sovyx.voice.calibration._measurer import capture_measurements
 from sovyx.voice.calibration._wizard_progress import WizardProgressTracker
 from sovyx.voice.calibration._wizard_state import WizardJobState, WizardStatus
 from sovyx.voice.calibration.engine import CalibrationEngine
+from sovyx.voice.calibration.schema import CalibrationProfile
 from sovyx.voice.diagnostics import (
     DiagPrerequisiteError,
     DiagRunError,
@@ -62,6 +65,8 @@ _PROGRESS_FILE = "progress.jsonl"
 
 _PENDING_MSG = "Calibration job created"
 _PROBING_MSG = "Capturing hardware fingerprint"
+_FAST_PATH_LOOKUP_MSG = "Looking up matching profile in local KB"
+_FAST_PATH_APPLY_MSG = "Applying matched profile (fast path)"
 _SLOW_PATH_DIAG_MSG = "Running forensic diagnostic (8-12 min)"
 _SLOW_PATH_CALIBRATE_MSG = "Triaging diagnostic + capturing measurements"
 _SLOW_PATH_APPLY_MSG = "Applying calibration profile"
@@ -71,6 +76,8 @@ _CANCELLED_MSG = "Calibration cancelled by operator"
 # Coarse per-stage progress fractions for the dashboard progress bar.
 _PROGRESS_PENDING = 0.0
 _PROGRESS_PROBING = 0.05
+_PROGRESS_FAST_PATH_LOOKUP = 0.30
+_PROGRESS_FAST_PATH_APPLY = 0.85
 _PROGRESS_SLOW_PATH_DIAG = 0.10
 _PROGRESS_SLOW_PATH_CALIBRATE = 0.85
 _PROGRESS_SLOW_PATH_APPLY = 0.92
@@ -239,6 +246,24 @@ class WizardOrchestrator:
         if self._is_cancelled(job_id):
             return self._emit_cancelled(state, tracker)
 
+        # Stage 2 (fast path): KB lookup. If the local cache has a
+        # profile for this fingerprint, replay it (~5s) instead of
+        # running the full 8-12 min slow path. Cache miss falls
+        # through to SLOW_PATH below.
+        cached_profile = await asyncio.to_thread(
+            lookup_profile,
+            data_dir=self._data_dir,
+            fingerprint_hash=fingerprint.fingerprint_hash,
+        )
+        if cached_profile is not None:
+            return await self._run_fast_path(
+                job_id=job_id,
+                state=state,
+                tracker=tracker,
+                cached=cached_profile,
+                mind_id=state.mind_id,
+            )
+
         # Stage 2: SLOW_PATH_DIAG -- run full diag (--non-interactive).
         state = self._transition(
             state,
@@ -326,7 +351,99 @@ class WizardOrchestrator:
                 summary=str(exc),
             )
 
-        # Stage 5: DONE.
+        # Stage 5: DONE -- and store the profile in the local KB
+        # cache so the next run on the same hardware takes the fast
+        # path (~5s instead of ~10 min). Cache failures are logged
+        # but do NOT fail the run -- the operator already has a
+        # successful calibration; cache miss next time is harmless.
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(store_profile, profile, data_dir=self._data_dir)
+        done = self._transition(
+            state,
+            status=WizardStatus.DONE,
+            progress=_PROGRESS_DONE,
+            message=_DONE_MSG,
+            profile_path=str(apply_result.profile_path),
+            triage_winner_hid=triage_winner_hid,
+        )
+        self._emit_state(done, tracker)
+        return done
+
+    async def _run_fast_path(
+        self,
+        *,
+        job_id: str,
+        state: WizardJobState,
+        tracker: WizardProgressTracker,
+        cached: CalibrationProfile,
+        mind_id: str,
+    ) -> WizardJobState:
+        """FAST_PATH branch: replay a cached profile (~5s).
+
+        Bypasses the 8-12 min full diag; the cached CalibrationProfile
+        was produced by a prior successful slow-path run on the same
+        hardware (matched by fingerprint_hash). The applier persists
+        the profile under the CURRENT mind_id (not the cached one),
+        so per-mind isolation is preserved -- one host, multiple minds
+        share the same calibration but persist independently.
+
+        v0.30.18 alpha: validation capture (5s mic recording to
+        confirm the cached profile still works) is intentionally
+        skipped. v0.30.19+ adds it; for now we trust the fingerprint
+        match.
+        """
+        if self._is_cancelled(job_id):
+            return self._emit_cancelled(state, tracker)
+
+        state = self._transition(
+            state,
+            status=WizardStatus.FAST_PATH_LOOKUP,
+            progress=_PROGRESS_FAST_PATH_LOOKUP,
+            message=_FAST_PATH_LOOKUP_MSG,
+        )
+        self._emit_state(state, tracker)
+
+        if self._is_cancelled(job_id):
+            return self._emit_cancelled(state, tracker)
+
+        # Re-issue the cached profile under the current mind_id.
+        # Reuses every field from the cached profile so the rule
+        # trace + decisions + provenance survive replay; only mind_id
+        # is rewritten because the cache key is hardware-keyed, not
+        # mind-keyed.
+        replayed = CalibrationProfile(
+            schema_version=cached.schema_version,
+            profile_id=cached.profile_id,
+            mind_id=mind_id,
+            fingerprint=cached.fingerprint,
+            measurements=cached.measurements,
+            decisions=cached.decisions,
+            provenance=cached.provenance,
+            generated_by_engine_version=cached.generated_by_engine_version,
+            generated_by_rule_set_version=cached.generated_by_rule_set_version,
+            generated_at_utc=cached.generated_at_utc,
+            signature=cached.signature,
+        )
+
+        state = self._transition(
+            state,
+            status=WizardStatus.FAST_PATH_APPLY,
+            progress=_PROGRESS_FAST_PATH_APPLY,
+            message=_FAST_PATH_APPLY_MSG,
+        )
+        self._emit_state(state, tracker)
+
+        applier = CalibrationApplier(data_dir=self._data_dir)
+        try:
+            apply_result = applier.apply(replayed, dry_run=False)
+        except ApplyError as exc:
+            return self._emit_failed(state, tracker, summary=str(exc))
+
+        triage_winner_hid = (
+            replayed.measurements.triage_winner_hid
+            if replayed.measurements.triage_winner_hid is not None
+            else None
+        )
         done = self._transition(
             state,
             status=WizardStatus.DONE,

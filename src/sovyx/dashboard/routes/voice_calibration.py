@@ -65,6 +65,7 @@ from sovyx.voice.calibration import (
     WizardProgressTracker,
     capture_fingerprint,
 )
+from sovyx.voice.calibration._kb_cache import has_match
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -370,19 +371,26 @@ async def cancel_calibration_job(
 async def preview_fingerprint(request: Request) -> PreviewFingerprintResponse:
     """Capture the host fingerprint (~1s) + return a path recommendation.
 
-    v0.30.16 always returns ``recommendation="slow_path"`` because
-    the local KB lookup is not yet wired. v0.30.17+ adds a real
-    fast-vs-slow decision based on the fingerprint hash matching a
-    known-good profile.
+    v0.30.18+: returns ``recommendation="fast_path"`` when the local
+    KB cache (``<data_dir>/voice_calibration/_kb/<hash>.json``) has
+    an entry for the captured fingerprint hash; ``"slow_path"``
+    otherwise. The cache is populated automatically by every
+    successful slow-path run, so a returning operator on the same
+    hardware sees fast_path on the second + subsequent calibrations.
     """
-    _ = request  # reserved for future EngineConfig-aware behaviour
     fingerprint = await asyncio.to_thread(capture_fingerprint)
+    data_dir = _resolve_data_dir(request)
+    recommendation: str = (
+        "fast_path"
+        if has_match(data_dir=data_dir, fingerprint_hash=fingerprint.fingerprint_hash)
+        else "slow_path"
+    )
     return PreviewFingerprintResponse(
         fingerprint_hash=fingerprint.fingerprint_hash,
         audio_stack=fingerprint.audio_stack,
         system_vendor=fingerprint.system_vendor,
         system_product=fingerprint.system_product,
-        recommendation="slow_path",
+        recommendation=recommendation,
     )
 
 

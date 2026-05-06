@@ -388,6 +388,89 @@ class TestOrchestratorCancellation:
 
 
 @pytest.mark.asyncio()
+class TestOrchestratorFastPath:
+    """KB cache hit takes the FAST_PATH branch + skips diag entirely."""
+
+    async def test_cache_hit_takes_fast_path(self, tmp_path: Path) -> None:
+        # Pre-seed the cache with a profile for the canonical fingerprint.
+        from sovyx.voice.calibration._kb_cache import store_profile
+
+        cached = _r10_profile()
+        store_profile(cached, data_dir=tmp_path)
+
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        applied_path = tmp_path / "default" / "calibration.json"
+
+        with (
+            patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+            # run_full_diag MUST NOT be called on the fast path.
+            patch.object(wo, "run_full_diag") as run_full_diag_mock,
+            patch.object(
+                wo.CalibrationApplier,
+                "apply",
+                return_value=ApplyResult(
+                    profile_path=applied_path,
+                    applied_decisions=(),
+                    skipped_decisions=(),
+                    advised_actions=(),
+                    dry_run=False,
+                ),
+            ),
+        ):
+            result = await orch.run(job_id="testjob", mind_id="default")
+
+        assert result.status == WizardStatus.DONE
+        # Diag was skipped (cache hit shortcut).
+        run_full_diag_mock.assert_not_called()
+
+    async def test_cache_miss_falls_through_to_slow_path(self, tmp_path: Path) -> None:
+        # No cache pre-seeded -> slow path runs as normal.
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        with (
+            patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+            patch.object(wo, "run_full_diag", return_value=_diag_result()),
+            patch.object(wo, "triage_tarball", return_value=_triage()),
+            patch.object(wo, "capture_measurements", return_value=_measurements()),
+            patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
+            patch.object(
+                wo.CalibrationApplier,
+                "apply",
+                return_value=_apply_result(tmp_path / "default" / "calibration.json"),
+            ),
+        ):
+            result = await orch.run(job_id="testjob", mind_id="default")
+        assert result.status == WizardStatus.DONE
+
+    async def test_slow_path_completion_populates_cache(self, tmp_path: Path) -> None:
+        # Run slow path -> cache is populated for the next call.
+        from sovyx.voice.calibration._kb_cache import has_match
+
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        fingerprint = _fingerprint()
+        with (
+            patch.object(wo, "capture_fingerprint", return_value=fingerprint),
+            patch.object(wo, "run_full_diag", return_value=_diag_result()),
+            patch.object(wo, "triage_tarball", return_value=_triage()),
+            patch.object(wo, "capture_measurements", return_value=_measurements()),
+            patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
+            patch.object(
+                wo.CalibrationApplier,
+                "apply",
+                return_value=_apply_result(tmp_path / "default" / "calibration.json"),
+            ),
+        ):
+            await orch.run(job_id="testjob", mind_id="default")
+
+        assert (
+            has_match(
+                data_dir=tmp_path,
+                fingerprint_hash=fingerprint.fingerprint_hash,
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio()
 class TestOrchestratorFailures:
     async def test_diag_prerequisite_unmet_emits_fallback(self, tmp_path: Path) -> None:
         orch = WizardOrchestrator(data_dir=tmp_path)
