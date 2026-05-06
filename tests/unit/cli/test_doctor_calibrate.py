@@ -20,6 +20,7 @@ Coverage:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -46,6 +47,17 @@ from sovyx.voice.diagnostics import (
     SchemaValidation,
     TriageResult,
 )
+
+# Rich renders Click error messages with ANSI escape codes on Linux/macOS
+# CI runners (TTY-detected) but not on the local Windows shell. The codes
+# split words like ``--show`` into ``-`` + ANSI + ``-show``, breaking
+# naive substring assertions. Strip them before content checks.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
 
 runner = CliRunner()
 
@@ -444,17 +456,19 @@ class TestShowAndRollbackMutex:
     def test_show_without_calibrate_rejected(self) -> None:
         result = runner.invoke(app, ["doctor", "voice", "--show"])
         assert result.exit_code != 0
-        assert "require --calibrate" in result.output or "--show" in result.output
+        clean = _strip_ansi(result.output)
+        assert "require --calibrate" in clean or "--show" in clean
 
     def test_rollback_without_calibrate_rejected(self) -> None:
         result = runner.invoke(app, ["doctor", "voice", "--rollback"])
         assert result.exit_code != 0
-        assert "require --calibrate" in result.output or "--rollback" in result.output
+        clean = _strip_ansi(result.output)
+        assert "require --calibrate" in clean or "--rollback" in clean
 
     def test_show_with_rollback_rejected(self) -> None:
         result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--show", "--rollback"])
         assert result.exit_code != 0
-        assert "mutually exclusive" in result.output
+        assert "mutually exclusive" in _strip_ansi(result.output)
 
 
 class TestShow:
@@ -566,8 +580,9 @@ class TestSurgicalFlag:
         """The --surgical flag is documented in --help output."""
         result = runner.invoke(app, ["doctor", "voice", "--help"])
         assert result.exit_code == 0
-        assert "--surgical" in result.output
-        assert "A,C,D,E,J" in result.output
+        clean = _strip_ansi(result.output)
+        assert "--surgical" in clean
+        assert "A,C,D,E,J" in clean
 
     def test_surgical_flag_threads_through_run_full_diag(self) -> None:
         """--calibrate --surgical passes --only to run_full_diag."""
