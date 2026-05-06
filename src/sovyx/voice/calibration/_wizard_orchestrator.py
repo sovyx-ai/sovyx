@@ -247,9 +247,7 @@ class WizardOrchestrator:
         # v0.30.24 T3.8: spec §8.3 dispatch.
         path = self._path_by_job.pop(state.job_id, "unknown")
         started_mono = self._started_mono_by_job.pop(state.job_id, None)
-        duration_s = (
-            round(time.monotonic() - started_mono, 3) if started_mono is not None else 0.0
-        )
+        duration_s = round(time.monotonic() - started_mono, 3) if started_mono is not None else 0.0
 
         if state.status is WizardStatus.DONE:
             logger.info(
@@ -498,6 +496,11 @@ class WizardOrchestrator:
             triage_winner_hid=triage_winner_hid,
         )
         self._emit_state(done, tracker)
+        # v0.30.26 spec §8.3: emit step_entered{step=review} on DONE
+        # because the operator's UX surface flips to ProfileReview
+        # the moment the orchestrator reports DONE. Mirrors the
+        # frontend's _ProfileReview component activation.
+        self._emit_step_entered(done, step="review")
         return done
 
     async def _run_fast_path(
@@ -585,6 +588,11 @@ class WizardOrchestrator:
             triage_winner_hid=triage_winner_hid,
         )
         self._emit_state(done, tracker)
+        # v0.30.26 spec §8.3: emit step_entered{step=review} on DONE
+        # because the operator's UX surface flips to ProfileReview
+        # the moment the orchestrator reports DONE. Mirrors the
+        # frontend's _ProfileReview component activation.
+        self._emit_step_entered(done, step="review")
         return done
 
     def _is_cancelled(self, job_id: str) -> bool:

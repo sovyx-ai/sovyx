@@ -643,6 +643,33 @@ class TestSpecTelemetryAlignment:
         steps = {e[1]["step"] for e in events if e[0] == "voice.calibration.wizard.step_entered"}
         assert "fast_path" in steps
 
+    async def test_done_emits_step_entered_review(self, tmp_path: Path) -> None:
+        """v0.30.26 spec §8.3: step_entered{step=review} fires on DONE terminal."""
+        events, original = _capture_wizard_logger()
+        try:
+            orch = WizardOrchestrator(data_dir=tmp_path)
+            with (
+                patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+                patch.object(wo, "run_full_diag", return_value=_diag_result()),
+                patch.object(wo, "triage_tarball", return_value=_triage()),
+                patch.object(wo, "capture_measurements", return_value=_measurements()),
+                patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
+                patch.object(
+                    wo.CalibrationApplier,
+                    "apply",
+                    return_value=_apply_result(Path("/tmp/x.json")),
+                ),
+            ):
+                await orch.run(job_id="reviewjob", mind_id="default")
+        finally:
+            _restore_wizard_logger(original)
+
+        steps = [e[1]["step"] for e in events if e[0] == "voice.calibration.wizard.step_entered"]
+        # The review step fires AFTER probe + slow_path on the slow-path branch.
+        assert "review" in steps, f"step_entered values: {steps}"
+        # And it's the LAST step_entered emitted (DONE is the next state).
+        assert steps[-1] == "review"
+
     async def test_fallback_emits_fallback_triggered(self, tmp_path: Path) -> None:
         events, original = _capture_wizard_logger()
         try:
