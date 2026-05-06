@@ -16,6 +16,10 @@ import { CheckCircle2Icon, CircleIcon, LoaderIcon, XIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
+import type { CalibrationCurrentPrompt } from "@/types/api";
+
+import { CapturePrompt } from "./_CapturePrompt";
+
 interface SlowPathProgressProps {
   /** Current calibration status from the orchestrator (raw enum value). */
   rawStatus: string;
@@ -25,6 +29,13 @@ interface SlowPathProgressProps {
   progressPct: number;
   onCancel: () => void;
   cancelling: boolean;
+  /**
+   * Active capture prompt (v0.30.31, P3) — the bash diag's "say X" /
+   * "stay silent for Y" instruction surfaced via the side-channel
+   * prompts.jsonl. ``null``/``undefined`` when no prompt is active
+   * (between rounds, or when the bash diag isn't writing prompts).
+   */
+  currentPrompt?: CalibrationCurrentPrompt | null;
 }
 
 const _STAGE_ORDER = ["slow_path_diag", "slow_path_calibrate", "slow_path_apply"];
@@ -35,6 +46,7 @@ export function SlowPathProgress({
   progressPct,
   onCancel,
   cancelling,
+  currentPrompt,
 }: SlowPathProgressProps) {
   const { t } = useTranslation("voice");
   const currentStageIdx = _STAGE_ORDER.indexOf(rawStatus);
@@ -49,6 +61,16 @@ export function SlowPathProgress({
           {t("calibration.slow_path.subtitle")}
         </p>
       </div>
+      {currentPrompt && (
+        <CapturePrompt
+          phrase={currentPrompt.phrase ?? ""}
+          silenceSeconds={
+            currentPrompt.type === "silence"
+              ? (currentPrompt.seconds ?? undefined)
+              : undefined
+          }
+        />
+      )}
       <ol className="space-y-2 text-sm">
         {_STAGE_ORDER.map((stage, idx) => {
           const isPast = currentStageIdx > idx;

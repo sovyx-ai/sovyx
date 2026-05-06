@@ -1511,6 +1511,16 @@ export const WizardCalibrationStatusSchema = z.enum([
   "fallback",
 ]);
 
+// v0.30.31 (P3) capture-prompt protocol — one prompt per "speak X" /
+// "stay silent for Y" instruction the bash diag emits during slow_path_diag.
+export const CalibrationCurrentPromptSchema = z.object({
+  type: z.enum(["speak", "silence"]),
+  phrase: z.string().nullable().optional(),
+  seconds: z.number().nullable().optional(),
+  emitted_at_utc: z.string().optional(),
+  emitted_at_mono_ns: z.number().nullable().optional(),
+});
+
 export const WizardJobSnapshotSchema = z.object({
   job_id: z.string(),
   mind_id: z.string(),
@@ -1523,6 +1533,13 @@ export const WizardJobSnapshotSchema = z.object({
   triage_winner_hid: z.string().nullable(),
   error_summary: z.string().nullable(),
   fallback_reason: z.string().nullable(),
+  extras: z
+    .object({
+      current_prompt: CalibrationCurrentPromptSchema.optional(),
+    })
+    .passthrough()
+    .nullable()
+    .optional(),
 });
 
 export const StartCalibrationRequestSchema = z.object({

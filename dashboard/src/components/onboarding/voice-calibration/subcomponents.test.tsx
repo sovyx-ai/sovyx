@@ -64,6 +64,61 @@ describe("SlowPathProgress", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/10%/)).toBeInTheDocument();
   });
+
+  it("renders <CapturePrompt speak> when currentPrompt is a speak prompt", () => {
+    // v0.30.31 (P3) capture-prompt protocol — the bash diag's "say X"
+    // surface flows through state.extras.current_prompt and SlowPathProgress
+    // renders the CapturePrompt component inline.
+    render(
+      <SlowPathProgress
+        rawStatus="slow_path_diag"
+        status="Running forensic diagnostic"
+        progressPct={10}
+        onCancel={() => {}}
+        cancelling={false}
+        currentPrompt={{ type: "speak", phrase: "Sovyx, me ouça" }}
+      />,
+    );
+    expect(
+      screen.getByTestId("voice-calibration-capture-prompt-speak"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Sovyx, me ouça/)).toBeInTheDocument();
+  });
+
+  it("renders <CapturePrompt silence> when currentPrompt is a silence prompt", () => {
+    render(
+      <SlowPathProgress
+        rawStatus="slow_path_diag"
+        status="Running forensic diagnostic"
+        progressPct={10}
+        onCancel={() => {}}
+        cancelling={false}
+        currentPrompt={{ type: "silence", phrase: null, seconds: 3 }}
+      />,
+    );
+    expect(
+      screen.getByTestId("voice-calibration-capture-prompt-silence"),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT render CapturePrompt when currentPrompt is null", () => {
+    render(
+      <SlowPathProgress
+        rawStatus="slow_path_diag"
+        status="Running forensic diagnostic"
+        progressPct={10}
+        onCancel={() => {}}
+        cancelling={false}
+        currentPrompt={null}
+      />,
+    );
+    expect(
+      screen.queryByTestId("voice-calibration-capture-prompt-speak"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("voice-calibration-capture-prompt-silence"),
+    ).toBeNull();
+  });
 });
 
 describe("CapturePrompt", () => {

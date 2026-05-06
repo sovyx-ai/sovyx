@@ -1946,6 +1946,24 @@ export type WizardCalibrationStatus =
  * looks up ``calibration.status.<status>`` in i18n first and falls
  * back to this string when no key exists.
  */
+/**
+ * Capture-prompt protocol (v0.30.31, P3): bash diag emits one structured
+ * prompt per "speak X" / "stay silent for Y" instruction; the orchestrator
+ * tails the side-channel JSONL and surfaces the active prompt here so
+ * the dashboard renders <CapturePrompt> in real time during slow_path_diag.
+ *
+ * ``type`` is a closed enum {speak, silence}. ``phrase`` is non-null
+ * when type=speak; ``seconds`` is non-null when type=silence (or for
+ * speak prompts that include an expected duration).
+ */
+export interface CalibrationCurrentPrompt {
+  type: "speak" | "silence";
+  phrase?: string | null;
+  seconds?: number | null;
+  emitted_at_utc?: string;
+  emitted_at_mono_ns?: number | null;
+}
+
 export interface WizardJobSnapshot {
   job_id: string;
   mind_id: string;
@@ -1966,6 +1984,16 @@ export interface WizardJobSnapshot {
   error_summary: string | null;
   /** Populated on FALLBACK -- reason the pipeline opted out (e.g. ``diag_run_failed``). */
   fallback_reason: string | null;
+  /**
+   * Open-ended bag for stage-specific extras. v0.30.31 (P3) populates
+   * ``current_prompt`` during slow_path_diag; future stages may add
+   * other keys (e.g. measured RMS dBFS during validation). Cleared on
+   * stage exit.
+   */
+  extras?: {
+    current_prompt?: CalibrationCurrentPrompt;
+    [key: string]: unknown;
+  } | null;
 }
 
 export interface StartCalibrationRequest {

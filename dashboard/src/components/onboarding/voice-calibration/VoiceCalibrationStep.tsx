@@ -186,6 +186,7 @@ export function VoiceCalibrationStep({
               progressPct={progressPct}
               onCancel={handleRequestCancel}
               cancelling={cancelling}
+              currentPrompt={currentJob.extras?.current_prompt ?? null}
             />
           ) : (
             <_GenericRunningView
