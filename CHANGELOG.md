@@ -6,7 +6,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.6 below)
+(none — every shipped delta is in v0.31.0-rc.7 below)
+
+## [0.31.0-rc.7] — 2026-05-06
+
+Operator-UX paranoid pre-GA round 5 on top of v0.31.0-rc.6. Four
+parallel QA agents re-validated rc.6 with deep edge-case coverage;
+Agent 2's UX simulation found that rc.6's most-prominent fix (A.4
+"verdict shows signed/unsigned banner") was **broken in both
+directions** because the renderer read `profile.signature` from the
+in-memory frozen profile (always `None`) instead of the disk-side
+truth from persistence. Plus 3 other operator-visible UX gaps. rc.7
+closes all 4 without paliativos per `feedback_enterprise_only`.
+
+### Fixed
+
+- **Verdict renderer signing-status surface broken (Agent 2 NEW.2/NEW.3, CRITICAL).**
+  Pre-rc.7 `_render_calibration_verdict` read `profile.signature is not
+  None` to render the green "✓ signed" or dim "unsigned" banner. But
+  `engine.evaluate()` at `engine.py:307` sets `signature=None`
+  unconditionally on the frozen `CalibrationProfile`, and
+  `save_calibration_profile` injects the signature into a serialized
+  dict copy at `_persistence.py:334` — never mutates the in-memory
+  profile object. Result: every clean `--calibrate` run rendered
+  "Profile is unsigned (LENIENT only; STRICT rejects)" — even when
+  `--signing-key` worked. The "✓ signed" branch was UNREACHABLE from
+  `--calibrate`. Defeated the operator-validation gate Step 6 contract.
+
+  Fix: `save_calibration_profile` now returns `SaveProfileResult(path,
+  signed)` (NamedTuple); `CalibrationApplier.apply` propagates `signed`
+  to `ApplyResult.signed: bool | None` (None on dry-run paths); the
+  renderer reads `apply_result.signed` — the disk-side truth. The 3
+  scenarios render correctly:
+  * Signed profile → green ✓ + "Loadable in STRICT mode"
+  * Unsigned profile → dim hint + "--signing-key on next --calibrate"
+  * Dry-run → no banner (nothing persisted)
+  Regression: `tests/unit/cli/test_doctor_calibrate.py::TestRenderCalibrationVerdictSignedStatus`
+  (3 cases pinning the contract).
+
+- **`_ProfileReview` text promised rollback button that didn't exist (Agent 2 NEW.4, CRITICAL).**
+  Pre-rc.7 the rewritten i18n in en/pt-BR/es promised "If the
+  calibration didn't help, you can roll back below" — but
+  `_ProfileReview.tsx:36-62` rendered ONLY a confirm button. The
+  `calibration.review.rollback` i18n key existed but was unused.
+  Operator on the success state looked below for a rollback button,
+  found nothing, got confused. Rewrote the text in all 3 locales to
+  honestly point at `sovyx doctor voice --calibrate --rollback` (the
+  CLI command that's functional today) instead of a non-existent UI
+  affordance.
+
+- **`docs/getting-started.md` claimed "signed CalibrationProfile" by default (Agent 2 NEW.5, HIGH).**
+  Two doc lines (165 + 197) said `--calibrate` produces a "signed
+  CalibrationProfile". The actual default produces an UNSIGNED profile
+  (LENIENT-loadable) unless `--signing-key` is passed. Operator who
+  read the doc, ran `--calibrate`, then saw the rc.6/rc.7 verdict say
+  "unsigned" would panic. Updated both lines to honestly state
+  "(unsigned by default; pass `--signing-key` to sign)".
+
+- **`--signing-key` fail-fast missed malformed PEM + non-Ed25519 (Agent 2 NEW.1, MEDIUM).**
+  Pre-rc.7 the rc.6 fail-fast only checked `Path.is_file()`. Garbage
+  bytes / RSA keys / wrong-algorithm PEMs all passed the check, ran
+  the 8-12 min diag, then landed unsigned with the only forensic
+  surface being a structlog WARN. Now the validation also calls
+  `_load_private_signing_key()` at flag-parse time (cost <1ms) and
+  converts its `RuntimeError` (unparseable PEM, wrong algorithm) into
+  a Click `BadParameter` with the underlying reason. Operator typo
+  with bad key contents now also fails in milliseconds.
+  Regression: `TestSigningKeyFailFast::test_signing_key_malformed_pem_rejected_at_flag_parse`
+  + `::test_signing_key_rsa_not_ed25519_rejected_at_flag_parse` +
+  `::test_signing_key_valid_ed25519_passes_validation` (replaces the
+  prior placeholder-PEM happy-path test which would now fail the
+  deeper validation).
+
+### Mission
+
+Operator-UX paranoid pre-GA round 5; rc.6 archive footer remains
+accurate. rc.7 closes the gap between "rc.6 fixes look right at the
+code level" (Agents 1/3/4 said SHIP) and "rc.6 fixes are demonstrably
+broken on the operator path" (Agent 2 simulated the rendered output
++ found 4 critical regressions introduced by rc.6 itself). The
+operator's directive "garantir que o usuário não tenha nenhuma dor
+de cabeça" is now genuinely honored: every clean `--calibrate` run
+renders a verdict that matches reality, every dashboard text matches
+what's on screen, every operator typo on `--signing-key` (typo path /
+malformed PEM / wrong algorithm) fails fast with an actionable error.
 
 ## [0.31.0-rc.6] — 2026-05-06
 
