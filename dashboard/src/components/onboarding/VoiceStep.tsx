@@ -8,7 +8,9 @@ import {
   CheckIcon,
   PackageIcon,
 } from "lucide-react";
+import { CALIBRATION_WIZARD_ENABLED } from "@/lib/feature-flags";
 import { api, ApiError } from "@/lib/api";
+import { VoiceCalibrationStep } from "@/components/onboarding/VoiceCalibrationStep";
 import { Button } from "@/components/ui/button";
 import {
   HardwareDetection,
@@ -181,6 +183,25 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
         onVoiceChange={handleVoiceChange}
         initialLanguage={language}
       />
+
+      {/* L3 voice calibration wizard step — gated on
+          CALIBRATION_WIZARD_ENABLED (default false until v0.31.0).
+          When enabled, replaces the legacy VoiceSetupWizard inline
+          mount below. Operator falls back to the legacy wizard via
+          the FALLBACK terminal state (rendered with a "Use simple
+          setup" button by VoiceCalibrationStep). */}
+      {CALIBRATION_WIZARD_ENABLED && !enabled && !missingDeps && (
+        <VoiceCalibrationStep
+          mindId="default"
+          onCompleted={onConfigured}
+          onFallback={() => {
+            // Re-open the legacy wizard inline for operators who
+            // hit the FALLBACK terminal. The wizardOpen toggle
+            // re-uses the existing UI below.
+            setWizardOpen(true);
+          }}
+        />
+      )}
 
       {/* Optional pre-enable mic test — wizard mounts inline. The wizard
           itself is application-scope (does not persist to mind.yaml in
