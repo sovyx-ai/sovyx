@@ -299,7 +299,7 @@ class TestOrchestratorSuccess:
 
         with (
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-            patch.object(wo, "run_full_diag", return_value=_diag_result()),
+            patch.object(wo, "run_full_diag_async", return_value=_diag_result()),
             patch.object(wo, "triage_tarball", return_value=_triage()),
             patch.object(wo, "capture_measurements", return_value=_measurements()),
             patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
@@ -322,7 +322,7 @@ class TestOrchestratorSuccess:
 
         with (
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-            patch.object(wo, "run_full_diag", return_value=_diag_result()),
+            patch.object(wo, "run_full_diag_async", return_value=_diag_result()),
             patch.object(wo, "triage_tarball", return_value=_triage()),
             patch.object(wo, "capture_measurements", return_value=_measurements()),
             patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
@@ -376,7 +376,7 @@ class TestOrchestratorCancellation:
 
         with (
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-            patch.object(wo, "run_full_diag", side_effect=diag_then_cancel),
+            patch.object(wo, "run_full_diag_async", side_effect=diag_then_cancel),
         ):
             result = await orch.run(job_id="testjob", mind_id="default")
 
@@ -405,7 +405,7 @@ class TestOrchestratorFastPath:
         with (
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
             # run_full_diag MUST NOT be called on the fast path.
-            patch.object(wo, "run_full_diag") as run_full_diag_mock,
+            patch.object(wo, "run_full_diag_async") as run_full_diag_mock,
             patch.object(
                 wo.CalibrationApplier,
                 "apply",
@@ -429,7 +429,7 @@ class TestOrchestratorFastPath:
         orch = WizardOrchestrator(data_dir=tmp_path)
         with (
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-            patch.object(wo, "run_full_diag", return_value=_diag_result()),
+            patch.object(wo, "run_full_diag_async", return_value=_diag_result()),
             patch.object(wo, "triage_tarball", return_value=_triage()),
             patch.object(wo, "capture_measurements", return_value=_measurements()),
             patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
@@ -450,7 +450,7 @@ class TestOrchestratorFastPath:
         fingerprint = _fingerprint()
         with (
             patch.object(wo, "capture_fingerprint", return_value=fingerprint),
-            patch.object(wo, "run_full_diag", return_value=_diag_result()),
+            patch.object(wo, "run_full_diag_async", return_value=_diag_result()),
             patch.object(wo, "triage_tarball", return_value=_triage()),
             patch.object(wo, "capture_measurements", return_value=_measurements()),
             patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
@@ -479,7 +479,7 @@ class TestOrchestratorFailures:
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
             patch.object(
                 wo,
-                "run_full_diag",
+                "run_full_diag_async",
                 side_effect=DiagPrerequisiteError("no bash"),
             ),
         ):
@@ -494,7 +494,7 @@ class TestOrchestratorFailures:
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
             patch.object(
                 wo,
-                "run_full_diag",
+                "run_full_diag_async",
                 side_effect=DiagRunError("selftest aborted", exit_code=3),
             ),
         ):
@@ -516,7 +516,7 @@ class TestOrchestratorFailures:
         )
         with (
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-            patch.object(wo, "run_full_diag", return_value=_diag_result()),
+            patch.object(wo, "run_full_diag_async", return_value=_diag_result()),
             patch.object(wo, "triage_tarball", return_value=_triage()),
             patch.object(wo, "capture_measurements", return_value=_measurements()),
             patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
@@ -580,7 +580,7 @@ class TestSpecTelemetryAlignment:
             orch = WizardOrchestrator(data_dir=tmp_path)
             with (
                 patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-                patch.object(wo, "run_full_diag", return_value=_diag_result()),
+                patch.object(wo, "run_full_diag_async", return_value=_diag_result()),
                 patch.object(wo, "triage_tarball", return_value=_triage()),
                 patch.object(wo, "capture_measurements", return_value=_measurements()),
                 patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
@@ -650,7 +650,7 @@ class TestSpecTelemetryAlignment:
             orch = WizardOrchestrator(data_dir=tmp_path)
             with (
                 patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-                patch.object(wo, "run_full_diag", return_value=_diag_result()),
+                patch.object(wo, "run_full_diag_async", return_value=_diag_result()),
                 patch.object(wo, "triage_tarball", return_value=_triage()),
                 patch.object(wo, "capture_measurements", return_value=_measurements()),
                 patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
@@ -676,7 +676,9 @@ class TestSpecTelemetryAlignment:
             orch = WizardOrchestrator(data_dir=tmp_path)
             with (
                 patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-                patch.object(wo, "run_full_diag", side_effect=DiagPrerequisiteError("no bash")),
+                patch.object(
+                    wo, "run_full_diag_async", side_effect=DiagPrerequisiteError("no bash")
+                ),
             ):
                 await orch.run(job_id="testjob", mind_id="default")
         finally:

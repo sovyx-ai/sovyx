@@ -52,7 +52,7 @@ from sovyx.voice.calibration.schema import CalibrationProfile
 from sovyx.voice.diagnostics import (
     DiagPrerequisiteError,
     DiagRunError,
-    run_full_diag,
+    run_full_diag_async,
     triage_tarball,
 )
 
@@ -408,8 +408,10 @@ class WizardOrchestrator:
             # v0.30.26: pass `trigger="wizard"` per spec §8.3 so the
             # voice.diagnostics.full_diag_started telemetry attributes
             # the call to the dashboard wizard rather than the CLI.
-            diag_result = await asyncio.to_thread(
-                run_full_diag,
+            # v0.30.30 (P2): use the async-native runner so
+            # operator-initiated CancelledError propagates into the
+            # bash subprocess via SIGTERM → grace → SIGKILL escalation.
+            diag_result = await run_full_diag_async(
                 extra_args=("--non-interactive",),
                 trigger="wizard",
             )

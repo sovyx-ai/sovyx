@@ -89,6 +89,15 @@ state transitions within half a second) and CPU cost (the tracker's
 read_all is O(file size); per-job files stay small at <50 events)."""
 
 
+# v0.30.30 (P2): per-job asyncio.Task registry so the cancel endpoint
+# can call task.cancel() for mid-stage cancellation. The runner removes
+# itself in a finally block, so the registry self-prunes once the
+# orchestrator reaches a terminal state. Keyed by job_id; one entry
+# per in-flight job (matched by the same per-mind 409 contract that
+# /start enforces).
+_active_jobs: dict[str, asyncio.Task[None]] = {}
+
+
 # ====================================================================
 # Helpers (resolve data_dir + orchestrator)
 # ====================================================================
@@ -319,16 +328,26 @@ async def start_calibration_job(
     async def _runner() -> None:
         try:
             await orch.run(job_id=job_id, mind_id=body.mind_id)
+        except asyncio.CancelledError:
+            # Mid-stage cancellation flowed through. The orchestrator's
+            # own CancelledError handler at run()'s top-level emits the
+            # CANCELLED state; we just let the cancellation surface.
+            raise
         except Exception:
             logger.exception(
                 "voice.calibration.wizard.runner_failed",
                 job_id_hash=short_hash(job_id),
                 mind_id_hash=short_hash(body.mind_id),
             )
+        finally:
+            # Self-prune from the registry whether we exited by terminal
+            # state, cancellation, or unhandled exception. Idempotent.
+            _active_jobs.pop(job_id, None)
 
     # Use asyncio.ensure_future so the task is properly scheduled in
     # the running event loop.
-    asyncio.ensure_future(_runner())  # noqa: RUF006
+    task: asyncio.Task[None] = asyncio.ensure_future(_runner())  # noqa: RUF006
+    _active_jobs[job_id] = task
 
     logger.info(
         "voice.calibration.wizard.start",
@@ -374,12 +393,25 @@ async def cancel_calibration_job(
     request: Request,
     job_id: str,
 ) -> CancelCalibrationResponse:
-    """Touch the .cancel file for a calibration job.
+    """Cancel a running calibration job.
 
-    Idempotent: cancelling an already-cancelled or already-complete
-    job is a no-op (file creation is idempotent; terminal states
-    ignore the signal). The orchestrator polls the file between
-    stages and transitions to CANCELLED at the next checkpoint.
+    Two cancellation paths fire in sequence:
+
+    1. **Mid-stage** (v0.30.30+) — if the job's orchestrator task is
+       still running, ``task.cancel()`` propagates :class:`asyncio.CancelledError`
+       into the awaited subprocess. The async-native runner translates
+       this into a SIGTERM on the bash process group with a 10s grace
+       period for the trap-EXIT cleanup to run, then escalates to
+       SIGKILL if needed. Operator sees CANCELLED within seconds.
+    2. **Checkpoint** — the ``.cancel`` file remains the durable signal
+       so a later stage that started AFTER this endpoint fired (e.g.
+       race between cancel + stage transition) still observes the
+       cancellation at the next ``_is_cancelled`` checkpoint. Both
+       paths converge on the orchestrator's CANCELLED state emit.
+
+    Idempotent: cancelling an already-terminal job is a no-op (file
+    creation is idempotent; ``task.cancel()`` on a finished task
+    returns False; both are silent).
     """
     orch = _resolve_orchestrator(request)
     tracker = WizardProgressTracker(orch.progress_path(job_id))
@@ -390,10 +422,18 @@ async def cancel_calibration_job(
     cancel_path.parent.mkdir(parents=True, exist_ok=True)
     cancel_path.touch(exist_ok=True)
 
+    # Mid-stage cancellation: cancel the orchestrator task if still
+    # registered. Idempotent on already-finished tasks.
+    task_cancelled = False
+    task = _active_jobs.get(job_id)
+    if task is not None and not task.done():
+        task_cancelled = task.cancel()
+
     logger.info(
         "voice.calibration.wizard.cancel_signaled",
         job_id_hash=short_hash(job_id),
         already_terminal=already_terminal,
+        task_cancelled=task_cancelled,
     )
 
     return CancelCalibrationResponse(

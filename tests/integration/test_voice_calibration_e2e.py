@@ -200,7 +200,7 @@ class TestCalibrationE2E:
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
             patch.object(
                 wo,
-                "run_full_diag",
+                "run_full_diag_async",
                 return_value=DiagRunResult(
                     tarball_path=Path("/tmp/x.tar.gz"),
                     duration_s=600.0,
@@ -301,7 +301,7 @@ class TestCalibrationE2E:
 
         with (
             patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
-            patch.object(wo, "run_full_diag", side_effect=slow_diag),
+            patch.object(wo, "run_full_diag_async", side_effect=slow_diag),
             patch.object(wo, "triage_tarball", return_value=_triage()),
             patch.object(wo, "capture_measurements", return_value=_measurements()),
             patch.object(CalibrationEngine, "evaluate", return_value=_profile()),
