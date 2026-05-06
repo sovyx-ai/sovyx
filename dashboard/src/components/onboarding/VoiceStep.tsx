@@ -196,66 +196,75 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
         </p>
       </div>
 
-      <HardwareDetection
-        onDetected={handleDetected}
-        onDeviceChange={handleDeviceChange}
-        onVoiceChange={handleVoiceChange}
-        initialLanguage={language}
-      />
+      {/* P6 (v0.30.34) D9: single-flow gating per
+          MISSION-voice-calibration-extreme-audit-2026-05-06.md §10.2.
+          Pre-P6 mounted BOTH <HardwareDetection /> AND
+          <VoiceCalibrationStep /> when the calibration flag was on,
+          confusing operators with two parallel setup surfaces. Now:
+          ONE flow chosen by the system based on the
+          calibrationWizardEnabled flag.
 
-      {/* L3 voice calibration wizard step — gated on the
-          runtime EngineConfig.voice.calibration_wizard_enabled flag
-          (sourced via GET /api/voice/calibration/feature-flag).
-          When enabled, replaces the legacy VoiceSetupWizard inline
-          mount below. Operator falls back to the legacy wizard via
-          the FALLBACK terminal state (rendered with a "Use simple
-          setup" button by VoiceCalibrationStep). */}
-      {calibrationWizardEnabled && !enabled && !missingDeps && (
+          * Flag ON  → render <VoiceCalibrationStep />. Falls back to
+                       the legacy wizard (HardwareDetection + setup
+                       wizard) on FALLBACK terminal.
+          * Flag OFF → render the legacy <HardwareDetection /> +
+                       optional VoiceSetupWizard. */}
+      {calibrationWizardEnabled && !enabled && !missingDeps && !wizardOpen ? (
         <VoiceCalibrationStep
           mindId="default"
           onCompleted={onConfigured}
           onFallback={() => {
-            // Re-open the legacy wizard inline for operators who
-            // hit the FALLBACK terminal. The wizardOpen toggle
-            // re-uses the existing UI below.
+            // FALLBACK terminal flips us to the legacy flow; the
+            // ``wizardOpen`` toggle below reuses the existing UI so
+            // operators get the device-test path as a safety net.
             setWizardOpen(true);
           }}
         />
-      )}
+      ) : (
+        <>
+          <HardwareDetection
+            onDetected={handleDetected}
+            onDeviceChange={handleDeviceChange}
+            onVoiceChange={handleVoiceChange}
+            initialLanguage={language}
+          />
 
-      {/* Optional pre-enable mic test — wizard mounts inline. The wizard
-          itself is application-scope (does not persist to mind.yaml in
-          v0.30.x); operator still completes the enable flow below to
-          activate voice. Mirror of the voice.tsx Section pattern. */}
-      {!enabled && !missingDeps && (
-        <div className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] p-3">
-          {wizardOpen ? (
-            <VoiceSetupWizard
-              onComplete={() => {
-                setWizardTested(true);
-                setWizardOpen(false);
-              }}
-              onCancel={() => setWizardOpen(false)}
-            />
-          ) : (
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-[var(--svx-color-text-secondary)]">
-                {wizardTested
-                  ? tVoice("wizard.testedProceedHint")
-                  : tVoice("wizard.openHintOptional")}
-              </p>
-              <button
-                type="button"
-                onClick={() => setWizardOpen(true)}
-                className="shrink-0 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-accent)] bg-[var(--svx-color-accent-soft)] px-3 py-1 text-xs font-medium text-[var(--svx-color-accent)] hover:bg-[var(--svx-color-accent)] hover:text-white"
-              >
-                {wizardTested
-                  ? tVoice("wizard.reopenButton")
-                  : tVoice("wizard.openButton")}
-              </button>
+          {/* Optional pre-enable mic test — wizard mounts inline. The
+              wizard itself is application-scope (does not persist to
+              mind.yaml in v0.30.x); operator still completes the
+              enable flow below to activate voice. Mirror of the
+              voice.tsx Section pattern. */}
+          {!enabled && !missingDeps && (
+            <div className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] p-3">
+              {wizardOpen ? (
+                <VoiceSetupWizard
+                  onComplete={() => {
+                    setWizardTested(true);
+                    setWizardOpen(false);
+                  }}
+                  onCancel={() => setWizardOpen(false)}
+                />
+              ) : (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-[var(--svx-color-text-secondary)]">
+                    {wizardTested
+                      ? tVoice("wizard.testedProceedHint")
+                      : tVoice("wizard.openHintOptional")}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setWizardOpen(true)}
+                    className="shrink-0 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-accent)] bg-[var(--svx-color-accent-soft)] px-3 py-1 text-xs font-medium text-[var(--svx-color-accent)] hover:bg-[var(--svx-color-accent)] hover:text-white"
+                  >
+                    {wizardTested
+                      ? tVoice("wizard.reopenButton")
+                      : tVoice("wizard.openButton")}
+                  </button>
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </>
       )}
 
       {/* Success state */}

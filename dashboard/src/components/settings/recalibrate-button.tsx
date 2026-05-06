@@ -43,13 +43,14 @@ export function RecalibrateButton({ mindId = "default" }: { mindId?: string }) {
     }
   }, [startCalibration, mindId, t]);
 
-  // Hide the section entirely when the wizard mount flag is OFF --
-  // calibrating without the wizard UI gives the operator nowhere to
-  // observe progress. The CalibrationWizardCard sibling already
-  // surfaces the toggle when it's off.
-  if (featureFlag === null || !featureFlag.enabled) {
-    return null;
-  }
+  // P6 (v0.30.34) — Mission §10.2 #12: the recalibrate button stays
+  // visible regardless of the wizard-mount flag. When the flag is
+  // OFF the button is disabled with a tooltip pointing at the
+  // CalibrationWizardCard sibling toggle, so operators see the
+  // surface exists + understand what gates it (instead of guessing
+  // why a section disappeared).
+  const flagEnabled = featureFlag !== null && featureFlag.enabled;
+  const flagOffTooltip = !flagEnabled ? t("settings:recalibrate.flagOffTooltip") : undefined;
 
   return (
     <section
@@ -98,6 +99,9 @@ export function RecalibrateButton({ mindId = "default" }: { mindId?: string }) {
             type="button"
             variant="outline"
             onClick={() => setConfirming(true)}
+            disabled={!flagEnabled}
+            title={flagOffTooltip}
+            aria-disabled={!flagEnabled}
             data-testid="settings-recalibrate-toggle"
           >
             {t("settings:recalibrate.button")}
@@ -106,7 +110,9 @@ export function RecalibrateButton({ mindId = "default" }: { mindId?: string }) {
       </div>
 
       <p className="mt-3 text-[11px] text-[var(--svx-color-text-tertiary)]">
-        {t("settings:recalibrate.note")}
+        {flagEnabled
+          ? t("settings:recalibrate.note")
+          : t("settings:recalibrate.flagOffNote")}
       </p>
     </section>
   );

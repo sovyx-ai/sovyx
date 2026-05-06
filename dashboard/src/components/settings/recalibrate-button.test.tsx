@@ -43,27 +43,34 @@ beforeEach(() => {
 });
 
 describe("RecalibrateButton", () => {
-  it("renders nothing when feature flag is null", () => {
-    const { container } = render(<RecalibrateButton />);
-    expect(container.firstChild).toBeNull();
+  it("renders disabled trigger when feature flag is null", () => {
+    // P6 (v0.30.34) — Mission §10.2 #12: the button stays visible
+    // when the flag is null/off, just disabled with a tooltip
+    // pointing at the flag toggle. Pre-P6 returned null (hidden).
+    render(<RecalibrateButton />);
+    const trigger = screen.getByTestId("settings-recalibrate-toggle");
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toBeDisabled();
   });
 
-  it("renders nothing when feature flag is disabled", () => {
+  it("renders disabled trigger when feature flag is disabled", () => {
     useDashboardStore.setState({
       calibrationFeatureFlag: { enabled: false, runtime_override_active: false },
     });
-    const { container } = render(<RecalibrateButton />);
-    expect(container.firstChild).toBeNull();
+    render(<RecalibrateButton />);
+    const trigger = screen.getByTestId("settings-recalibrate-toggle");
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toBeDisabled();
   });
 
-  it("renders trigger button when feature flag is enabled", () => {
+  it("renders enabled trigger button when feature flag is enabled", () => {
     useDashboardStore.setState({
       calibrationFeatureFlag: { enabled: true, runtime_override_active: false },
     });
     render(<RecalibrateButton />);
-    expect(
-      screen.getByTestId("settings-recalibrate-toggle"),
-    ).toBeInTheDocument();
+    const trigger = screen.getByTestId("settings-recalibrate-toggle");
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).not.toBeDisabled();
   });
 
   it("confirm flow POSTs /start and shows success toast", async () => {

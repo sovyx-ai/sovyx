@@ -1536,6 +1536,7 @@ export const WizardJobSnapshotSchema = z.object({
   extras: z
     .object({
       current_prompt: CalibrationCurrentPromptSchema.optional(),
+      rolled_back: z.boolean().optional(),
     })
     .passthrough()
     .nullable()

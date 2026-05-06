@@ -77,11 +77,13 @@ export function VoiceCalibrationStep({
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const activeJobIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (calibrationPreview === null) {
-      void fetchCalibrationPreview();
-    }
-  }, [calibrationPreview, fetchCalibrationPreview]);
+  // P6 (v0.30.34) — Mission §10.2 #13: preview-fingerprint is fetched
+  // LAZILY on operator action, not eagerly on mount. The previous
+  // useEffect kicked off a fingerprint probe + KB lookup every time
+  // the wizard step rendered — even on operators who never start a
+  // calibration — wasting probe cycles + telemetry noise. Operators
+  // click the "Show detected hardware" button (in IdleView) when
+  // they want to see what would be calibrated BEFORE committing.
 
   useEffect(() => {
     if (currentJob === null) return;
@@ -165,6 +167,7 @@ export function VoiceCalibrationStep({
         <_IdleView
           preview={calibrationPreview}
           onStart={handleStart}
+          onShowPreview={() => void fetchCalibrationPreview()}
           onUseSimpleSetup={onFallback}
           loading={calibrationLoading}
         />
@@ -213,6 +216,7 @@ export function VoiceCalibrationStep({
           fallbackReason={currentJob.fallback_reason}
           profilePath={currentJob.profile_path}
           triageWinnerHid={currentJob.triage_winner_hid}
+          rolledBack={currentJob.extras?.rolled_back === true}
           onCompleted={onCompleted}
           onFallback={onFallback}
           onRetry={handleRetry}
@@ -232,16 +236,23 @@ export function VoiceCalibrationStep({
 interface IdleViewProps {
   preview: ReturnType<typeof useDashboardStore.getState>["calibrationPreview"];
   onStart: () => void;
+  onShowPreview: () => void;
   onUseSimpleSetup: () => void;
   loading: boolean;
 }
 
-function _IdleView({ preview, onStart, onUseSimpleSetup, loading }: IdleViewProps) {
+function _IdleView({
+  preview,
+  onStart,
+  onShowPreview,
+  onUseSimpleSetup,
+  loading,
+}: IdleViewProps) {
   const { t } = useTranslation("voice");
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">{t("calibration.subtitle")}</p>
-      {preview !== null && (
+      {preview !== null ? (
         <div className="rounded-md bg-muted/40 p-3 text-xs space-y-1">
           <p>
             <span className="font-medium">
@@ -256,6 +267,19 @@ function _IdleView({ preview, onStart, onUseSimpleSetup, loading }: IdleViewProp
             {preview.audio_stack || "—"}
           </p>
         </div>
+      ) : (
+        <Button
+          onClick={onShowPreview}
+          variant="ghost"
+          size="sm"
+          disabled={loading}
+          data-testid="voice-calibration-show-preview"
+        >
+          {loading ? (
+            <LoaderIcon className="mr-2 size-3.5 animate-spin" />
+          ) : null}
+          {t("calibration.button.show_preview")}
+        </Button>
       )}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <Button onClick={onStart} disabled={loading} size="lg">
@@ -335,6 +359,7 @@ interface TerminalDispatchProps {
   fallbackReason: string | null;
   profilePath: string | null;
   triageWinnerHid: string | null;
+  rolledBack: boolean;
   onCompleted: () => void;
   onFallback: () => void;
   onRetry: () => void;
@@ -346,6 +371,7 @@ function _TerminalDispatch({
   fallbackReason,
   profilePath,
   triageWinnerHid,
+  rolledBack,
   onCompleted,
   onFallback,
   onRetry,
@@ -368,6 +394,26 @@ function _TerminalDispatch({
   if (status === "failed") {
     return (
       <div className="space-y-4" data-testid="voice-calibration-terminal-failed">
+        {rolledBack && (
+          // P6 (v0.30.34) — Mission §10.2 #11: surface auto-rollback so
+          // operators understand the apply chain failed mid-way but the
+          // applier's LIFO rollback restored prior state. They aren't
+          // left wondering "what state am I in now?"
+          <div
+            className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+            data-testid="voice-calibration-rollback-banner"
+          >
+            <AlertCircleIcon className="size-5 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-medium">
+                {t("calibration.terminal.rolled_back.title")}
+              </p>
+              <p className="text-xs">
+                {t("calibration.terminal.rolled_back.description")}
+              </p>
+            </div>
+          </div>
+        )}
         <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900">
           <AlertCircleIcon className="size-5 flex-shrink-0 mt-0.5" />
           <div className="space-y-1">

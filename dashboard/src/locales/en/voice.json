@@ -445,7 +445,8 @@
       "cancel": "Cancel",
       "continue": "Continue",
       "try_again": "Try again",
-      "use_simple_setup": "Use simple setup"
+      "use_simple_setup": "Use simple setup",
+      "show_preview": "Show detected hardware"
     },
     "progress": {
       "suffix": "complete"
@@ -471,6 +472,10 @@
       },
       "failed": {
         "title": "Calibration failed."
+      },
+      "rolled_back": {
+        "title": "Auto-rollback restored the previous state.",
+        "description": "One of the calibration changes failed mid-way. The applier reverted every change it had already made, so your voice configuration is back to what it was before the run started. Inspect the error below + try again or use simple setup."
       },
       "cancelled": {
         "title": "Calibration was cancelled."

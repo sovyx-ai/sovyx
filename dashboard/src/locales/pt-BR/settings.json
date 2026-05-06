@@ -183,6 +183,8 @@
     "confirmButton": "Sim, iniciar calibração",
     "cancelButton": "Cancelar",
     "note": "Uma calibração leva 8-12 minutos na primeira vez; execuções subsequentes no mesmo hardware reproduzem o perfil em cache em ~5 segundos via fast path.",
+    "flagOffNote": "Habilite o wizard de calibração acima para rodar uma calibração. Desabilitado porque o wizard do dashboard é a única superfície que renderiza o progresso; sem ele você não teria como observar a execução.",
+    "flagOffTooltip": "Primeiro habilite o wizard de calibração acima.",
     "startSuccess": "Calibração iniciada. Acompanhe o progresso no wizard de onboarding.",
     "startFailed": "Não foi possível iniciar a calibração."
   },

@@ -183,6 +183,8 @@
     "confirmButton": "Yes, start calibration",
     "cancelButton": "Cancel",
     "note": "A calibration takes 8-12 minutes on first run; subsequent runs on the same hardware replay the cached profile in ~5 seconds via the fast path.",
+    "flagOffNote": "Enable the calibration wizard above to run a calibration. Disabled because the dashboard wizard is the only surface that renders calibration progress; running a calibration without the wizard would leave you no way to observe it.",
+    "flagOffTooltip": "Enable the calibration wizard above first.",
     "startSuccess": "Calibration started. Watch progress in the onboarding wizard.",
     "startFailed": "Could not start calibration."
   },

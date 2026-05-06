@@ -1986,12 +1986,15 @@ export interface WizardJobSnapshot {
   fallback_reason: string | null;
   /**
    * Open-ended bag for stage-specific extras. v0.30.31 (P3) populates
-   * ``current_prompt`` during slow_path_diag; future stages may add
+   * ``current_prompt`` during slow_path_diag; v0.30.34 (P6) populates
+   * ``rolled_back: true`` on FAILED terminal when the applier's LIFO
+   * rollback path completed before re-raising. Future stages may add
    * other keys (e.g. measured RMS dBFS during validation). Cleared on
    * stage exit.
    */
   extras?: {
     current_prompt?: CalibrationCurrentPrompt;
+    rolled_back?: boolean;
     [key: string]: unknown;
   } | null;
 }

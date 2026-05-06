@@ -445,7 +445,8 @@
       "cancel": "Cancelar",
       "continue": "Continuar",
       "try_again": "Intentar de nuevo",
-      "use_simple_setup": "Usar configuración simple"
+      "use_simple_setup": "Usar configuración simple",
+      "show_preview": "Mostrar hardware detectado"
     },
     "progress": {
       "suffix": "completado"
@@ -471,6 +472,10 @@
       },
       "failed": {
         "title": "La calibración falló."
+      },
+      "rolled_back": {
+        "title": "El auto-rollback restauró el estado anterior.",
+        "description": "Uno de los cambios de calibración falló a mitad de camino. El aplicador revirtió cada cambio que ya había realizado, así que tu configuración de voz volvió a estar como antes de la ejecución. Revisa el error a continuación + intenta de nuevo o usa la configuración simple."
       },
       "cancelled": {
         "title": "La calibración fue cancelada."
