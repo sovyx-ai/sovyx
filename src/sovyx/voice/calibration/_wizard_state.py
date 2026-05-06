@@ -17,9 +17,17 @@ further transitions.
 History: introduced in v0.30.16 as T3.1 of mission
 ``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 3.
 
-FAST_PATH branches (FAST_PATH_LOOKUP, FAST_PATH_APPLY,
-FAST_PATH_VALIDATE) are reserved enum members for v0.30.17+ when the
-local KB lookup wires up. v0.30.16 always takes the SLOW_PATH.
+FAST_PATH branches (FAST_PATH_LOOKUP, FAST_PATH_APPLY) wired up in
+v0.30.18. ``FAST_PATH_VALIDATE`` remains a reserved enum member: the
+runtime never transitions through it (the orchestrator goes from
+FAST_PATH_APPLY directly to DONE for cached profiles). The original
+plan was a 5s mic-capture validation diag between APPLY and DONE,
+but P6 v0.30.34 elected to KEEP the enum + i18n keys + closed-set
+match without implementing transitions — adding the validation
+gate is an invasive change (new bash --only invocation, new state
+machine branch, new operator UX). Future minor cycles MAY wire a
+real transition; for now the enum exists so a future profile that
+records ``FAST_PATH_VALIDATE`` doesn't break downstream auditors.
 """
 
 from __future__ import annotations
@@ -51,7 +59,10 @@ class WizardStatus(StrEnum):
     """[v0.30.17+] Applying KB-matched profile (~5s)."""
 
     FAST_PATH_VALIDATE = "fast_path_validate"
-    """[v0.30.17+] Validating fast-path apply with a 5s mic capture."""
+    """Reserved enum (v0.30.34): the orchestrator does NOT transition
+    through this state in v0.30.x. Kept in the closed set so
+    downstream auditors that index on the enum don't break if a
+    future minor wires the validation step. See module docstring."""
 
     SLOW_PATH_DIAG = "slow_path_diag"
     """Running the full forensic bash diag toolkit (8-12 min)."""

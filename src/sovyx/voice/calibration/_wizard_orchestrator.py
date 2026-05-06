@@ -637,6 +637,7 @@ class WizardOrchestrator:
                 state,
                 tracker,
                 summary=str(exc),
+                rolled_back=getattr(exc, "rolled_back", False),
             )
 
         # Stage 5: DONE -- and store the profile in the local KB
@@ -734,7 +735,12 @@ class WizardOrchestrator:
         try:
             apply_result = await applier.apply(replayed, dry_run=False)
         except ApplyError as exc:
-            return self._emit_failed(state, tracker, summary=str(exc))
+            return self._emit_failed(
+                state,
+                tracker,
+                summary=str(exc),
+                rolled_back=getattr(exc, "rolled_back", False),
+            )
 
         triage_winner_hid = (
             replayed.measurements.triage_winner_hid
@@ -778,7 +784,15 @@ class WizardOrchestrator:
         tracker: WizardProgressTracker,
         *,
         summary: str,
+        rolled_back: bool = False,
     ) -> WizardJobState:
+        # P6 (v0.30.34) — Mission §10.2 #11: surface the rolled_back
+        # flag in extras so the dashboard's terminal banner renders
+        # "auto-rollback fired; previous state restored" without
+        # parsing free-form summary strings.
+        extras = dict(state.extras)
+        if rolled_back:
+            extras["rolled_back"] = True
         failed = self._transition(
             state,
             status=WizardStatus.FAILED,
@@ -786,6 +800,21 @@ class WizardOrchestrator:
             message=f"Calibration failed: {summary[:200]}",
             error_summary=summary,
         )
+        if rolled_back:
+            failed = WizardJobState(
+                job_id=failed.job_id,
+                mind_id=failed.mind_id,
+                status=failed.status,
+                progress=failed.progress,
+                current_stage_message=failed.current_stage_message,
+                created_at_utc=failed.created_at_utc,
+                updated_at_utc=failed.updated_at_utc,
+                profile_path=failed.profile_path,
+                triage_winner_hid=failed.triage_winner_hid,
+                error_summary=failed.error_summary,
+                fallback_reason=failed.fallback_reason,
+                extras=extras,
+            )
         self._emit_state(failed, tracker)
         return failed
 

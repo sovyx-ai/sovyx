@@ -205,9 +205,7 @@ class TestRegistry:
 
 
 class TestPersistenceIntegration:
-    def test_inspect_migrated_profile_dict_returns_migrated(
-        self, tmp_path: Path
-    ) -> None:
+    def test_inspect_migrated_profile_dict_returns_migrated(self, tmp_path: Path) -> None:
         from sovyx.voice.calibration._persistence import (
             inspect_migrated_profile_dict,
         )
@@ -217,9 +215,7 @@ class TestPersistenceIntegration:
         # don't need the full required-field set.
         target = tmp_path / "default" / "calibration.json"
         target.parent.mkdir(parents=True)
-        target.write_text(
-            '{"schema_version": 1, "profile_id": "synthetic"}', encoding="utf-8"
-        )
+        target.write_text('{"schema_version": 1, "profile_id": "synthetic"}', encoding="utf-8")
         result = inspect_migrated_profile_dict(data_dir=tmp_path, mind_id="default")
         assert isinstance(result, dict)
         assert result["schema_version"] == 1  # CURRENT == 1; identity walk no-op

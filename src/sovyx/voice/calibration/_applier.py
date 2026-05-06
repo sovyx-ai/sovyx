@@ -115,6 +115,20 @@ class ApplyError(RuntimeError):
     Carries the failed decision + its position in the ``applicable``
     list + a snapshot of the original value so callers (and the LIFO
     rollback path) can render forensic explanations.
+
+    Attributes:
+        decision: The :class:`CalibrationDecision` whose handler raised.
+        original_value: The pre-apply value of ``decision.target``,
+            captured by the snapshot path; useful for forensic
+            "what was rolled back to?" displays.
+        decision_index: Position in the applier's ``applicable``
+            tuple; correlates with the snapshot's
+            ``decision_results`` for exact rollback inspection.
+        rolled_back: Set to True when the applier's LIFO rollback
+            path completed before re-raising the error (P6 v0.30.34
+            adds the flag so downstream catchers — wizard
+            orchestrator, dashboard banner — can surface "auto-
+            rollback fired" without parsing message strings).
     """
 
     def __init__(
@@ -124,11 +138,13 @@ class ApplyError(RuntimeError):
         decision: CalibrationDecision,
         original_value: object | None = None,
         decision_index: int | None = None,
+        rolled_back: bool = False,
     ) -> None:
         super().__init__(message)
         self.decision = decision
         self.original_value = original_value
         self.decision_index = decision_index
+        self.rolled_back = rolled_back
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -492,7 +508,7 @@ class CalibrationApplier:
                 )
                 applied.append((idx, decision.target_class, token))
                 snapshot.decision_results.append((idx, True, token))
-        except ApplyError:
+        except ApplyError as exc:
             rollback_started_mono = time.monotonic()
             await self._lifo_rollback(applied, snapshot=snapshot)
             rollback_duration_s = round(time.monotonic() - rollback_started_mono, 3)
@@ -503,6 +519,11 @@ class CalibrationApplier:
                 decisions_rolled_back=len(applied),
                 rollback_duration_s=rollback_duration_s,
             )
+            # P6 (v0.30.34) — surface the rolled_back flag on the
+            # exception so the wizard orchestrator + dashboard banner
+            # can render "auto-rollback fired" without parsing the
+            # error message string.
+            exc.rolled_back = True
             # Reference profile to acknowledge it for static analysis
             # without leaking through telemetry; profile_id_hash + mind_id_hash
             # already cover identification.

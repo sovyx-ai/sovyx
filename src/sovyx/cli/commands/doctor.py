@@ -364,6 +364,16 @@ def doctor_voice(
         "`scripts/dev/generate_calibration_signing_key.py` "
         "(dev-only); production rotation guidance ships in v0.31.0+.",
     ),
+    evaluate_rules: bool = typer.Option(
+        False,
+        "--evaluate-rules",
+        help="With --calibrate: dry-eval the calibration rules WITHOUT "
+        "running the full diag or applying decisions. Captures the "
+        "fingerprint + measurer (using cached state) + invokes the "
+        "engine to render the rule trace. Operator triages 'would R30 "
+        "fire on this hardware?' without paying the 8-12 min full-diag "
+        "cost. No tarball, no triage, no apply.",
+    ),
 ) -> None:
     """Voice Capture Health Lifecycle diagnostics (ADR §4.8 + v1.3 §4.4).
 
@@ -435,6 +445,7 @@ def doctor_voice(
         rollback=rollback,
         surgical=surgical,
         signing_key=signing_key,
+        evaluate_rules=evaluate_rules,
     )
     raise typer.Exit(exit_code)
 
@@ -456,12 +467,15 @@ def _run_voice_doctor(
     rollback: bool = False,
     surgical: bool = False,
     signing_key: Path | None = None,
+    evaluate_rules: bool = False,
 ) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
     if calibrate and show:
         return _run_voice_calibrate_show(mind_id=mind_id, explain=explain)
     if calibrate and rollback:
         return _run_voice_calibrate_rollback(mind_id=mind_id)
+    if calibrate and evaluate_rules:
+        return _run_voice_calibrate_evaluate_rules(mind_id=mind_id, explain=explain)
     if calibrate:
         return _run_voice_calibrate(
             mind_id=mind_id,
@@ -821,6 +835,87 @@ def _run_voice_calibrate_show(*, mind_id: str, explain: bool) -> int:
             d for d in profile.decisions if d not in profile.applicable_decisions
         ),
         advised_actions=advised,
+        dry_run=True,
+    )
+    _render_calibration_verdict(profile, inspect_result, explain=explain)
+    return EXIT_DOCTOR_OK
+
+
+def _run_voice_calibrate_evaluate_rules(*, mind_id: str, explain: bool) -> int:
+    """Dry-eval the calibration engine without running the diag or applying.
+
+    P6 (v0.30.34) — Mission §10.2 #14. Captures the hardware
+    fingerprint + builds a measurement snapshot from the mixer probe
+    + invokes :class:`CalibrationEngine` with no triage input. Renders
+    the rule trace + advised actions WITHOUT a tarball, triage, or
+    apply — useful for triaging "would R30 fire on this hardware?"
+    without paying the 8-12 min full-diag cost.
+
+    Returns:
+        * EXIT_DOCTOR_OK on a clean evaluation + render.
+        * EXIT_DOCTOR_GENERIC_FAILURE on fingerprint capture failure
+          (rare; mostly Linux-only mixer probe + dmidecode dependency).
+    """
+    from sovyx.voice.calibration import (  # noqa: PLC0415 -- lazy import
+        CalibrationEngine,
+        capture_fingerprint,
+    )
+    from sovyx.voice.calibration._measurer import capture_measurements
+
+    console.print(
+        f"\n[bold cyan]Voice calibration rule evaluation[/bold cyan] "
+        f"[dim](mind_id={mind_id}, dry-eval, no apply)[/dim]\n"
+    )
+    console.print("[dim](1/3) Capturing hardware fingerprint...[/dim]")
+    try:
+        fingerprint = capture_fingerprint()
+    except Exception as exc:  # noqa: BLE001 -- broad to cover platform probes
+        console.print(f"\n[red]Fingerprint capture failed:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    console.print(
+        f"[dim]    {fingerprint.system_vendor} {fingerprint.system_product} "
+        f"({fingerprint.audio_stack})[/dim]"
+    )
+
+    console.print("[dim](2/3) Capturing measurement snapshot from probes...[/dim]")
+    # Without a triage tarball, capture_measurements falls through to
+    # the probe-only path (mixer state + null winner_hid). Engine sees
+    # no triage_result so triage-gated rules (R10) won't fire — but
+    # measurement-driven rules will, which is the point.
+    try:
+        measurements = capture_measurements(
+            diag_tarball_root=None,
+            triage_result=None,
+            duration_s=0.0,
+        )
+    except Exception as exc:  # noqa: BLE001 -- mixer probe rare-failure path
+        console.print(f"\n[red]Measurement capture failed:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    console.print("[dim](3/3) Evaluating rules...[/dim]")
+    engine = CalibrationEngine()
+    profile = engine.evaluate(
+        mind_id=mind_id,
+        fingerprint=fingerprint,
+        measurements=measurements,
+        triage_result=None,
+    )
+
+    console.print(
+        f"[dim]    {len(profile.decisions)} decision(s) emitted by "
+        f"{len(profile.provenance)} rule(s)[/dim]"
+    )
+    # Reuse the standard verdict renderer; pass a dummy ApplyResult
+    # with dry_run=True so the operator sees the partition without
+    # confusion that anything was applied.
+    inspect_result = ApplyResult(
+        profile_path=Path("/dev/null"),  # dry-eval: no path
+        applied_decisions=profile.applicable_decisions,
+        skipped_decisions=tuple(
+            d for d in profile.decisions if d not in profile.applicable_decisions
+        ),
+        advised_actions=tuple(str(d.value) for d in profile.decisions if d.operation == "advise"),
         dry_run=True,
     )
     _render_calibration_verdict(profile, inspect_result, explain=explain)
