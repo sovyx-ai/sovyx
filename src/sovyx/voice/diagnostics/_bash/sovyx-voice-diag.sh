@@ -64,6 +64,10 @@ Flags:
   --skip-operator-prompts    Pula prompts interativos ao operador (reduz cobertura perceptual)
   --skip-guardian            Pula Temporal Guardian (background monitors)
   --enable-ftrace            [INTRUSIVO] Habilita ftrace em G (requer sudo + debugfs)
+  --only LIST                Roda só as camadas listadas (vírgula, ex: "A,C,D,E,J").
+                             Default = todas. Calibração (sovyx --calibrate) usa
+                             "A,C,D,E,J" para baixar de ~10min para ~30s. Phase
+                             enter/exit + selftest sempre rodam.
   -h, --help                 Esta mensagem
 
 Saída:
@@ -95,6 +99,7 @@ parse_args() {
             --skip-operator-prompts) SOVYX_DIAG_FLAG_SKIP_OPERATOR_PROMPTS=1; shift ;;
             --skip-guardian)        SOVYX_DIAG_FLAG_SKIP_GUARDIAN=1; shift ;;
             --enable-ftrace)        SOVYX_DIAG_FLAG_ENABLE_FTRACE=1; shift ;;
+            --only)                 SOVYX_DIAG_FLAG_ONLY="$2"; shift 2 ;;
             -h|--help)              print_usage; exit 0 ;;
             *)                      echo "Unknown flag: $1" >&2; print_usage; exit 2 ;;
         esac
@@ -218,7 +223,8 @@ cat > "$SOVYX_DIAG_SUMMARY_JSON" <<EOF
     "trace_syscalls": $SOVYX_DIAG_FLAG_TRACE_SYSCALLS,
     "skip_operator_prompts": $SOVYX_DIAG_FLAG_SKIP_OPERATOR_PROMPTS,
     "skip_guardian": $SOVYX_DIAG_FLAG_SKIP_GUARDIAN,
-    "enable_ftrace": $SOVYX_DIAG_FLAG_ENABLE_FTRACE
+    "enable_ftrace": $SOVYX_DIAG_FLAG_ENABLE_FTRACE,
+    "only": "$SOVYX_DIAG_FLAG_ONLY"
   },
   "python": {
     "path": "$SOVYX_DIAG_PYTHON",
@@ -298,27 +304,27 @@ fi
 if declare -F enter_S_OFF >/dev/null 2>&1; then
     enter_S_OFF
 fi
-_maybe_source "A_hardware.sh" && declare -F run_layer_A >/dev/null && run_layer_A
-_maybe_source "B_kernel.sh"   && declare -F run_layer_B >/dev/null && run_layer_B
-_maybe_source "C_alsa.sh"     && declare -F run_layer_C >/dev/null && run_layer_C
+_layer_enabled "A" && _maybe_source "A_hardware.sh" && declare -F run_layer_A >/dev/null && run_layer_A
+_layer_enabled "B" && _maybe_source "B_kernel.sh"   && declare -F run_layer_B >/dev/null && run_layer_B
+_layer_enabled "C" && _maybe_source "C_alsa.sh"     && declare -F run_layer_C >/dev/null && run_layer_C
 
 # Phase 2: S_IDLE (D, F, I, J — sem K; K depende do pipeline DESABILITADO
 # E vem DEPOIS de H por ordem do plano v2 §3: zero-touch→C→D→E→H→K).
 if declare -F enter_S_IDLE >/dev/null 2>&1; then
     enter_S_IDLE
 fi
-_maybe_source "D_pipewire.sh" && declare -F run_layer_D >/dev/null && run_layer_D
-_maybe_source "F_session.sh"  && declare -F run_layer_F >/dev/null && run_layer_F
-_maybe_source "I_network.sh"  && declare -F run_layer_I >/dev/null && run_layer_I
-_maybe_source "J_latent.sh"   && declare -F run_layer_J >/dev/null && run_layer_J
+_layer_enabled "D" && _maybe_source "D_pipewire.sh" && declare -F run_layer_D >/dev/null && run_layer_D
+_layer_enabled "F" && _maybe_source "F_session.sh"  && declare -F run_layer_F >/dev/null && run_layer_F
+_layer_enabled "I" && _maybe_source "I_network.sh"  && declare -F run_layer_I >/dev/null && run_layer_I
+_layer_enabled "J" && _maybe_source "J_latent.sh"   && declare -F run_layer_J >/dev/null && run_layer_J
 
 # Phase 3: S_ACTIVE (E, G, H)
 if declare -F enter_S_ACTIVE >/dev/null 2>&1; then
     enter_S_ACTIVE
 fi
-_maybe_source "E_portaudio.sh"     && declare -F run_layer_E >/dev/null && run_layer_E
-_maybe_source "G_sovyx.sh"         && declare -F run_layer_G >/dev/null && run_layer_G
-_maybe_source "H_pipeline_live.sh" && declare -F run_layer_H >/dev/null && run_layer_H
+_layer_enabled "E" && _maybe_source "E_portaudio.sh"     && declare -F run_layer_E >/dev/null && run_layer_E
+_layer_enabled "G" && _maybe_source "G_sovyx.sh"         && declare -F run_layer_G >/dev/null && run_layer_G
+_layer_enabled "H" && _maybe_source "H_pipeline_live.sh" && declare -F run_layer_H >/dev/null && run_layer_H
 
 # Phase 3.5: volta para S_IDLE (disable voice) para rodar K — o endpoint
 # /api/voice/test/output recusa 409 PIPELINE_ACTIVE enquanto o pipeline
@@ -326,7 +332,7 @@ _maybe_source "H_pipeline_live.sh" && declare -F run_layer_H >/dev/null && run_l
 if declare -F transition_to_S_IDLE_for_K >/dev/null 2>&1; then
     transition_to_S_IDLE_for_K
 fi
-_maybe_source "K_output.sh" && declare -F run_layer_K >/dev/null && run_layer_K
+_layer_enabled "K" && _maybe_source "K_output.sh" && declare -F run_layer_K >/dev/null && run_layer_K
 
 # Phase 4: S_RESIDUAL + optional states
 if declare -F enter_S_RESIDUAL_t5 >/dev/null 2>&1; then

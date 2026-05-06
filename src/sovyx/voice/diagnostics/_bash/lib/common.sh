@@ -74,6 +74,13 @@ SOVYX_DIAG_FLAG_TRACE_SYSCALLS=1   # default ON (auto-off se ptrace bloqueia)
 SOVYX_DIAG_FLAG_SKIP_OPERATOR_PROMPTS=0   # skip Etapa Final de prompts ao operador
 SOVYX_DIAG_FLAG_SKIP_GUARDIAN=0           # skip Temporal Guardian followers
 SOVYX_DIAG_FLAG_ENABLE_FTRACE=0           # habilita ftrace em G (intrusivo)
+# v0.30.19 T2.3 — surgical layer selection. Empty = all layers run
+# (default). Comma-separated letters (e.g. "A,C,D,E,J") restrict the
+# run to ONLY the listed layers; the calibration measurer uses this
+# to cut full diag (~10min) down to the minimum needed for calibration
+# rules (~30s). Phase enter/exit + selftest still run unconditionally
+# because they own the state-machine + correctness contract.
+SOVYX_DIAG_FLAG_ONLY=""
 SOVYX_DIAG_INITIAL_EVIDENCE_DIR=""
 
 # Follower PIDs — preenchidos por start_followers, mortos no trap
@@ -158,6 +165,29 @@ PYEOF
         return 1
     fi
     return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer gating (v0.30.19 T2.3 --only flag)
+# ─────────────────────────────────────────────────────────────────────────
+
+# Returns 0 (true) if layer ``letter`` should run, 1 otherwise.
+#
+# When SOVYX_DIAG_FLAG_ONLY is empty (default), every layer runs. When
+# set (e.g. "A,C,D,E,J"), only the listed layers run; everything else
+# is silently skipped. Phase enter/exit + selftest must NOT be gated
+# through this helper -- they own state-machine transitions and
+# correctness contracts that downstream layers depend on.
+#
+# Comparison is case-sensitive on the single-letter layer code that
+# matches the lib filename prefix (A_hardware.sh -> "A").
+_layer_enabled() {
+    local letter="$1"
+    [[ -z "$SOVYX_DIAG_FLAG_ONLY" ]] && return 0
+    case ",${SOVYX_DIAG_FLAG_ONLY}," in
+        *,"$letter",*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # ─────────────────────────────────────────────────────────────────────────
