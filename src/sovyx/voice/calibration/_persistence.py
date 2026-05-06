@@ -307,21 +307,39 @@ def save_calibration_profile(
     # effort: any failure (missing key, bad PEM, wrong algorithm)
     # logs + falls through to the unsigned write path so the operator
     # always gets a persisted profile they can re-sign later.
+    #
+    # QA-FIX-2 (v0.31.0-rc.2): the pre-rc.2 ``is_file()`` short-circuit
+    # silently degraded when the operator passed a non-existent path
+    # (e.g. ``--signing-key /tmp/nope``); the profile landed unsigned
+    # with zero observability. Now: when a path is supplied but the
+    # file is missing, emit ``signing_skipped{reason="key_path_missing"}``
+    # so operators see WHY the profile they expected to be signed
+    # wasn't.
     was_signed = False
-    if signing_key_path is not None and signing_key_path.is_file():
-        try:
-            private_key = _load_private_signing_key(signing_key_path)
-            sig_payload = canonical_calibration_payload(profile.canonical_signing_payload())
-            sig_bytes = private_key.sign(sig_payload)
-            serialized["signature"] = base64.b64encode(sig_bytes).decode("ascii")
-            was_signed = True
-        except (RuntimeError, ValueError) as exc:
+    if signing_key_path is not None:
+        if not signing_key_path.is_file():
             logger.warning(
-                "voice.calibration.profile.signing_failed",
+                "voice.calibration.profile.signing_skipped",
                 mind_id_hash=_short_hash(profile.mind_id),
                 profile_id_hash=_short_hash(profile.profile_id),
-                reason=str(exc)[:200],
+                reason="key_path_missing",
+                # Closed-enum reason field; raw operator-set path is
+                # NOT logged (see privacy contract in P0/P1).
             )
+        else:
+            try:
+                private_key = _load_private_signing_key(signing_key_path)
+                sig_payload = canonical_calibration_payload(profile.canonical_signing_payload())
+                sig_bytes = private_key.sign(sig_payload)
+                serialized["signature"] = base64.b64encode(sig_bytes).decode("ascii")
+                was_signed = True
+            except (RuntimeError, ValueError) as exc:
+                logger.warning(
+                    "voice.calibration.profile.signing_failed",
+                    mind_id_hash=_short_hash(profile.mind_id),
+                    profile_id_hash=_short_hash(profile.profile_id),
+                    reason=str(exc)[:200],
+                )
 
     payload = json.dumps(
         serialized,

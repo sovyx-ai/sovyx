@@ -221,7 +221,20 @@ def migrate_to_current(
             )
         try:
             raw_dict = fn(raw_dict)
-        except (KeyError, TypeError, ValueError) as exc:
+        except CalibrationProfileMigrationError:
+            # If a migration step explicitly raised the typed error,
+            # let it propagate as-is (don't double-wrap).
+            raise
+        except Exception as exc:  # noqa: BLE001 -- typed-wrap any migration failure
+            # QA-FIX-4 (v0.31.0-rc.2): pre-rc.2 caught only
+            # (KeyError, TypeError, ValueError). A custom migration
+            # raising RuntimeError / AttributeError / OSError /
+            # AssertionError propagated UNCAUGHT to the loader,
+            # defeating the typed CalibrationProfileMigrationError
+            # contract that the load path catches downstream. Now:
+            # any non-typed exception from a migration is wrapped
+            # uniformly so operators always get a typed error with
+            # ``step_failed`` + ``cause`` for triage.
             raise CalibrationProfileMigrationError(
                 source_version=raw_schema,
                 target_version=target_version,

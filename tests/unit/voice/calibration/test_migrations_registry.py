@@ -138,6 +138,66 @@ class TestWalkerErrors:
         finally:
             del MIGRATIONS[(60, 61)]
 
+    def test_migration_raising_runtimeerror_chained(self) -> None:
+        # QA-FIX-4 (v0.31.0-rc.2): pre-rc.2 walker caught only
+        # (KeyError, TypeError, ValueError). RuntimeError /
+        # AttributeError / OSError / AssertionError from a
+        # migration propagated uncaught to the loader, defeating the
+        # typed-error contract. Post-rc.2 the walker wraps any
+        # non-typed exception uniformly.
+        @register_migration(from_v=80, to_v=81)
+        def _runtimeerror_step(raw: dict[str, Any]) -> dict[str, Any]:
+            msg = "schema invariant violation"
+            raise RuntimeError(msg)
+
+        try:
+            with pytest.raises(CalibrationProfileMigrationError) as exc:
+                migrate_to_current({"schema_version": 80}, target_version=81)
+            assert exc.value.step_failed == "_runtimeerror_step"
+            assert "RuntimeError" in str(exc.value)
+            assert isinstance(exc.value.cause, RuntimeError)
+        finally:
+            del MIGRATIONS[(80, 81)]
+
+    def test_migration_raising_attributeerror_chained(self) -> None:
+        @register_migration(from_v=90, to_v=91)
+        def _attrerror_step(raw: dict[str, Any]) -> dict[str, Any]:
+            return raw.this_does_not_exist  # type: ignore[attr-defined,no-any-return]
+
+        try:
+            with pytest.raises(CalibrationProfileMigrationError) as exc:
+                migrate_to_current({"schema_version": 90}, target_version=91)
+            assert exc.value.step_failed == "_attrerror_step"
+            assert "AttributeError" in str(exc.value)
+            assert isinstance(exc.value.cause, AttributeError)
+        finally:
+            del MIGRATIONS[(90, 91)]
+
+    def test_migration_raising_typed_error_does_not_double_wrap(self) -> None:
+        # When a migration explicitly raises the typed error itself
+        # (e.g. it ran custom validation + decided the input was
+        # un-migratable), the walker MUST propagate as-is rather
+        # than wrapping in a second CalibrationProfileMigrationError
+        # (which would lose the original step_failed/cause).
+        @register_migration(from_v=110, to_v=111)
+        def _typed_error_step(raw: dict[str, Any]) -> dict[str, Any]:
+            raise CalibrationProfileMigrationError(
+                source_version=110,
+                target_version=111,
+                step_failed="custom_validator",
+                reason="custom validation failed",
+            )
+
+        try:
+            with pytest.raises(CalibrationProfileMigrationError) as exc:
+                migrate_to_current({"schema_version": 110}, target_version=111)
+            # The step_failed comes from the inner raise, not the
+            # walker's wrap.
+            assert exc.value.step_failed == "custom_validator"
+            assert "custom validation failed" in str(exc.value)
+        finally:
+            del MIGRATIONS[(110, 111)]
+
     def test_multi_hop_chain_walks_both_edges(self) -> None:
         @register_migration(from_v=70, to_v=71)
         def _step_70_71(raw: dict[str, Any]) -> dict[str, Any]:

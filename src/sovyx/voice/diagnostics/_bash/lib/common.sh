@@ -769,6 +769,12 @@ prompt_user() {
 # JSON-escaping mínimo: backslashes + double-quotes via expansão padrão
 # de bash (sed inline). Para expansão futura considerar python3 -c json
 # se phrase virar operator-set.
+# Once-per-session guard so a sustained ENOSPC/EACCES does NOT flood
+# the runlog. Set on the first failed write; subsequent failures are
+# silent. The first failure surfaces enough forensic evidence for the
+# operator to triage post-mortem (path + errno).
+_SOVYX_PROMPTS_WRITE_FAILED=0
+
 prompt_emit_structured() {
     local type="$1" phrase="$2" seconds="${3:-}"
     if [[ -z "${SOVYX_DIAG_PROMPTS_FILE:-}" ]]; then
@@ -792,7 +798,23 @@ prompt_emit_structured() {
         "$type" "$phrase_escaped" "$seconds_field" "$utc_now" "$mono_now")
     # Atomic single-line append; bash open(O_APPEND) is atomic for writes
     # smaller than PIPE_BUF (~4 KB on Linux), which our payload always is.
-    echo "$json" >> "$SOVYX_DIAG_PROMPTS_FILE" 2>/dev/null || true
+    #
+    # QA-FIX-3 (v0.31.0-rc.2): pre-rc.2 used ``2>/dev/null || true``
+    # which silently swallowed ENOSPC/EACCES — operators saw zero
+    # prompts in the dashboard mid-run with zero forensic evidence.
+    # Now we capture stderr and surface ONE log_warn per session
+    # (guarded by ``_SOVYX_PROMPTS_WRITE_FAILED``) so a sustained
+    # write-fail doesn't flood the runlog but the operator still has
+    # post-mortem evidence of WHY the prompts file is empty.
+    if ! echo "$json" >> "$SOVYX_DIAG_PROMPTS_FILE" 2>/tmp/.sovyx_prompts_err.$$; then
+        if [[ "$_SOVYX_PROMPTS_WRITE_FAILED" = "0" ]]; then
+            local err_detail
+            err_detail=$(cat /tmp/.sovyx_prompts_err.$$ 2>/dev/null || echo "(no detail)")
+            log_warn "prompts_file write failed (first occurrence; subsequent failures silent): path=$SOVYX_DIAG_PROMPTS_FILE err=$err_detail"
+            _SOVYX_PROMPTS_WRITE_FAILED=1
+        fi
+    fi
+    rm -f /tmp/.sovyx_prompts_err.$$ 2>/dev/null || true
 }
 
 # prompt_yn <msg> → 0 = sim, 1 = não. Respeita --yes (retorna 0 sempre).

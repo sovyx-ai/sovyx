@@ -426,3 +426,82 @@ class TestSignSaveLoadRoundTrip:
         assert persisted[1]["signed"] is False
         # Reference to the ignored bogus path so static checks accept it.
         _ = bogus_key
+
+
+# ════════════════════════════════════════════════════════════════════
+# QA-FIX-2 (v0.31.0-rc.2) — observability for path-not-found case
+# ════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.usefixtures("_swap_trust_store")
+class TestSigningKeyPathMissingObservability:
+    """Operator passes ``--signing-key`` with a non-existent path: the
+    pre-rc.2 ``is_file()`` short-circuit silently fell through to an
+    unsigned write, leaving operators wondering why the profile they
+    expected to be signed wasn't. Post-rc.2 the persistence layer
+    emits ``voice.calibration.profile.signing_skipped`` with closed-
+    enum ``reason="key_path_missing"`` so the gap is observable.
+    """
+
+    def test_signing_skipped_event_fires_when_path_missing(self, tmp_path: Path) -> None:
+        # Path supplied but file does not exist (operator typo / CI
+        # misconfiguration / file deleted between resolve + apply).
+        nonexistent = tmp_path / "absent.priv"
+
+        events: list[tuple[str, dict]] = []
+
+        class _Cap:
+            def info(self, event: str, **kwargs: object) -> None:
+                events.append((event, dict(kwargs)))
+
+            def warning(self, event: str, **kwargs: object) -> None:
+                events.append((event, dict(kwargs)))
+
+        original = persistence.logger
+        persistence.logger = _Cap()  # type: ignore[assignment]
+        try:
+            target = save_calibration_profile(
+                _profile(signature=None),
+                data_dir=tmp_path,
+                signing_key_path=nonexistent,
+            )
+        finally:
+            persistence.logger = original  # type: ignore[assignment]
+
+        assert target.is_file(), "profile must still persist (best-effort signing)"
+        skipped = next(
+            (e for e in events if e[0] == "voice.calibration.profile.signing_skipped"),
+            None,
+        )
+        assert skipped is not None, "signing_skipped telemetry must fire on path-missing"
+        assert skipped[1]["reason"] == "key_path_missing"
+        assert "mind_id_hash" in skipped[1]
+        assert "profile_id_hash" in skipped[1]
+        # And the persisted event reports unsigned.
+        persisted = next(e for e in events if e[0] == "voice.calibration.profile.persisted")
+        assert persisted[1]["signed"] is False
+
+    def test_no_signing_key_does_not_emit_skipped(self, tmp_path: Path) -> None:
+        """When ``signing_key_path`` is None (operator opted out
+        entirely), no skipped event should fire — that would noise-
+        spam the unsigned-by-default operator path. Skipped fires
+        ONLY when the operator passed a path that doesn't resolve.
+        """
+        events: list[tuple[str, dict]] = []
+
+        class _Cap:
+            def info(self, event: str, **kwargs: object) -> None:
+                events.append((event, dict(kwargs)))
+
+            def warning(self, event: str, **kwargs: object) -> None:
+                events.append((event, dict(kwargs)))
+
+        original = persistence.logger
+        persistence.logger = _Cap()  # type: ignore[assignment]
+        try:
+            save_calibration_profile(_profile(signature=None), data_dir=tmp_path)
+        finally:
+            persistence.logger = original  # type: ignore[assignment]
+
+        skipped = [e for e in events if e[0] == "voice.calibration.profile.signing_skipped"]
+        assert skipped == [], "signing_skipped must NOT fire when no key was supplied"
