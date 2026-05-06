@@ -2493,6 +2493,49 @@ class TuningConfig(BaseModel):
     retention: RetentionTuningConfig = Field(default_factory=RetentionTuningConfig)
 
 
+class VoiceFeaturesConfig(BaseSettings):
+    """Operator-facing voice feature flags (NOT tuning thresholds).
+
+    Distinct from :class:`VoiceTuningConfig` which holds low-level
+    knobs (timeouts, thresholds, queue sizes). This config holds the
+    user-visible feature gates that toggle high-level capabilities
+    on/off:
+
+    * :attr:`calibration_wizard_enabled` -- mounts the dashboard's
+      voice calibration onboarding step (Layer 3 of the voice
+      self-calibrating mission). Default-disabled in v0.30.x while
+      Layer 3 soaks; flip to True (system.yaml or env) to opt in
+      per-deployment. Default flips to True in v0.31.0+ after a
+      minor cycle of telemetry-validated lenient operation.
+
+    Env prefix ``SOVYX_VOICE__`` mirrors the operator-visible namespace
+    (vs ``SOVYX_TUNING__VOICE__`` for tuning). Operators flip via:
+
+    .. code-block:: text
+
+        SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED=true sovyx start
+
+    Or in ``system.yaml``:
+
+    .. code-block:: yaml
+
+        voice:
+          calibration_wizard_enabled: true
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_VOICE__", extra="ignore")
+
+    calibration_wizard_enabled: bool = False
+    """Mount the dashboard's voice calibration onboarding step.
+
+    Default False during the v0.30.x soak window. Flip to True via
+    env or system.yaml to opt the deployment in. Operator-visible
+    toggle lives in Settings -> Voice -> Advanced (mutates the
+    in-memory copy on the running daemon; persistent change still
+    requires editing the env / system.yaml).
+    """
+
+
 class SecurityConfig(BaseModel):
     """Operator-managed security knobs that have boot-time consequences.
 
@@ -2623,6 +2666,7 @@ class EngineConfig(BaseSettings):
     api: APIConfig = Field(default_factory=APIConfig)
     socket: SocketConfig = Field(default_factory=SocketConfig)
     tuning: TuningConfig = Field(default_factory=TuningConfig)
+    voice: VoiceFeaturesConfig = Field(default_factory=VoiceFeaturesConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     compliance: ComplianceConfig = Field(default_factory=ComplianceConfig)

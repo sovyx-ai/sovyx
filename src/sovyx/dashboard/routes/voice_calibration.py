@@ -220,6 +220,44 @@ class CancelCalibrationResponse(BaseModel):
     )
 
 
+class FeatureFlagResponse(BaseModel):
+    """Response for ``GET /api/voice/calibration/feature-flag``.
+
+    Mirrors :attr:`EngineConfig.voice.calibration_wizard_enabled`
+    + records whether the current value came from the original
+    config (env / system.yaml) or from a runtime override applied
+    via ``POST /feature-flag``. Frontend uses this on app load to
+    decide whether to mount the calibration onboarding step.
+    """
+
+    enabled: bool
+    runtime_override_active: bool = Field(
+        default=False,
+        description=(
+            "True when the value differs from what was loaded at boot "
+            "(via env/system.yaml). Operators flipping the toggle in "
+            "Settings -> Voice -> Advanced see this flip as well; the "
+            "flag is in-memory only -- restart picks up the persisted "
+            "config value again."
+        ),
+    )
+
+
+class FeatureFlagUpdateRequest(BaseModel):
+    """Body for ``POST /api/voice/calibration/feature-flag``."""
+
+    enabled: bool = Field(
+        ...,
+        description=(
+            "New value for the calibration wizard mount flag. "
+            "Mutates `app.state.engine_config.voice.calibration_wizard_enabled` "
+            "in-memory; persistent change still requires editing "
+            "`SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED` in env or system.yaml + "
+            "daemon restart."
+        ),
+    )
+
+
 class PreviewFingerprintResponse(BaseModel):
     """Response for ``GET /api/voice/calibration/preview-fingerprint``."""
 
@@ -391,6 +429,106 @@ async def preview_fingerprint(request: Request) -> PreviewFingerprintResponse:
         system_vendor=fingerprint.system_vendor,
         system_product=fingerprint.system_product,
         recommendation=recommendation,
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# Feature-flag endpoints (T3.10 wire-up)
+# ────────────────────────────────────────────────────────────────────
+
+
+def _boot_value(request: Request) -> bool | None:
+    """Return the calibration_wizard_enabled value as loaded at boot.
+
+    Captured the first time ``GET /feature-flag`` is hit by stashing
+    the boot value on ``app.state``. Subsequent reads compare against
+    this snapshot to decide whether to surface a runtime-override
+    notice in the response.
+    """
+    return getattr(request.app.state, "calibration_wizard_boot_value", None)
+
+
+@router.get(
+    "/feature-flag",
+    response_model=FeatureFlagResponse,
+)
+async def get_calibration_feature_flag(request: Request) -> FeatureFlagResponse:
+    """Return the current calibration-wizard mount flag.
+
+    Reads :attr:`EngineConfig.voice.calibration_wizard_enabled` from
+    the running daemon. Falls back to ``False`` (default) when the
+    daemon's EngineConfig is not registered, mirroring fresh-install
+    behaviour.
+
+    The ``runtime_override_active`` field tells the frontend whether
+    the operator (or another caller) has flipped the value in-memory
+    via ``POST /feature-flag`` since boot.
+    """
+    config = _resolve_engine_config(request)
+    if config is None:
+        return FeatureFlagResponse(enabled=False, runtime_override_active=False)
+
+    current = config.voice.calibration_wizard_enabled
+    boot = _boot_value(request)
+    if boot is None:
+        # First read: stash boot value for future override-detection.
+        request.app.state.calibration_wizard_boot_value = current
+        boot = current
+    return FeatureFlagResponse(
+        enabled=current,
+        runtime_override_active=current != boot,
+    )
+
+
+@router.post(
+    "/feature-flag",
+    response_model=FeatureFlagResponse,
+)
+async def set_calibration_feature_flag(
+    request: Request,
+    body: FeatureFlagUpdateRequest,
+) -> FeatureFlagResponse:
+    """Flip the calibration wizard mount flag in-memory.
+
+    Mutates :attr:`EngineConfig.voice.calibration_wizard_enabled` on
+    the running daemon. The change is NOT persisted -- a daemon
+    restart reverts to the env / system.yaml value. For permanent
+    changes, edit ``SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED`` in
+    your env or ``voice.calibration_wizard_enabled`` in system.yaml.
+
+    Operator-visible toggle in Settings -> Voice -> Advanced calls
+    this endpoint when the operator clicks the switch.
+    """
+    config = _resolve_engine_config(request)
+    if config is None:
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail=(
+                "EngineConfig not registered on this dashboard -- the "
+                "feature-flag toggle requires a running daemon. Run "
+                "`sovyx start` first."
+            ),
+        )
+
+    # Stash boot value the first time we see it so override-detection
+    # works even when GET /feature-flag wasn't hit before this POST.
+    if _boot_value(request) is None:
+        request.app.state.calibration_wizard_boot_value = config.voice.calibration_wizard_enabled
+
+    previous = config.voice.calibration_wizard_enabled
+    config.voice.calibration_wizard_enabled = body.enabled
+
+    logger.info(
+        "voice.calibration.feature_flag.toggled",
+        previous=previous,
+        new=body.enabled,
+        boot_value=_boot_value(request),
+    )
+
+    boot = _boot_value(request)
+    return FeatureFlagResponse(
+        enabled=body.enabled,
+        runtime_override_active=body.enabled != boot,
     )
 
 

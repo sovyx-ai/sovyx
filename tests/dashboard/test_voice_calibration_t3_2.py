@@ -299,3 +299,69 @@ class TestStreamWebSocket:
             assert exc.code == 1008
         else:
             raise AssertionError("Expected WebSocketDisconnect on bad token")
+
+
+# ====================================================================
+# GET / POST /feature-flag (T3.10 wire-up, v0.30.22)
+# ====================================================================
+
+
+class TestFeatureFlagEndpoints:
+    """GET returns the boot value; POST mutates the in-memory copy."""
+
+    def test_get_returns_default_false(self, tmp_path: Path) -> None:
+        app = _build_app(tmp_path=tmp_path)
+        response = _client(app).get("/api/voice/calibration/feature-flag")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["enabled"] is False
+        assert body["runtime_override_active"] is False
+
+    def test_get_reflects_engine_config_value(self, tmp_path: Path) -> None:
+        from sovyx.engine.config import DatabaseConfig, EngineConfig, VoiceFeaturesConfig
+
+        app = create_app(token=_TOKEN)
+        app.state.engine_config = EngineConfig(
+            data_dir=tmp_path,
+            database=DatabaseConfig(data_dir=tmp_path),
+            voice=VoiceFeaturesConfig(calibration_wizard_enabled=True),
+        )
+        response = _client(app).get("/api/voice/calibration/feature-flag")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["enabled"] is True
+        assert body["runtime_override_active"] is False
+
+    def test_post_flips_in_memory_value(self, tmp_path: Path) -> None:
+        app = _build_app(tmp_path=tmp_path)
+        client = _client(app)
+        # Initial: disabled
+        client.get("/api/voice/calibration/feature-flag")
+        # POST flips to enabled
+        response = client.post("/api/voice/calibration/feature-flag", json={"enabled": True})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["enabled"] is True
+        assert body["runtime_override_active"] is True
+
+        # Subsequent GET reflects the runtime override
+        response2 = client.get("/api/voice/calibration/feature-flag")
+        assert response2.json()["enabled"] is True
+        assert response2.json()["runtime_override_active"] is True
+
+    def test_post_returns_404_when_no_engine_config(self, tmp_path: Path) -> None:
+        # App without engine_config registered.
+        app = create_app(token=_TOKEN)
+        response = _client(app).post("/api/voice/calibration/feature-flag", json={"enabled": True})
+        assert response.status_code == 404
+        _ = tmp_path  # unused
+
+    def test_endpoints_require_auth(self, tmp_path: Path) -> None:
+        app = _build_app(tmp_path=tmp_path)
+        client_no_auth = TestClient(app)
+        get_response = client_no_auth.get("/api/voice/calibration/feature-flag")
+        assert get_response.status_code == 401
+        post_response = client_no_auth.post(
+            "/api/voice/calibration/feature-flag", json={"enabled": True}
+        )
+        assert post_response.status_code == 401
