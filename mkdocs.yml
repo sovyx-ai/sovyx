@@ -57,6 +57,7 @@ nav:
     - Plugins: modules/plugins.md
     - Upgrade: modules/upgrade.md
     - Voice: modules/voice.md
+    - Voice calibration: modules/voice-calibration.md
     - Voice device test: modules/voice-device-test.md
     - Licensing: modules/licensing.md
     - Benchmarks: modules/benchmarks.md
