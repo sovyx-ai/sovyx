@@ -6,7 +6,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.3 below)
+(none — every shipped delta is in v0.31.0-rc.4 below)
+
+## [0.31.0-rc.4] — 2026-05-06
+
+Paranoid pre-GA closure round 2 on top of v0.31.0-rc.3. Four parallel
+QA agents re-validated rc.3; this RC closes the 2 FAIL items + the 3
+top-priority coverage gaps without paliativos per
+``feedback_enterprise_only``. Mission §0 verdict from Agent 4 was
+``GO with operator validation gate``; rc.4 lifts the remaining "real
+findings" before promoting to v0.31.0 GA.
+
+### Fixed
+
+- **CI silently skipped `TestConcurrentStartRaceQaFix5` (Agent 2 E.3).**
+  The class was decorated ``@pytest.mark.integration`` per the rc.3
+  pattern, but the marker's documented criteria are "real ML models,
+  SQLite heavy IO, or cross-component wiring" — none of which apply
+  to a httpx + ASGITransport in-process test. The default
+  ``-m 'not integration'`` filter in ``pyproject.toml`` excluded the
+  race regression from CI; a future regression to ``_START_LOCKS``
+  would have slipped past CI green. Marker removed.
+- **`reason_kind` added to `CLOSED_ENUM_FIELDS` but never emitted (Agent 2 D.3).**
+  Speculative addition in rc.3; production emits ``reason=`` (already
+  in DYNAMIC_TEXT_FIELDS) with bounded values. Removed the unused
+  entry to keep the test contract aligned with production.
+
+### Added
+
+- **POSIX cancellation path coverage (Agent 3 Promise 2).** Pre-rc.4
+  every ``TestCancellation`` test forced ``sys.platform == "win32"``.
+  The production cancellation chain on Linux uses ``os.killpg`` +
+  ``start_new_session=True`` — ZERO direct test coverage. New tests:
+  - ``test_posix_spawn_passes_start_new_session_true``: asserts the
+    POSIX spawn kwarg.
+  - ``test_windows_spawn_does_not_pass_start_new_session``: asserts
+    Windows spawn does NOT carry the kwarg.
+  - ``test_posix_cancel_calls_killpg_with_sigterm``: asserts the
+    POSIX path uses ``os.killpg`` (not ``os.kill``) with SIGTERM.
+  - ``test_posix_cancel_escalates_to_killpg_sigkill``: asserts the
+    grace-expired escalation uses ``os.killpg(SIGKILL)``.
+  - ``test_posix_cancel_completes_within_grace_plus_sigkill_wait``:
+    wallclock-bounded assertion on the graceful exit path.
+- **VoiceStep single-flow conditional coverage (Agent 3 Promise 8).**
+  Pre-rc.4 the single-mount conditional at ``VoiceStep.tsx:212`` had
+  no vitest coverage; a regression that re-introduced dual-mount of
+  ``<HardwareDetection /> + <VoiceCalibrationStep />`` would land
+  green. New tests:
+  - flag OFF → renders HardwareDetection only.
+  - flag ON → renders VoiceCalibrationStep only.
+  - asserts NEVER dual-mounts under any feature-flag state.
+- **`--evaluate-rules` behavior coverage (Agent 3 Promise 11).** Pre-rc.4
+  only the help-text registration was tested. New tests drive the
+  full dry-eval flow through ``_run_voice_calibrate_evaluate_rules``:
+  - asserts ``capture_fingerprint`` + ``capture_measurements`` +
+    ``CalibrationEngine.evaluate`` invoked exactly once with
+    ``triage_result=None`` + ``diag_tarball_root=None``.
+  - asserts ``run_full_diag`` / ``triage_tarball`` /
+    ``CalibrationApplier.apply`` are NEVER invoked (zero diag, zero
+    apply contract per Mission §0 promise 11).
+  - asserts ``--explain`` propagates into the verdict renderer.
+  - asserts fingerprint failure → EXIT_DOCTOR_GENERIC_FAILURE without
+    invoking downstream stages.
+
+### Mission
+
+Paranoid pre-GA closure round 2; rc.3 archive footer remains accurate.
+rc.4 is a strict superset of rc.3 — zero contract changes, only
+test/CI hardening. Operator validation gate steps unchanged from
+rc.3; v0.31.0 GA promotion proceeds once the operator confirms rc.4
+on the canonical Sony VAIO host.
 
 ## [0.31.0-rc.3] — 2026-05-06
 
