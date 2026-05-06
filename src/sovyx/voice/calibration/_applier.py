@@ -811,12 +811,21 @@ async def _apply_mind_config_voice(
             decision=decision,
         )
 
-    pre_value, post_dump = await asyncio.to_thread(
-        _mutate_mind_yaml_voice_field,
-        yaml_path,
-        field_name,
-        decision.value,
-    )
+    try:
+        pre_value, post_dump = await asyncio.to_thread(
+            _mutate_mind_yaml_voice_field,
+            yaml_path,
+            field_name,
+            decision.value,
+        )
+    except _MindYamlMutateError as exc:
+        # QA-FIX-1 (v0.31.0-rc.2): re-raise the helper's bare error
+        # as a fully-typed ApplyError carrying the actual decision so
+        # the outer except in apply() can log target/target_class/
+        # operation without an AttributeError on decision=None. The
+        # pre-rc.2 helper raised ApplyError(decision=None) directly,
+        # which crashed the catch site at apply()'s telemetry log.
+        raise ApplyError(str(exc), decision=decision) from exc
     snapshot.mind_config_before[field_name] = pre_value
     logger.info(
         "voice.calibration.applier.mind_config_voice_applied",
@@ -855,6 +864,21 @@ async def _revert_mind_config_voice(
     )
 
 
+class _MindYamlMutateError(RuntimeError):
+    """Raised by :func:`_mutate_mind_yaml_voice_field` on IO/parse failure.
+
+    Decoupled from :class:`ApplyError` so the sync helper has zero
+    knowledge of the dispatch system. The async handler
+    :func:`_apply_mind_config_voice` catches this and re-raises as an
+    :class:`ApplyError` carrying the actual decision context.
+
+    QA-FIX-1 (v0.31.0-rc.2) — pre-rc.2 the helper raised
+    ``ApplyError(decision=None)`` directly, which crashed the outer
+    except in :meth:`CalibrationApplier.apply`'s telemetry log
+    (``exc.decision.target`` AttributeError when ``decision is None``).
+    """
+
+
 def _mutate_mind_yaml_voice_field(
     yaml_path: Path,
     field_name: str,
@@ -866,23 +890,20 @@ def _mutate_mind_yaml_voice_field(
     standard YAML rewrite (tmp + rename would be ideal; the existing
     dashboard pattern uses a direct write — we mirror it for parity).
 
-    Raises :class:`ApplyError` on read/parse/write failure.
+    Raises :class:`_MindYamlMutateError` on read/parse/write failure;
+    the calling async handler wraps with the decision context.
     """
     import yaml  # noqa: PLC0415 -- local pyyaml import
 
     if not yaml_path.is_file():
-        raise ApplyError(
-            f"mind.yaml not found at {yaml_path}; cannot apply MindConfig.voice mutation.",
-            decision=None,  # type: ignore[arg-type]
-        )
+        msg = f"mind.yaml not found at {yaml_path}; cannot apply MindConfig.voice mutation."
+        raise _MindYamlMutateError(msg)
     try:
         text = yaml_path.read_text(encoding="utf-8")
         data: dict[str, Any] = yaml.safe_load(text) or {}
     except (OSError, yaml.YAMLError) as exc:
-        raise ApplyError(
-            f"mind.yaml at {yaml_path} unreadable or malformed: {exc}",
-            decision=None,  # type: ignore[arg-type]
-        ) from exc
+        msg = f"mind.yaml at {yaml_path} unreadable or malformed: {exc}"
+        raise _MindYamlMutateError(msg) from exc
     voice_section = data.setdefault("voice", {})
     pre_value = voice_section.get(field_name)
     voice_section[field_name] = new_value
@@ -892,10 +913,8 @@ def _mutate_mind_yaml_voice_field(
             encoding="utf-8",
         )
     except OSError as exc:
-        raise ApplyError(
-            f"failed to write mind.yaml at {yaml_path}: {exc}",
-            decision=None,  # type: ignore[arg-type]
-        ) from exc
+        msg = f"failed to write mind.yaml at {yaml_path}: {exc}"
+        raise _MindYamlMutateError(msg) from exc
     return (pre_value, data)
 
 

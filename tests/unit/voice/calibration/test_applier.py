@@ -625,3 +625,77 @@ class TestApplyResultInvariants:
         )
         with pytest.raises(FrozenInstanceError):
             result.dry_run = True  # type: ignore[misc]
+
+
+# ════════════════════════════════════════════════════════════════════
+# QA-FIX-1 (v0.31.0-rc.2) — ApplyError(decision=None) regression test
+# ════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio()
+class TestMindYamlHelperRaiseRegressions:
+    """Regression: helper failures must surface a typed ApplyError with
+    the actual decision, not ``decision=None``.
+
+    Pre-rc.2 the ``_mutate_mind_yaml_voice_field`` helper raised
+    ``ApplyError(decision=None)`` directly; the outer except in
+    ``CalibrationApplier.apply`` then crashed with ``AttributeError:
+    'NoneType' object has no attribute 'target'`` when logging the
+    failure event, masking the original error. Each path here exercises
+    one of the helper's three error sites + asserts the surfaced
+    ApplyError carries the test decision.
+    """
+
+    async def test_missing_yaml_file_surfaces_decision(self, tmp_path: Path) -> None:
+        # mind_yaml_path is set but the file doesn't exist.
+        applier = CalibrationApplier(data_dir=tmp_path, mind_yaml_path=tmp_path / "nope.yaml")
+        decision = _set_high(target="mind.voice.vad_threshold")
+        profile = _profile(decisions=(decision,))
+        with pytest.raises(ApplyError) as exc_info:
+            await applier.apply(profile)
+        # The bug pre-rc.2: `exc.decision` was None and the outer
+        # except's `exc.decision.target` log raised AttributeError
+        # which masked the original ApplyError.
+        assert exc_info.value.decision is not None
+        assert exc_info.value.decision.target == "mind.voice.vad_threshold"
+        assert "mind.yaml not found" in str(exc_info.value)
+
+    async def test_malformed_yaml_surfaces_decision(self, tmp_path: Path) -> None:
+        bad_yaml = tmp_path / "mind.yaml"
+        bad_yaml.write_text("this: is: not: valid: yaml: [\n", encoding="utf-8")
+        applier = CalibrationApplier(data_dir=tmp_path, mind_yaml_path=bad_yaml)
+        decision = _set_high(target="mind.voice.vad_threshold")
+        profile = _profile(decisions=(decision,))
+        with pytest.raises(ApplyError) as exc_info:
+            await applier.apply(profile)
+        assert exc_info.value.decision is not None
+        assert exc_info.value.decision.target == "mind.voice.vad_threshold"
+        assert "unreadable or malformed" in str(exc_info.value)
+
+    async def test_outer_except_logs_without_attribute_error(self, tmp_path: Path) -> None:
+        """The pre-rc.2 bug: outer except crashed on `exc.decision.target`.
+
+        Capture the applier's telemetry logger and verify the
+        ``apply_failed`` event fires cleanly (with target/target_class/
+        operation fields) instead of crashing inside the except block.
+        """
+        applier = CalibrationApplier(data_dir=tmp_path, mind_yaml_path=tmp_path / "missing.yaml")
+        decision = _set_high(target="mind.voice.energy_threshold")
+        profile = _profile(decisions=(decision,))
+
+        events, original = _capture_logger()
+        try:
+            with pytest.raises(ApplyError):
+                await applier.apply(profile)
+        finally:
+            _restore_logger(original)
+
+        failed = next(
+            (e for e in events if e[0] == "voice.calibration.applier.apply_failed"),
+            None,
+        )
+        assert failed is not None, "apply_failed telemetry must fire"
+        assert failed[1]["target"] == "mind.voice.energy_threshold"
+        assert failed[1]["target_class"] == "MindConfig.voice"
+        assert failed[1]["operation"] == "set"
+        assert failed[1]["failure_reason"] == "set_dispatch_failed"
