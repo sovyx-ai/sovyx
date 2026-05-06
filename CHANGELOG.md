@@ -6,7 +6,158 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in 0.30.7 below)
+(none — every shipped delta is in v0.31.0-rc.1 below)
+
+## [0.31.0-rc.1] — 2026-05-06
+
+Release candidate of the **multi-mind FINAL GA** + **calibration extreme-audit closure**.
+Operators must validate on canonical Sony VAIO + at least one Windows host
+before promotion to 0.31.0 final per the staged-adoption discipline.
+
+### Highlights
+
+- **Voice calibration is now self-applying.** SET dispatch via a
+  registered handler table replaces the v0.30.x advise-only loop.
+  Operators on canonical Sony VAIO go probe → diag → triage → engine
+  → applier mutates state directly → DONE in 1 click; no follow-up
+  ``sovyx doctor voice --fix`` needed.
+- **Mid-stage cancel is now ≤ 10 s** (vs. up-to-10-min before). The
+  bash diag subprocess is cancellable via ``asyncio.create_subprocess_exec``
+  + SIGTERM/SIGKILL escalation; the dashboard's POST /cancel touches
+  the durable ``.cancel`` file AND calls ``task.cancel()`` for the
+  fast path.
+- **Capture prompts render in real time** during the 8-12 min slow-path
+  diag. Bash writes structured prompts to a side-channel JSONL the
+  orchestrator tails; the dashboard renders ``<CapturePrompt>`` for
+  each "say X" / "stay silent for Y" instruction.
+- **Real Ed25519 signing.** The pre-P4 LENIENT/STRICT toggle was
+  field-presence theater; v0.30.32 wires real ``cryptography.hazmat``
+  Ed25519 verification against the shipped trust store.
+- **Schema migrations.** ``_migrations`` registry with explicit
+  ``(from, to)`` edges + chain walker + identity v1→v2 placeholder.
+  Future schema bumps need ONE migration function + tests; loader
+  unchanged.
+- **Privacy contract enforced.** ``voice.calibration.*`` /
+  ``voice.diagnostics.*`` events carry hashed identifiers
+  (``mind_id_hash`` / ``job_id_hash`` / ``profile_id_hash`` —
+  16-hex SHA256 prefix via ``sovyx.observability.privacy.short_hash``);
+  zero raw filesystem paths; CI gate at
+  ``tests/integration/test_telemetry_privacy_audit.py``.
+
+### Added
+
+- ``sovyx.observability.privacy.short_hash`` — single source of truth
+  for 16-hex SHA256 identifier hashing across calibration telemetry.
+- ``sovyx.voice.calibration._applier._TARGET_CLASS_HANDLERS`` — async
+  handler registry; two ship: ``LinuxMixerApply`` (boost_up / reset
+  intents via the proven ``apply_mixer_boost_up`` / ``apply_mixer_reset``
+  paths) and ``MindConfig.voice`` (per-field setattr + ``mind.yaml``
+  persist).
+- ``sovyx.voice.calibration._applier._PreApplySnapshot`` — pre-apply
+  state captured once before any mutation; LIFO rollback replays
+  every applied decision in reverse on ``ApplyError``.
+- Confidence-band gating: ``HIGH`` auto-applies, ``MEDIUM`` requires
+  ``allow_medium=True`` (CLI ``--yes`` / frontend confirm), ``LOW``
+  is advise-only, ``EXPERIMENTAL`` is skipped.
+- New telemetry events:
+  - ``voice.calibration.applier.apply_failed_with_rollback{decisions_rolled_back, rollback_duration_s}``
+  - ``voice.calibration.applier.rollback_step_failed{decision_index, exception_type}``
+  - ``voice.diagnostics.cancel_grace_expired{grace_period_s}``
+  - ``voice.diagnostics.cancel_completed{duration_s, escalated_to_sigkill}``
+  - ``voice.calibration.wizard.capture_prompt{prompt_type, phrase}``
+  - ``voice.calibration.profile.signature.invalid{verdict, mode}``
+  - ``voice.calibration.profile.migration_failed{from_version, to_version, step}``
+- ``sovyx.voice.diagnostics.run_full_diag_async`` + ``_cancel_process_tree``
+  helper — async-native bash diag runner with SIGTERM → 10s grace
+  → SIGKILL escalation on cancel.
+- ``sovyx.voice.diagnostics._bash.lib.common.sh::prompt_emit_structured``
+  — structured prompt emission to ``$SOVYX_DIAG_PROMPTS_FILE``
+  (NO-OP when env unset; CLI-direct invocations unaffected).
+- ``sovyx.voice.calibration._migrations`` — schema migration registry
+  with ``MIGRATIONS: dict[tuple[int, int], MigrationFunc]`` + chain
+  walker + ``CalibrationProfileMigrationError``; identity ``v1→v2``
+  placeholder.
+- ``sovyx.voice.calibration._persistence._verify_calibration_signature``
+  — real Ed25519 verification with 5-way verdict; 3-way operator-
+  facing ``signature_status`` (accepted/missing/invalid).
+- ``sovyx.voice.calibration._persistence.inspect_migrated_profile_dict``
+  — operator dry-run path; returns the migrated dict without
+  constructing a profile or running the signature gate.
+- CLI ``sovyx doctor voice --calibrate --signing-key <path>`` — sign
+  the persisted profile with an Ed25519 PEM key.
+- CLI ``sovyx doctor voice --calibrate --evaluate-rules`` — dry-eval
+  rules without diag/triage/apply (~5 s vs. ~10 min full run).
+- Frontend ``<CapturePrompt>`` invocation, lazy ``preview-fingerprint``
+  fetch, auto-rollback amber banner on FAILED-after-rollback.
+- ``docs/security.md`` — Calibration telemetry retention section.
+- CI ``Voice Bash Diag Smoke`` gate — runs the actual bundled
+  ``sovyx doctor voice --full-diag --surgical`` end-to-end on
+  sovyx-4core; ~30 s gate.
+- 16 new signing tests, 14 migration registry tests, 3 Hypothesis
+  property tests for migration idempotency, 7 capture-prompt
+  protocol tests, 5 cancellation tests, 28 applier tests for the
+  registry/snapshot/LIFO/confidence-band, 9 telemetry privacy
+  scenarios.
+
+### Changed
+
+- **R10 promoted from ADVISE to SET** targeting ``LinuxMixerApply``
+  (``rule_version`` 1 → 2; ``RULE_SET_VERSION`` 10 → 11). Operators
+  on canonical Sony VAIO no longer need the manual ``--fix``.
+- ``CalibrationApplier.apply`` is now ``async``. Sync callers (CLI)
+  wrap with ``asyncio.run``; the wizard orchestrator awaits directly.
+- ``run_full_diag`` is now a thin sync wrapper around
+  ``run_full_diag_async``; CLI callers unchanged.
+- ``WizardJobSnapshot.extras`` is now an open-ended bag with typed
+  slots ``current_prompt`` (P3) + ``rolled_back`` (P6); zod schema
+  uses ``passthrough()`` for forward-compat.
+- ``VoiceStep`` renders a single setup flow at a time (no more
+  parallel ``HardwareDetection`` + ``VoiceCalibrationStep``). Flag
+  ON → calibration; FALLBACK terminal flips to legacy.
+- ``RecalibrateButton`` always renders; ``disabled={!flagEnabled}``
+  with a tooltip pointing at the toggle when the flag is off.
+- ``_IdleView`` no longer auto-fetches the hardware preview on mount;
+  operators click "Show detected hardware" when they want it.
+
+### Removed
+
+- Pre-P0 raw operator-set strings in ``voice.calibration.*`` /
+  ``voice.diagnostics.*`` telemetry. The deprecated aliases
+  (``mind_id`` / ``job_id`` / ``cached_mind_id`` / ``path``)
+  shipped briefly in v0.30.28 for one minor cycle and were dropped
+  in v0.30.29.
+- The "is signature field present?" theater check in
+  ``_persistence.py``.
+
+### Fixed
+
+- The bash diag's interactive prompts are no longer invisible during
+  dashboard-initiated calibration runs (orphan ``<CapturePrompt>``
+  component shipped in v0.30.25 finally has a data source).
+- ``ApplyError`` now carries a ``rolled_back: bool`` attribute set by
+  the LIFO rollback path before re-raising; downstream catchers
+  (orchestrator + dashboard banner) surface "auto-rollback fired"
+  without parsing message strings.
+
+### Deferred to v0.31.0 GA
+
+- STRICT signing default flip — v0.31.0-rc.1 keeps LENIENT default
+  per ``feedback_staged_adoption``; one minor cycle of telemetry-
+  validated lenient operation precedes the flip.
+- Settings → Voice 4-card → 1-accordion consolidation (D8 from the
+  audit) — UI-only refactor; bundled with the GA tag's polish pass.
+- ``FAST_PATH_VALIDATE`` real implementation — invasive (new bash
+  ``--only`` invocation + new state machine branch). The enum stays
+  in the closed set; deferral documented in ``_wizard_state.py``.
+
+### Mission
+
+Closes ``MISSION-voice-calibration-extreme-audit-2026-05-06.md``
+(7 phases v0.30.28..v0.31.0-rc.1; 25 audit gaps closed across
+telemetry hashing, SET dispatch + auto-rollback, mid-stage cancel,
+capture prompts, real signing, schema migration, UX consolidation).
+Predecessor: ``MISSION-voice-self-calibrating-system-2026-05-05.md``
+(v0.30.14..v0.30.27 SHIPPED — infrastructure).
 
 ## [0.30.7] — 2026-05-04
 
