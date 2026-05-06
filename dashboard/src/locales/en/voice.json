@@ -479,6 +479,42 @@
         "title": "Calibration could not complete on this hardware.",
         "subtitle": "Reason: {{reason}}. Use the simple setup wizard instead."
       }
+    },
+    "fast_path": {
+      "title": "Fast-path calibration",
+      "subtitle": "Your hardware was previously calibrated. Replaying the cached profile takes about 5 seconds.",
+      "progress": "Validating cached profile...",
+      "success": "Fast-path replay complete."
+    },
+    "slow_path": {
+      "title": "Full calibration",
+      "subtitle": "Running the 8-12 minute forensic diagnostic + calibration engine. Please leave the microphone connected and stay nearby for the speech prompts.",
+      "stage_diag": "Running forensic diagnostic (8-12 min)",
+      "stage_triage": "Analyzing the diagnostic + capturing measurements",
+      "stage_apply": "Applying the calibration profile",
+      "prompt_speak": "Say \"{{phrase}}\" clearly",
+      "prompt_silence": "Stay silent for {{seconds}} seconds",
+      "success": "Slow-path calibration complete.",
+      "fallback": "Calibration aborted; falling back to simple setup."
+    },
+    "review": {
+      "title": "Review applied calibration",
+      "decision_explanation": "Sovyx applied the following decisions for your hardware:",
+      "confirm": "Confirm and continue",
+      "rollback": "Roll back this calibration"
+    },
+    "cancel": {
+      "title": "Cancel calibration?",
+      "confirm": "Yes, cancel calibration",
+      "cancel": "No, continue"
+    },
+    "error": {
+      "generic": "Calibration could not complete: {{message}}",
+      "bash_unavailable": "The bundled diagnostic toolkit requires bash 4+. Install bash via your distribution package manager.",
+      "selftest_failed": "The analyzer self-test failed. Re-run after a daemon restart; if the issue persists, file an issue with the diagnostic tarball attached.",
+      "hardware_gap": "No capture device detected on this host. Plug in or pair a microphone, then re-run calibration.",
+      "timeout": "Calibration timed out after {{seconds}} seconds. The diag may be stuck on a capture window; retry or use simple setup.",
+      "permission_denied": "Sovyx is missing the permission to access the microphone. Grant permission via your operating system's privacy settings."
     }
   }
 }
