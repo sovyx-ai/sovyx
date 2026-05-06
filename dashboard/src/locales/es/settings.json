@@ -176,6 +176,19 @@
     "consolidation": "Consolidación",
     "consolidationValue": "Cada {{hours}}h"
   },
+  "calibrationWizard": {
+    "title": "Paso de calibración de voz en el onboarding",
+    "description": "Monta el asistente de calibración multi-etapa consciente del hardware durante la configuración de voz. Desactivado por defecto mientras la Capa 3 del sistema auto-calibrante está en soak; actívalo para incluir este deployment.",
+    "statusEnabled": "Activado",
+    "statusDisabled": "Desactivado",
+    "enableButton": "Activar wizard",
+    "disableButton": "Desactivar wizard",
+    "runtimeOverride": "Override en tiempo de ejecución activo (se pierde al reiniciar el daemon)",
+    "persistenceNote": "Alternar aquí cambia la copia en memoria del daemon en ejecución. Para persistir entre reinicios, define SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED en el env o voice.calibration_wizard_enabled en system.yaml.",
+    "enabledToast": "Wizard de calibración activado.",
+    "disabledToast": "Wizard de calibración desactivado.",
+    "toggleError": "No se pudo actualizar la flag del wizard de calibración."
+  },
   "voiceClarity": {
     "title": "Calidad de la entrada del micrófono",
     "alertTitle": "Windows Voice Clarity detectado",

@@ -176,6 +176,19 @@
     "consolidation": "Consolidation",
     "consolidationValue": "Every {{hours}}h"
   },
+  "calibrationWizard": {
+    "title": "Voice calibration onboarding step",
+    "description": "Mounts the multi-stage hardware-aware calibration wizard during voice setup. Default-disabled while Layer 3 of the self-calibrating system soaks; flip to ON to opt this deployment in.",
+    "statusEnabled": "Enabled",
+    "statusDisabled": "Disabled",
+    "enableButton": "Enable wizard",
+    "disableButton": "Disable wizard",
+    "runtimeOverride": "Runtime override active (lost on daemon restart)",
+    "persistenceNote": "Toggling here flips the in-memory copy on the running daemon. To persist across restarts, set SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED in your env or voice.calibration_wizard_enabled in system.yaml.",
+    "enabledToast": "Calibration wizard enabled.",
+    "disabledToast": "Calibration wizard disabled.",
+    "toggleError": "Could not update the calibration wizard flag."
+  },
   "voiceClarity": {
     "title": "Microphone input quality",
     "alertTitle": "Windows Voice Clarity detected",

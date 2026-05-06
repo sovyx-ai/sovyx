@@ -39,6 +39,7 @@ import { api, isAbortError } from "@/lib/api";
 import { toast } from "sonner";
 import { ExportImportSection } from "@/components/settings/export-import";
 import { LanguageSelector } from "@/components/settings/LanguageSelector";
+import { CalibrationWizardCard } from "@/components/settings/calibration-wizard-card";
 import { VoiceClarityCard } from "@/components/settings/voice-clarity-card";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -813,6 +814,14 @@ export default function SettingsPage() {
       {/* ── Linux ALSA mixer saturation remediation ── */}
       <ErrorBoundary name="section.settings.linuxMicGain" variant="section">
         <LinuxMicGainCard />
+      </ErrorBoundary>
+
+      {/* ── Voice calibration wizard mount toggle (T3.10 wire-up) ── */}
+      <ErrorBoundary
+        name="section.settings.calibrationWizard"
+        variant="section"
+      >
+        <CalibrationWizardCard />
       </ErrorBoundary>
 
       {/* ── Display & Language (Mission v0.30.3 §T3.3 / D5) ── */}
