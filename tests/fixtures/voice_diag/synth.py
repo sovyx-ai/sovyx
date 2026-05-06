@@ -295,6 +295,102 @@ def scenario_h9_hardware_gap() -> Scenario:
     )
 
 
+def scenario_h1_mic_destroyed_apo() -> Scenario:
+    """Windows host with Voice Clarity APO destroying capture signal.
+
+    Three silent voice captures + the silence_across alert pattern
+    that the H1 evaluator scans for. H1 fires regardless of toolkit
+    (cross-OS catch-all for "mic destroyed upstream of user-space").
+    On Windows the H2 evaluator can also fire if the apo data is
+    populated; this scenario keeps H2-specific data minimal so H1
+    is the dominant verdict.
+    """
+    return Scenario(
+        toolkit="windows",
+        summary_extras={
+            "audio_endpoints": [],
+            "host_capability_summary": {"kernel_line": "Windows 11 26200"},
+        },
+        alerts=[
+            {
+                "severity": "error",
+                "message": "voice_clarity_destroying capture across all 3 windows",
+            },
+            {
+                "severity": "warn",
+                "message": "silence_across all 3/3 voice captures",
+            },
+        ],
+        capture_files=[
+            (
+                f"E_portaudio/captures/W{i}/analysis.json",
+                {"rms_dbfs": -90.0, "classification": "silence"},
+            )
+            for i in range(3)
+        ],
+    )
+
+
+def scenario_h4_pulse_destructive_filter() -> Scenario:
+    """Linux PulseAudio destructive filter as the standalone winner.
+
+    Distinct from the multi-hypothesis scenario in that the mixer
+    state is healthy, so H10 does NOT also fire -- H4 is the
+    unambiguous root cause.
+    """
+    return Scenario(
+        toolkit="linux",
+        summary_extras={
+            "audio_endpoints": [],
+            "host_capability_summary": {"kernel_line": "Linux 6.5.0 generic"},
+        },
+        alerts=[
+            {
+                "severity": "error",
+                "message": "destructive pactl modules loaded: module-echo-cancel",
+            },
+            {
+                "severity": "warn",
+                "message": "destructive filter on capture chain",
+            },
+        ],
+        capture_files=[
+            (
+                f"E_portaudio/captures/W{i}/analysis.json",
+                {"rms_dbfs": -90.0, "classification": "silence"},
+            )
+            for i in range(3)
+        ],
+    )
+
+
+def scenario_h6_selftest_failed() -> Scenario:
+    """Analyzer selftest failed -- downstream metrics are suspect.
+
+    Sets ``analyzer_selftest_status=fail`` at BOTH the top level
+    (where the H6 evaluator reads it for evidence weight) AND under
+    the nested ``calibration`` dict (where the TriageResult reader
+    looks first when populating ``selftest_status``). The H6 evaluator
+    weights this signal at 1.0 so H6 wins regardless of other
+    evidence.
+    """
+    return Scenario(
+        toolkit="linux",
+        summary_extras={
+            "audio_endpoints": [],
+            "host_capability_summary": {"kernel_line": "Linux 6.8.0 generic"},
+            "analyzer_selftest_status": "fail",
+            "calibration": {"analyzer_selftest_status": "fail"},
+        },
+        alerts=[
+            {
+                "severity": "error",
+                "message": "analyzer_selftest_failed: amixer probe returned unexpected layout",
+            },
+        ],
+    )
+
+
 def scenario_multi_hypothesis() -> Scenario:
     """H4 + H10 cross-correlation: PulseAudio destructive filter loaded
     AND mixer is attenuated. Both fire; the ranker picks the highest
