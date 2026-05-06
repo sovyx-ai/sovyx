@@ -503,8 +503,8 @@
       "fallback": "Calibração abortada; voltando para configuração simples."
     },
     "review": {
-      "title": "Revisar calibração aplicada",
-      "decision_explanation": "A Sovyx aplicou as seguintes decisões para seu hardware:",
+      "title": "Calibração aplicada",
+      "decision_explanation": "O perfil persistido (caminho acima) contém o rastro completo de regras + decisões aplicadas. Rode `sovyx doctor voice --calibrate --show` no CLI para inspecionar os detalhes, ou clique em confirmar para continuar. Se a calibração não ajudou, você pode reverter abaixo.",
       "confirm": "Confirmar e continuar",
       "rollback": "Reverter esta calibração"
     },
@@ -519,7 +519,12 @@
       "selftest_failed": "O self-test do analisador falhou. Tente novamente após reiniciar o daemon; se persistir, abra uma issue anexando o tarball de diagnóstico.",
       "hardware_gap": "Nenhum dispositivo de captura detectado neste host. Conecte ou pareie um microfone, depois rode a calibração novamente.",
       "timeout": "A calibração esgotou o tempo após {{seconds}} segundos. O diag pode ter travado em uma janela de captura; tente novamente ou use a configuração simples.",
-      "permission_denied": "A Sovyx não tem permissão para acessar o microfone. Conceda a permissão nas configurações de privacidade do seu sistema operacional."
+      "permission_denied": "A Sovyx não tem permissão para acessar o microfone. Conceda a permissão nas configurações de privacidade do seu sistema operacional.",
+      "api_fingerprint_failed": "Falha ao capturar fingerprint",
+      "api_start_failed": "Falha ao iniciar calibração",
+      "api_load_failed": "Falha ao carregar job de calibração",
+      "api_cancel_failed": "Falha ao cancelar calibração",
+      "ws_connection_error": "Erro de conexão WebSocket da calibração"
     }
   }
 }

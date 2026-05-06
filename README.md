@@ -94,6 +94,15 @@ sovyx start
 
 # 3. In the dashboard, click "Enable Voice" — the daemon probes hardware,
 #    selects an ONNX tier, and starts capturing. Talk to it.
+
+# 4. (Linux, optional) If your mic stays silent — common on laptops with
+#    factory-attenuated mixer presets (e.g. Sony VAIO + PipeWire) — run:
+sovyx doctor voice --calibrate --non-interactive    # 8-12 min auto-fix
+#    The calibration wizard captures a hardware fingerprint, runs the
+#    full forensic diagnostic, picks the right rule (R10..R95) for your
+#    hardware, and applies the fix automatically. Profile lands at
+#    ~/.sovyx/<mind_id>/calibration.json. Recalibrate any time from the
+#    dashboard's Settings → Voice section. See `docs/getting-started.md`.
 ```
 
 The auto-selector picks Moonshine STT + Piper TTS + SileroVAD + an ONNX wake-word model that fits your hardware. Default wake word is `"Sovyx"`.

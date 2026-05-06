@@ -28,6 +28,7 @@
 import type { StateCreator } from "zustand";
 
 import { ApiError, BASE_URL, api } from "@/lib/api";
+import i18n from "@/lib/i18n";
 import type {
   CalibrationFeatureFlagResponse,
   CalibrationFeatureFlagUpdateRequest,
@@ -158,7 +159,13 @@ export const createCalibrationSlice: StateCreator<
       set({ calibrationPreview: data, calibrationLoading: false });
       return data;
     } catch (err) {
-      const message = _extractApiError(err, "Failed to capture fingerprint");
+      // rc.6 (Agent 2 B.6): i18n the API fallback messages so pt-BR/es
+      // operators don't see English fallbacks when the backend returns
+      // an error without a `detail` field.
+      const message = _extractApiError(
+        err,
+        i18n.t("voice:calibration.error.api_fingerprint_failed"),
+      );
       set({ calibrationLoading: false, calibrationError: message });
       return null;
     }
@@ -176,7 +183,10 @@ export const createCalibrationSlice: StateCreator<
       set({ calibrationLoading: false });
       return response.job_id;
     } catch (err) {
-      const message = _extractApiError(err, "Failed to start calibration");
+      const message = _extractApiError(
+        err,
+        i18n.t("voice:calibration.error.api_start_failed"),
+      );
       set({ calibrationLoading: false, calibrationError: message });
       return null;
     }
@@ -192,7 +202,10 @@ export const createCalibrationSlice: StateCreator<
       );
       set({ currentCalibrationJob: data, calibrationLoading: false });
     } catch (err) {
-      const message = _extractApiError(err, "Failed to load calibration job");
+      const message = _extractApiError(
+        err,
+        i18n.t("voice:calibration.error.api_load_failed"),
+      );
       set({
         calibrationLoading: false,
         calibrationError: message,
@@ -212,7 +225,10 @@ export const createCalibrationSlice: StateCreator<
       );
       return true;
     } catch (err) {
-      const message = _extractApiError(err, "Failed to cancel calibration");
+      const message = _extractApiError(
+        err,
+        i18n.t("voice:calibration.error.api_cancel_failed"),
+      );
       set({ calibrationError: message });
       return false;
     }
@@ -273,8 +289,9 @@ export const createCalibrationSlice: StateCreator<
     };
 
     ws.onerror = () => {
+      // rc.6 (Agent 2 B.6): i18n the WS connection error.
       set({
-        calibrationError: "Calibration WebSocket connection error",
+        calibrationError: i18n.t("voice:calibration.error.ws_connection_error"),
         calibrationWs: null,
       });
     };
