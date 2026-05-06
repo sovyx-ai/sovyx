@@ -6,7 +6,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.1 below)
+(none — every shipped delta is in v0.31.0-rc.2 below)
+
+## [0.31.0-rc.2] — 2026-05-06
+
+QA-driven hardening pass on top of v0.31.0-rc.1. Five-agent
+enterprise audit identified one critical regression + four
+observability/correctness gaps; this RC closes them all without
+paliativos per ``feedback_enterprise_only``.
+
+### Fixed
+
+- **`ApplyError(decision=None)` AttributeError chain (CRITICAL).**
+  The ``_mutate_mind_yaml_voice_field`` helper raised
+  ``ApplyError(decision=None)`` when ``mind.yaml`` was missing /
+  malformed / unwritable; the outer ``except ApplyError as exc:`` in
+  ``CalibrationApplier.apply`` then crashed at ``exc.decision.target``
+  AttributeError, masking the original failure. Helper now raises a
+  private ``_MindYamlMutateError`` and the async handler
+  ``_apply_mind_config_voice`` wraps with the actual decision context.
+  Regression: `tests/unit/voice/calibration/test_applier.py::TestMindYamlHelperRaiseRegressions`
+  (3 cases).
+- **Signing-key path-not-found silent degradation (MEDIUM).** Operator
+  passing ``--signing-key /tmp/nope`` (typo / CI misconfig / file
+  deleted between resolve+apply) silently degraded to unsigned write
+  with zero observability. New event
+  ``voice.calibration.profile.signing_skipped{reason="key_path_missing"}``
+  fires when the path is supplied but ``is_file()`` returns False.
+  Regression: `tests/unit/voice/calibration/test_signing_verification.py::TestSigningKeyPathMissingObservability`
+  (2 cases).
+- **`prompts.jsonl` write-failure swallowed silently (MEDIUM).** Bash
+  helper ``prompt_emit_structured`` used ``2>/dev/null || true`` after
+  the append; ENOSPC/EACCES failures were invisible — dashboard saw
+  zero prompts mid-run with zero forensic evidence. Now: stderr
+  captured, first failure logs ``log_warn`` with path + errno, a
+  session-level guard suppresses subsequent failures so a sustained
+  write-fail doesn't flood the runlog.
+- **Migration walker exception narrowness (LOW).**
+  ``migrate_to_current``'s per-step ``except (KeyError, TypeError,
+  ValueError)`` let RuntimeError / AttributeError / OSError /
+  AssertionError from custom migrations propagate uncaught, defeating
+  the typed ``CalibrationProfileMigrationError`` contract that the
+  loader's catch site expects. Walker now catches Exception (with
+  ``CalibrationProfileMigrationError`` re-raised as-is so we don't
+  double-wrap). Regression: `tests/unit/voice/calibration/test_migrations_registry.py`
+  (3 new cases — RuntimeError, AttributeError, no-double-wrap).
+- **Race in `start_calibration_job` between in-flight check + spawn (LOW).**
+  Two near-simultaneous POSTs for the same mind_id could both pass
+  the file-based ``_job_in_flight`` check before either registered
+  into ``_active_jobs``, racing into duplicate spawns that would
+  corrupt the JSONL progress file. Now: per-mind asyncio.Lock
+  (``LRULockDict``-backed for memory hygiene per anti-pattern #15)
+  serialises the (check + register) so concurrent submissions for
+  the same mind serialise to "first wins, second gets 409".
+
+### Added
+
+- ``CLAUDE.md`` anti-patterns #36 + #37 from this mission's lessons:
+  - #36: ``patch.object`` on async functions auto-detects via Python
+    3.8+ ``AsyncMock`` (covers the 17 P2.T3 test patch sites that
+    migrated cleanly via string-rename without ``new_callable=AsyncMock``).
+  - #37: cryptographic verifier verdict ordering (NO_TRUSTED_KEY
+    before NO_SIGNATURE before MALFORMED before BAD) — covers the
+    P4 5-way verdict invariant where pubkey-None must short-circuit
+    before any ``pubkey.verify(...)`` call.
+
+### Mission
+
+QA closure pass; mission archived at v0.31.0-rc.1 per the
+SHIPPED-and-archived flow. v0.31.0-rc.2 is a strict superset; the
+rc.1 archive footer remains accurate (per-phase commit table +
+operator validation gate steps still apply).
 
 ## [0.31.0-rc.1] — 2026-05-06
 
