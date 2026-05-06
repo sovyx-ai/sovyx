@@ -777,11 +777,21 @@ class TestEvaluateRulesBehavior:
 
         assert result.exit_code == 0
         clean = _strip_ansi(result.output)
-        # In --explain mode the verdict renderer surfaces the rule_id
-        # alongside the decision; the R10 fixture has rule_id =
-        # "R10_mic_attenuated" so one of those substrings must appear.
-        assert "R10" in clean or "mic_attenuated" in clean, (
-            f"--explain must surface rule detail; output: {clean!r}"
+        # rc.5 (Agent 3 #1): pre-rc.5 this asserted ``"R10" in clean`` —
+        # but ``rule_id`` always renders in the decisions table at
+        # ``doctor.py:979``, regardless of ``--explain``. A regression
+        # that wired ``explain=True`` to a no-op would have landed
+        # green. The genuine load-bearing strings are the explain-only
+        # block at ``doctor.py:994-1003``: the "Rule trace" header
+        # (string at line 995) AND the per-condition ``"matched:"``
+        # prefix (string at line 1004). Both fire only when
+        # ``explain=True and profile.provenance``.
+        assert "Rule trace" in clean, (
+            f"--explain must render the explain-only block header 'Rule trace'; output: {clean!r}"
+        )
+        assert "matched:" in clean, (
+            f"--explain must render per-condition 'matched:' lines from "
+            f"profile.provenance; output: {clean!r}"
         )
 
     def test_evaluate_rules_fingerprint_failure_returns_generic_failure(self) -> None:

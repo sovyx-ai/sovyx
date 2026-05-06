@@ -466,6 +466,89 @@ class TestLifoRollback:
         finally:
             del _TARGET_CLASS_HANDLERS["TestFragileRevert"]
 
+    async def test_lifo_walker_continues_past_middle_revert_failure(self, tmp_path: Path) -> None:
+        """rc.5 (Agent 3 #2): the LIFO rollback walker MUST continue past
+        per-token revert failures so EARLIER tokens still get their
+        revert attempted.
+
+        Pre-rc.5 the production code at ``_applier.py:563-606`` was correct
+        — the loop's ``except Exception`` clause logs + falls through to
+        the next iteration. But the test suite only exercised 2-decision
+        scenarios where a single revert failure exhausted the loop in
+        one step. A regression that added a ``break`` after the warning
+        would silently pass CI.
+
+        This test drives 3 decisions where:
+        * apply[0] succeeds → token 0 in ``applied``
+        * apply[1] succeeds → token 1 in ``applied``
+        * apply[2] raises ApplyError → triggers LIFO rollback
+        * revert[1] (the middle token by LIFO order) raises RuntimeError
+        * revert[0] MUST still be invoked (loop continued past
+          revert[1] failure)
+        """
+        applied_calls: list[int] = []
+        reverted_calls: list[int] = []
+
+        async def _apply_test(decision: CalibrationDecision, snapshot: Any, applier: Any) -> int:
+            idx = int(decision.value)  # type: ignore[arg-type]
+            if idx == 2:
+                raise ApplyError(
+                    f"third-fails at idx={idx}",
+                    decision=decision,
+                    decision_index=idx,
+                )
+            applied_calls.append(idx)
+            return idx
+
+        async def _revert_test(token: int, snapshot: Any, applier: Any) -> None:
+            # The LIFO walker calls revert in reverse order: token 1 first,
+            # then token 0. We make token 1's revert raise to simulate a
+            # broken handler; token 0's revert MUST still be invoked.
+            if token == 1:
+                raise RuntimeError(f"synthetic revert failure for token={token}")
+            reverted_calls.append(token)
+
+        register_target_class_pair(
+            "TestMultiTokenContinue", apply=_apply_test, revert=_revert_test
+        )
+        try:
+            applier = CalibrationApplier(data_dir=tmp_path)
+            decisions = (
+                _set_high(target_class="TestMultiTokenContinue", value=0, target="m.0"),
+                _set_high(target_class="TestMultiTokenContinue", value=1, target="m.1"),
+                _set_high(target_class="TestMultiTokenContinue", value=2, target="m.2"),
+            )
+            profile = _profile(decisions=decisions)
+            events, original = _capture_logger()
+            try:
+                with pytest.raises(ApplyError) as exc_info:
+                    await applier.apply(profile)
+            finally:
+                _restore_logger(original)
+
+            # Apply chain: 0 + 1 succeeded; 2 raised.
+            assert applied_calls == [0, 1]
+            # LIFO rollback: token 1 attempted first (raised) + token 0
+            # MUST still be invoked. Pre-rc.5, a regression with `break`
+            # in the walker would leave reverted_calls empty.
+            assert reverted_calls == [0], (
+                f"walker MUST continue past middle revert failure; "
+                f"got reverted_calls={reverted_calls}"
+            )
+            # rollback_step_failed event fired for token 1 with the
+            # exception_type populated.
+            failed_events = [
+                e for e in events if e[0] == "voice.calibration.applier.rollback_step_failed"
+            ]
+            assert len(failed_events) == 1
+            assert failed_events[0][1]["decision_index"] == 1
+            assert failed_events[0][1]["exception_type"] == "RuntimeError"
+            # Original ApplyError surfaces (not the rollback's RuntimeError).
+            assert "third-fails" in str(exc_info.value)
+            assert exc_info.value.decision_index == 2
+        finally:
+            del _TARGET_CLASS_HANDLERS["TestMultiTokenContinue"]
+
     async def test_empty_applicable_no_op(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
         profile = _profile(decisions=(_advise(),))

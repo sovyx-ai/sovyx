@@ -39,9 +39,16 @@ from sovyx.engine.config import DatabaseConfig, EngineConfig, VoiceFeaturesConfi
 from sovyx.voice.calibration import iter_rules
 
 
-@pytest.mark.integration
 class TestPublicSurface:
-    """Every operator-doc symbol is importable from the package."""
+    """Every operator-doc symbol is importable from the package.
+
+    rc.5 (Agent 2 A.4): ``@pytest.mark.integration`` removed — pure
+    in-process ``hasattr`` audit, no real ML / SQLite / cross-component
+    wiring per ``pyproject.toml`` marker criteria. Pre-rc.5 the marker
+    silently skipped this class from default CI; a public-surface drift
+    (e.g. an `__init__.py` re-export accidentally dropped) would land
+    green. Same logic as rc.4 E.3 fix.
+    """
 
     def test_calibration_package_re_exports(self) -> None:
         # Symbols documented in docs/modules/voice-calibration.md +
@@ -80,9 +87,13 @@ class TestPublicSurface:
             assert hasattr(calibration_pkg, name), f"sovyx.voice.calibration must export {name!r}"
 
 
-@pytest.mark.integration
 class TestRuleRegistry:
-    """All 10 spec-listed rules R10..R95 are discoverable."""
+    """All 10 spec-listed rules R10..R95 are discoverable.
+
+    rc.5 (Agent 2 A.4): integration marker removed — pure ``iter_rules()``
+    walk, no IO. A regression that drops a rule would have shipped
+    silently pre-rc.5.
+    """
 
     def test_all_ten_rules_discovered(self) -> None:
         rule_ids = {r.rule_id for r in iter_rules()}
@@ -112,9 +123,12 @@ class TestRuleRegistry:
         )
 
 
-@pytest.mark.integration
 class TestEngineConfigFlag:
-    """EngineConfig.voice.calibration_wizard_enabled is honoured."""
+    """EngineConfig.voice.calibration_wizard_enabled is honoured.
+
+    rc.5 (Agent 2 A.4): integration marker removed — pure pydantic
+    instantiation + env round-trip; no IO.
+    """
 
     def test_default_is_false(self) -> None:
         cfg = EngineConfig(
@@ -167,7 +181,9 @@ class TestCorpusSynth:
             assert result.status == "complete"
 
 
-@pytest.mark.integration
+# rc.5 (Agent 2 A.4): integration marker removed — `create_app()` +
+# route inspection is in-process. A regression that drops a route
+# would have shipped silently pre-rc.5.
 class TestDashboardEndpointWiring:
     """Every dashboard endpoint the frontend consumes is registered."""
 
@@ -193,7 +209,8 @@ class TestDashboardEndpointWiring:
         assert "/api/voice/calibration/jobs/{job_id}/stream" in ws_paths
 
 
-@pytest.mark.integration
+# rc.5 (Agent 2 A.4): integration marker removed — `CliRunner` + `--help`
+# inspection is in-process; no real subprocess fired.
 class TestCLISurface:
     """Every documented --calibrate flag is parseable."""
 
@@ -244,7 +261,8 @@ def _behavior_client(_behavior_app):  # noqa: ANN001 -- FastAPI app
     return TestClient(_behavior_app, headers={"Authorization": f"Bearer {_AUDIT_TOKEN}"})
 
 
-@pytest.mark.integration
+# rc.5 (Agent 2 A.4): integration marker removed — fastapi.TestClient
+# is in-process. Same logic as rc.4 E.3 fix for the race tests.
 class TestStartEndpointBehavior:
     """POST /start: malformed body → 422; no auth → 401; same-mind concurrent → 409."""
 
@@ -290,7 +308,7 @@ class TestStartEndpointBehavior:
         assert response.status_code in (401, 403)
 
 
-@pytest.mark.integration
+# rc.5 (Agent 2 A.4): integration marker removed — TestClient in-process.
 class TestCancelEndpointBehavior:
     """POST /jobs/{id}/cancel: rejects unauthenticated; idempotent on missing job."""
 
@@ -312,7 +330,8 @@ class TestCancelEndpointBehavior:
         assert body["cancel_signal_written"] is True
 
 
-@pytest.mark.integration
+# rc.5 (Agent 2 A.4): integration marker removed — TestClient
+# websocket_connect is in-process; auth check is local.
 class TestWebSocketAuthBehavior:
     """WS /jobs/{id}/stream: accepts query-param token; rejects wrong tokens."""
 
@@ -413,6 +432,14 @@ class TestConcurrentStartRaceQaFix5:
         # JSONL progress files don't land in ~/.sovyx (anti-pattern #23).
         app.state.engine_config = type("C", (), {"data_dir": tmp_path})()
 
+        # rc.5 (Agent 2 A.2): capture the original ``_START_LOCKS`` so the
+        # finally block can restore it. Pre-rc.5 the test reassigned the
+        # module attribute but never restored — leaking a test-injected
+        # LRULockDict instance (with our test-keyed locks) into the
+        # daemon's runtime singleton. Functionally safe (LRULockDict
+        # bounded + locks self-prune), but contradicts the docstring's
+        # "no state leaks into the next test" promise.
+        _original_start_locks = vc_route._START_LOCKS
         # Reset the module-level registries so prior tests don't bleed in.
         vc_route._active_jobs.clear()
         vc_route._START_LOCKS = LRULockDict(maxsize=256)
@@ -464,6 +491,9 @@ class TestConcurrentStartRaceQaFix5:
                 if not fut.done():
                     fut.cancel()
             vc_route._active_jobs.clear()
+            # rc.5 (Agent 2 A.2): restore the original LRULockDict so
+            # the daemon runtime sees its singleton again.
+            vc_route._START_LOCKS = _original_start_locks
 
     @pytest.mark.asyncio()
     async def test_concurrent_different_minds_both_get_202(self, tmp_path: Path) -> None:
@@ -479,6 +509,9 @@ class TestConcurrentStartRaceQaFix5:
         app = create_app(token=_AUDIT_TOKEN)
         app.state.engine_config = type("C", (), {"data_dir": tmp_path})()
 
+        # rc.5 (Agent 2 A.2): same restore-after-test pattern as
+        # test_concurrent_same_mind_yields_one_202_and_one_409.
+        _original_start_locks = vc_route._START_LOCKS
         vc_route._active_jobs.clear()
         vc_route._START_LOCKS = LRULockDict(maxsize=256)
 
@@ -513,3 +546,5 @@ class TestConcurrentStartRaceQaFix5:
                 if not fut.done():
                     fut.cancel()
             vc_route._active_jobs.clear()
+            # rc.5 (Agent 2 A.2): restore the original LRULockDict.
+            vc_route._START_LOCKS = _original_start_locks

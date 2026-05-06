@@ -738,3 +738,229 @@ class TestApplierEmissionPrivacy:
         assert "voice.calibration.applier.dry_run" in names
         leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
         assert not leaks, f"raw PII leaks (dry-run): {leaks}"
+
+
+# ────────────────────────────────────────────────────────────────────
+# rc.5 (Agent 3 #3): Widen privacy gate to engine / _measurer /
+# _fingerprint / _runner loggers. Pre-rc.5 these 4 modules' emission
+# sites were CLEAN by inspection but UNGATED — a future regression
+# adding raw mind_id (or a path) would slip past CI. The new tests
+# walk each module's logger through the privacy heuristic.
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestEngineEmissionPrivacy:
+    """Walk every emission site in ``calibration/engine.py`` through
+    the privacy heuristic with a SUSPICIOUS_MIND_ID profile evaluation.
+    """
+
+    def test_engine_evaluate_emits_no_raw_pii(self, tmp_path: Path) -> None:
+        from sovyx.voice.calibration import engine as engine_module
+        from sovyx.voice.calibration.engine import CalibrationEngine
+
+        engine_logger = MagicMock()
+        with patch.object(engine_module, "logger", engine_logger):
+            engine = CalibrationEngine()
+            # Drive a full evaluate cycle with the canonical fingerprint +
+            # measurements + null triage so multiple rules fire on
+            # different code paths.
+            profile = engine.evaluate(
+                mind_id=SUSPICIOUS_MIND_ID,
+                fingerprint=_fingerprint(),
+                measurements=_measurements(),
+                triage_result=None,
+            )
+
+        # Drive a SECOND evaluate with a winning triage so the
+        # triage-gated branches fire.
+        with patch.object(engine_module, "logger", engine_logger):
+            engine2 = CalibrationEngine()
+            profile2 = engine2.evaluate(
+                mind_id=SUSPICIOUS_MIND_ID,
+                fingerprint=_fingerprint(),
+                measurements=_measurements(),
+                triage_result=_triage(),
+            )
+
+        assert profile is not None
+        assert profile2 is not None
+        events = _audited(_flatten_calls([engine_logger]))
+        assert events, "expected engine.evaluate to emit telemetry"
+        names = {n for n, _ in events}
+        # Engine MUST emit at least the run_started + run_completed events
+        # so a regression that drops them is caught.
+        assert any("engine" in n for n in names), (
+            f"expected at least one voice.calibration.engine.* event; got {names}"
+        )
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (engine.evaluate): {leaks}"
+
+
+class TestMeasurerEmissionPrivacy:
+    """Walk the ``_measurer.amixer_failed`` debug emission through
+    the privacy heuristic. Drives the failure path by patching
+    subprocess.run to raise OSError.
+    """
+
+    def test_measurer_amixer_failure_emits_no_raw_pii(self, tmp_path: Path) -> None:
+        import contextlib
+        import subprocess as _subprocess
+
+        from sovyx.voice.calibration import _measurer as measurer_module
+
+        measurer_logger = MagicMock()
+
+        # Patch subprocess.run inside _measurer's namespace so the
+        # amixer probe raises + drives the debug emission.
+        def _raise_oserror(*_args, **_kwargs):  # noqa: ANN001, ANN202
+            raise OSError("synthetic amixer failure")
+
+        # Drive a measurement capture through the failing subprocess.
+        # _measurer's public API is capture_measurements.
+        with (
+            patch.object(measurer_module, "logger", measurer_logger),
+            patch.object(measurer_module.subprocess, "run", side_effect=_raise_oserror),
+        ):
+            # capture_measurements with no triage / no tarball → all
+            # mixer probes fall through to the failure branch. We don't
+            # care if the call itself raises; only that NO logger
+            # emission carries raw PII before it errors.
+            from sovyx.voice.calibration._measurer import capture_measurements
+
+            with contextlib.suppress(_subprocess.SubprocessError, OSError):
+                capture_measurements(diag_tarball_root=None, triage_result=None, duration_s=0.0)
+
+        events = _audited(_flatten_calls([measurer_logger]))
+        # The amixer_failed event may or may not fire depending on which
+        # probe is reached first; what matters is that NO emission leaks
+        # raw PII.
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (measurer): {leaks}"
+
+
+class TestFingerprintEmissionPrivacy:
+    """Walk the ``_fingerprint.subprocess_failed`` debug emission through
+    the privacy heuristic.
+    """
+
+    def test_fingerprint_subprocess_failure_emits_no_raw_pii(self, tmp_path: Path) -> None:
+        import contextlib
+
+        from sovyx.voice.calibration import _fingerprint as fingerprint_module
+
+        fingerprint_logger = MagicMock()
+
+        def _raise_oserror(*_args, **_kwargs):  # noqa: ANN001, ANN202
+            raise OSError("synthetic fingerprint subprocess failure")
+
+        # Drive capture_fingerprint with the failing subprocess. The
+        # fingerprint module probes multiple binaries (uname, lscpu,
+        # dmidecode, etc.); each failure drives the debug emission.
+        with (
+            patch.object(fingerprint_module, "logger", fingerprint_logger),
+            patch.object(fingerprint_module.subprocess, "run", side_effect=_raise_oserror),
+        ):
+            from sovyx.voice.calibration._fingerprint import capture_fingerprint
+
+            # Platform-specific failure paths may surface; we only care
+            # that NO logger emission carries raw PII before it errors.
+            with contextlib.suppress(Exception):
+                capture_fingerprint()
+
+        events = _audited(_flatten_calls([fingerprint_logger]))
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (fingerprint): {leaks}"
+
+
+class TestRunnerEmissionPrivacy:
+    """Walk the ``_runner`` emissions (full_diag_started / failed /
+    completed / cancel_grace_expired / cancel_completed) through the
+    privacy heuristic.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_runner_full_diag_emits_no_raw_pii(self, tmp_path: Path) -> None:
+        from sovyx.voice.diagnostics import _runner as runner_module
+
+        runner_logger = MagicMock()
+
+        # Build a minimal _FakeAsyncProcess that returns 0 cleanly.
+        class _FakeProc:
+            pid = 12345
+            returncode: int | None = None
+
+            async def wait(self) -> int:
+                self.returncode = 0
+                return 0
+
+        async def _factory(*_args, **_kwargs):  # noqa: ANN001, ANN202
+            return _FakeProc()
+
+        # Stage a fake bash extraction + a synthetic tarball under
+        # output_root so run_full_diag_async finds something on success.
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/bin/bash\nexit 0\n")
+        output_root = tmp_path / "out"
+        output_root.mkdir()
+        diag_dir = output_root / "sovyx-diag-host-20260506T180000Z-deadbeef"
+        diag_dir.mkdir()
+        tarball = diag_dir / "sovyx-voice-diag_x.tar.gz"
+        tarball.write_bytes(b"\x1f\x8b\x08\x00")
+
+        with (
+            patch.object(runner_module, "logger", runner_logger),
+            patch.object(runner_module, "_check_prerequisites"),
+            patch.object(runner_module, "_extract_bash_to_temp", return_value=extracted),
+            patch.object(runner_module.asyncio, "create_subprocess_exec", side_effect=_factory),
+        ):
+            await runner_module.run_full_diag_async(output_root=output_root)
+
+        events = _audited(_flatten_calls([runner_logger]))
+        names = {n for n, _ in events}
+        assert "voice.diagnostics.full_diag_started" in names
+        assert "voice.diagnostics.full_diag_completed" in names
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (runner success path): {leaks}"
+
+    @pytest.mark.asyncio()
+    async def test_runner_full_diag_failed_emits_no_raw_pii(self, tmp_path: Path) -> None:
+        import contextlib
+
+        from sovyx.voice.diagnostics import _runner as runner_module
+
+        runner_logger = MagicMock()
+
+        class _FakeProcFailed:
+            pid = 12346
+            returncode: int | None = None
+
+            async def wait(self) -> int:
+                self.returncode = 3  # selftest_failed signal
+                return 3
+
+        async def _factory(*_args, **_kwargs):  # noqa: ANN001, ANN202
+            return _FakeProcFailed()
+
+        extracted = tmp_path / "extracted2"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/bin/bash\nexit 3\n")
+        output_root = tmp_path / "out2"
+        output_root.mkdir()
+
+        from sovyx.voice.diagnostics import DiagRunError
+
+        with (
+            patch.object(runner_module, "logger", runner_logger),
+            patch.object(runner_module, "_check_prerequisites"),
+            patch.object(runner_module, "_extract_bash_to_temp", return_value=extracted),
+            patch.object(runner_module.asyncio, "create_subprocess_exec", side_effect=_factory),
+            contextlib.suppress(DiagRunError),
+        ):
+            await runner_module.run_full_diag_async(output_root=output_root)
+
+        events = _audited(_flatten_calls([runner_logger]))
+        names = {n for n, _ in events}
+        assert "voice.diagnostics.full_diag_failed" in names
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (runner failure path): {leaks}"
