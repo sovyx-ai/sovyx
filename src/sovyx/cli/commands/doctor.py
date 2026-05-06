@@ -354,6 +354,16 @@ def doctor_voice(
         "fire. Use for fast revalidation when you trust the prior "
         "diagnostic; full diag remains the default.",
     ),
+    signing_key: Path | None = typer.Option(  # noqa: B008 -- typer Options canonical pattern
+        None,
+        "--signing-key",
+        help="With --calibrate: PEM-encoded Ed25519 private key path "
+        "for signing the persisted calibration profile. When omitted, "
+        "the profile is persisted unsigned (LENIENT-loadable; STRICT "
+        "rejects). Generate via "
+        "`scripts/dev/generate_calibration_signing_key.py` "
+        "(dev-only); production rotation guidance ships in v0.31.0+.",
+    ),
 ) -> None:
     """Voice Capture Health Lifecycle diagnostics (ADR §4.8 + v1.3 §4.4).
 
@@ -424,6 +434,7 @@ def doctor_voice(
         show=show,
         rollback=rollback,
         surgical=surgical,
+        signing_key=signing_key,
     )
     raise typer.Exit(exit_code)
 
@@ -444,6 +455,7 @@ def _run_voice_doctor(
     show: bool = False,
     rollback: bool = False,
     surgical: bool = False,
+    signing_key: Path | None = None,
 ) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
     if calibrate and show:
@@ -457,6 +469,7 @@ def _run_voice_doctor(
             dry_run=dry_run,
             explain=explain,
             surgical=surgical,
+            signing_key=signing_key,
         )
     if full_diag:
         return _run_voice_full_diag(non_interactive=non_interactive, surgical=surgical)
@@ -656,6 +669,7 @@ def _run_voice_calibrate(
     dry_run: bool,
     explain: bool,
     surgical: bool = False,
+    signing_key: Path | None = None,
 ) -> int:
     """Execute the calibration engine end-to-end + persist the profile.
 
@@ -758,6 +772,7 @@ def _run_voice_calibrate(
     applier = CalibrationApplier(
         data_dir=data_dir,
         mind_yaml_path=data_dir / mind_id / "mind.yaml",
+        signing_key_path=signing_key,
     )
     try:
         # CalibrationApplier.apply is async (P1+; runs handlers via

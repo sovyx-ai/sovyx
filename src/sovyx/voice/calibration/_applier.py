@@ -297,9 +297,14 @@ class CalibrationApplier:
         tuning: Voice tuning config; passed to mixer apply paths.
             ``None`` (default) instantiates ``VoiceTuningConfig()``
             on first use.
+        signing_key_path: Optional Ed25519 PEM private key path. When
+            supplied, the profile is signed at the persistence boundary
+            (P4 v0.30.32). ``None`` (default) writes unsigned profiles
+            which the loader treats as ``REJECTED_NO_SIGNATURE``
+            (LENIENT-accepted, STRICT-rejected).
     """
 
-    __slots__ = ("_data_dir", "_mind_yaml_path", "_tuning")
+    __slots__ = ("_data_dir", "_mind_yaml_path", "_signing_key_path", "_tuning")
 
     def __init__(
         self,
@@ -307,10 +312,12 @@ class CalibrationApplier:
         data_dir: Path,
         mind_yaml_path: Path | None = None,
         tuning: Any = None,  # noqa: ANN401 -- VoiceTuningConfig (lazy-imported to avoid pydantic circular)
+        signing_key_path: Path | None = None,
     ) -> None:
         self._data_dir = data_dir
         self._mind_yaml_path = mind_yaml_path
         self._tuning = tuning
+        self._signing_key_path = signing_key_path
 
     # ────────────────────────────────────────────────────────────────
     # Public API
@@ -407,7 +414,11 @@ class CalibrationApplier:
                 skipped_count=len(skipped),
             )
         else:
-            target_path = save_calibration_profile(profile, data_dir=self._data_dir)
+            target_path = save_calibration_profile(
+                profile,
+                data_dir=self._data_dir,
+                signing_key_path=self._signing_key_path,
+            )
             logger.info(
                 "voice.calibration.applier.apply_succeeded",
                 profile_id_hash=profile_hash,
