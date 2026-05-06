@@ -431,5 +431,54 @@
     "tier2Description": "Rota el dispositivo de MME / DirectSound / WDM-KS a WASAPI y luego activa el modo exclusivo. Se activa cuando el ganador de la cascada está en una host API no-WASAPI.",
     "tier3Label": "Capa 3 — WASAPI exclusivo",
     "tier3Description": "Captura en modo exclusivo. Esquiva cada APO de captura por endpoint, incluyendo Microsoft Voice Clarity. La corrección durable de Voice Clarity per CLAUDE.md anti-pattern #21."
+  },
+  "calibration": {
+    "title": "Calibración de voz",
+    "subtitle": "Sovyx ajustará la voz para tu hardware específico. Tarda de 8 a 12 minutos; mantén el micrófono conectado.",
+    "estimated_duration": "Duración estimada: 8-12 minutos.",
+    "detected": {
+      "system": "Sistema",
+      "audio_stack": "Stack de audio"
+    },
+    "button": {
+      "start": "Iniciar calibración",
+      "cancel": "Cancelar",
+      "continue": "Continuar",
+      "try_again": "Intentar de nuevo",
+      "use_simple_setup": "Usar configuración simple"
+    },
+    "progress": {
+      "suffix": "completado"
+    },
+    "status": {
+      "pending": "Trabajo de calibración creado",
+      "probing": "Capturando huella del hardware",
+      "fast_path_lookup": "Buscando perfil compatible",
+      "fast_path_apply": "Aplicando perfil compatible",
+      "fast_path_validate": "Validando aplicación rápida",
+      "slow_path_diag": "Ejecutando diagnóstico forense (8-12 min)",
+      "slow_path_calibrate": "Triaje del diagnóstico + capturando mediciones",
+      "slow_path_apply": "Aplicando perfil de calibración",
+      "done": "Calibración completa",
+      "failed": "La calibración falló",
+      "cancelled": "Calibración cancelada",
+      "fallback": "Volviendo a configuración simple"
+    },
+    "terminal": {
+      "done": {
+        "title": "La voz está calibrada para tu hardware.",
+        "winner": "Problema detectado: {{hid}}"
+      },
+      "failed": {
+        "title": "La calibración falló."
+      },
+      "cancelled": {
+        "title": "La calibración fue cancelada."
+      },
+      "fallback": {
+        "title": "La calibración no pudo completarse en este hardware.",
+        "subtitle": "Razón: {{reason}}. Usa el asistente de configuración simple."
+      }
+    }
   }
 }

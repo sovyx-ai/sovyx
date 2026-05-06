@@ -431,5 +431,54 @@
     "tier2Description": "Rotates the device away from MME / DirectSound / WDM-KS to WASAPI then engages exclusive mode. Activates when the cascade winner is on a non-WASAPI host API.",
     "tier3Label": "Tier 3 — WASAPI exclusive",
     "tier3Description": "Exclusive-mode capture. Bypasses every per-endpoint capture APO including Microsoft Voice Clarity. The durable Voice Clarity fix per CLAUDE.md anti-pattern #21."
+  },
+  "calibration": {
+    "title": "Voice calibration",
+    "subtitle": "Sovyx will tune voice for your specific hardware. Takes 8-12 minutes; please leave the microphone connected.",
+    "estimated_duration": "Estimated duration: 8-12 minutes.",
+    "detected": {
+      "system": "System",
+      "audio_stack": "Audio stack"
+    },
+    "button": {
+      "start": "Start calibration",
+      "cancel": "Cancel",
+      "continue": "Continue",
+      "try_again": "Try again",
+      "use_simple_setup": "Use simple setup"
+    },
+    "progress": {
+      "suffix": "complete"
+    },
+    "status": {
+      "pending": "Calibration job created",
+      "probing": "Capturing hardware fingerprint",
+      "fast_path_lookup": "Looking up matching profile",
+      "fast_path_apply": "Applying matched profile",
+      "fast_path_validate": "Validating fast-path apply",
+      "slow_path_diag": "Running forensic diagnostic (8-12 min)",
+      "slow_path_calibrate": "Triaging diagnostic + capturing measurements",
+      "slow_path_apply": "Applying calibration profile",
+      "done": "Calibration complete",
+      "failed": "Calibration failed",
+      "cancelled": "Calibration cancelled",
+      "fallback": "Falling back to simple setup"
+    },
+    "terminal": {
+      "done": {
+        "title": "Voice is calibrated for your hardware.",
+        "winner": "Detected issue: {{hid}}"
+      },
+      "failed": {
+        "title": "Calibration failed."
+      },
+      "cancelled": {
+        "title": "Calibration was cancelled."
+      },
+      "fallback": {
+        "title": "Calibration could not complete on this hardware.",
+        "subtitle": "Reason: {{reason}}. Use the simple setup wizard instead."
+      }
+    }
   }
 }
