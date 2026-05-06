@@ -58,6 +58,7 @@ from starlette.status import (
 )
 
 from sovyx.dashboard.routes._deps import verify_token
+from sovyx.engine._lock_dict import LRULockDict
 from sovyx.observability.logging import get_logger
 from sovyx.observability.privacy import short_hash
 from sovyx.voice.calibration import (
@@ -96,6 +97,19 @@ read_all is O(file size); per-job files stay small at <50 events)."""
 # per in-flight job (matched by the same per-mind 409 contract that
 # /start enforces).
 _active_jobs: dict[str, asyncio.Task[None]] = {}
+
+# QA-FIX-5 (v0.31.0-rc.2) — race-free in-flight-check + spawn.
+#
+# Pre-rc.2 ``start_calibration_job`` did the file-based ``_job_in_flight``
+# read FIRST, then registered the task in ``_active_jobs``. Two near-
+# simultaneous POSTs for the same mind_id could both pass the check
+# before either wrote a snapshot to the JSONL progress file or
+# registered into ``_active_jobs``, racing into a duplicate spawn that
+# would corrupt the progress file. Now: a per-mind asyncio.Lock
+# (LRULockDict-backed for memory hygiene per anti-pattern #15)
+# serialises the (check + register) so concurrent submissions for the
+# same mind serialise to "first wins, second gets 409".
+_START_LOCKS: LRULockDict[str] = LRULockDict(maxsize=256)
 
 
 # ====================================================================
@@ -311,49 +325,61 @@ async def start_calibration_job(
     orch = _resolve_orchestrator(request)
     job_id = body.mind_id  # v0.30.16: one job per mind, job_id == mind_id
 
-    if _job_in_flight(orch, job_id):
-        raise HTTPException(
-            status_code=HTTP_409_CONFLICT,
-            detail=(
-                f"A calibration job for mind '{body.mind_id}' is already "
-                f"in flight. Cancel it via POST "
-                f"/api/voice/calibration/jobs/{job_id}/cancel before "
-                f"submitting a new one."
-            ),
-        )
-
-    # Spawn the orchestrator as a fire-and-forget asyncio task. The
-    # task runs concurrently with the dashboard request handler; the
-    # dashboard only blocks on the spawn call.
-    async def _runner() -> None:
-        try:
-            await orch.run(job_id=job_id, mind_id=body.mind_id)
-        except asyncio.CancelledError:
-            # Mid-stage cancellation flowed through. The orchestrator's
-            # own CancelledError handler at run()'s top-level emits the
-            # CANCELLED state; we just let the cancellation surface.
-            raise
-        except Exception:
-            logger.exception(
-                "voice.calibration.wizard.runner_failed",
-                job_id_hash=short_hash(job_id),
-                mind_id_hash=short_hash(body.mind_id),
+    # QA-FIX-5 (v0.31.0-rc.2): per-mind lock around the
+    # (in-flight check + task register) atomic. Pre-rc.2 two near-
+    # simultaneous POSTs could both pass ``_job_in_flight`` before
+    # either wrote a snapshot or registered into ``_active_jobs``,
+    # racing into duplicate spawns that corrupted the JSONL progress
+    # file. Now: per-mind asyncio.Lock serialises the contender
+    # second POST blocks until the first one has registered, then
+    # the second sees the in-flight task and gets 409.
+    start_lock = _START_LOCKS.setdefault(job_id)
+    async with start_lock:
+        if _job_in_flight(orch, job_id) or (
+            job_id in _active_jobs and not _active_jobs[job_id].done()
+        ):
+            raise HTTPException(
+                status_code=HTTP_409_CONFLICT,
+                detail=(
+                    f"A calibration job for mind '{body.mind_id}' is already "
+                    f"in flight. Cancel it via POST "
+                    f"/api/voice/calibration/jobs/{job_id}/cancel before "
+                    f"submitting a new one."
+                ),
             )
-        finally:
-            # Self-prune from the registry whether we exited by terminal
-            # state, cancellation, or unhandled exception. Idempotent.
-            _active_jobs.pop(job_id, None)
 
-    # Use asyncio.ensure_future so the task is properly scheduled in
-    # the running event loop.
-    task: asyncio.Task[None] = asyncio.ensure_future(_runner())  # noqa: RUF006
-    _active_jobs[job_id] = task
+        # Spawn the orchestrator as a fire-and-forget asyncio task. The
+        # task runs concurrently with the dashboard request handler; the
+        # dashboard only blocks on the spawn call.
+        async def _runner() -> None:
+            try:
+                await orch.run(job_id=job_id, mind_id=body.mind_id)
+            except asyncio.CancelledError:
+                # Mid-stage cancellation flowed through. The orchestrator's
+                # own CancelledError handler at run()'s top-level emits the
+                # CANCELLED state; we just let the cancellation surface.
+                raise
+            except Exception:
+                logger.exception(
+                    "voice.calibration.wizard.runner_failed",
+                    job_id_hash=short_hash(job_id),
+                    mind_id_hash=short_hash(body.mind_id),
+                )
+            finally:
+                # Self-prune from the registry whether we exited by terminal
+                # state, cancellation, or unhandled exception. Idempotent.
+                _active_jobs.pop(job_id, None)
 
-    logger.info(
-        "voice.calibration.wizard.start",
-        job_id_hash=short_hash(job_id),
-        mind_id_hash=short_hash(body.mind_id),
-    )
+        # Use asyncio.ensure_future so the task is properly scheduled in
+        # the running event loop.
+        task: asyncio.Task[None] = asyncio.ensure_future(_runner())  # noqa: RUF006
+        _active_jobs[job_id] = task
+
+        logger.info(
+            "voice.calibration.wizard.start",
+            job_id_hash=short_hash(job_id),
+            mind_id_hash=short_hash(body.mind_id),
+        )
 
     return StartCalibrationResponse(
         job_id=job_id,
