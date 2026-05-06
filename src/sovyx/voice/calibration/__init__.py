@@ -64,6 +64,7 @@ from sovyx.voice.calibration._applier import (
     CalibrationApplier,
 )
 from sovyx.voice.calibration._fingerprint import capture_fingerprint
+from sovyx.voice.calibration._measurer import capture_measurements
 from sovyx.voice.calibration._persistence import (
     CalibrationProfileLoadError,
     load_calibration_profile,
@@ -113,6 +114,7 @@ __all__ = [
     "RuleContext",
     "RuleEvaluation",
     "capture_fingerprint",
+    "capture_measurements",
     "iter_rules",
     "load_calibration_profile",
     "profile_path",
