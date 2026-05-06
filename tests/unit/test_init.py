@@ -11,14 +11,14 @@ from sovyx import __version__
 
 def test_version_exists() -> None:
     """Package exposes __version__."""
-    assert re.match(r"^\d+\.\d+\.\d+$", __version__)
+    assert re.match(r"^\d+\.\d+\.\d+(?:rc\d+)?$", __version__)
 
 
 def test_version_is_semver() -> None:
     """Version follows semantic versioning."""
     from sovyx import __version__
 
-    assert re.match(r"^\d+\.\d+\.\d+$", __version__)
+    assert re.match(r"^\d+\.\d+\.\d+(?:rc\d+)?$", __version__)
 
 
 def test_main_module_prints_version() -> None:

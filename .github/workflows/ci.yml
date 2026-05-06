@@ -259,3 +259,31 @@ jobs:
       - uses: ./.github/actions/setup-sovyx-python
       - name: Refuse silent log-volume regressions (§23.2)
         run: uv run python scripts/check_log_noise.py
+
+  voice-bash-diag-smoke:
+    # P7.T1 (mission MISSION-voice-calibration-extreme-audit-2026-05-06.md
+    # §11.2 #20): real bash diag end-to-end smoke test on Linux.
+    # Asserts the bundled toolkit + the async-native runner + the
+    # in-process triage all complete without crashing on a clean
+    # sovyx-4core runner. The gate is INTENTIONALLY non-strict on
+    # tarball content — we only check that:
+    #   * The diag exits 0 (no selftest failure / no bash error).
+    #   * A result tarball lands in $HOME/sovyx-diag-*/.
+    #   * The CLI's exit code is OK (which already wraps tarball
+    #     existence + triage stability via the runner contract).
+    # Uses ``--surgical`` (CLI flag → bash ``--only A,C,D,E,J
+    # --skip-captures --skip-guardian --skip-operator-prompts``)
+    # to cut runtime from 8-12 min interactive to ~30 s. The runner's
+    # OS-gate already short-circuits non-Linux to
+    # DiagPrerequisiteError, so this job is effectively Linux-only
+    # by virtue of running on sovyx-4core (Ubuntu).
+    name: Voice Bash Diag Smoke
+    runs-on: sovyx-4core
+    needs: log-noise-gate
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sovyx-python
+      - name: Run bash diag end-to-end (surgical scope, no captures)
+        run: |
+          uv run sovyx doctor voice --full-diag --non-interactive --surgical

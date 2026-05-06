@@ -213,5 +213,144 @@ class TestCLISurface:
             "--mind-id",
             "--non-interactive",
             "--fix",
+            # P6 + P7 additions:
+            "--surgical",
+            "--signing-key",
+            "--evaluate-rules",
         ):
             assert flag in result.output, f"--help is missing documented flag {flag!r}"
+
+
+# ════════════════════════════════════════════════════════════════════
+# P7.T2 — behavior tests (not just registration). Mission §11.2 #18.
+# ════════════════════════════════════════════════════════════════════
+
+_AUDIT_TOKEN = "audit-behavior-token"  # noqa: S105 -- test-only token
+
+
+@pytest.fixture()
+def _behavior_app():
+    from sovyx.dashboard.server import create_app
+
+    return create_app(token=_AUDIT_TOKEN)
+
+
+@pytest.fixture()
+def _behavior_client(_behavior_app):  # noqa: ANN001 -- FastAPI app
+    from fastapi.testclient import TestClient
+
+    return TestClient(_behavior_app, headers={"Authorization": f"Bearer {_AUDIT_TOKEN}"})
+
+
+@pytest.mark.integration
+class TestStartEndpointBehavior:
+    """POST /start: malformed body → 422; no auth → 401; same-mind concurrent → 409."""
+
+    def test_malformed_body_returns_422(self, _behavior_client) -> None:  # noqa: ANN001
+        # Pydantic schema requires mind_id (1-64 chars). Empty body → 422.
+        response = _behavior_client.post("/api/voice/calibration/start", json={})
+        assert response.status_code == 422, response.text
+
+    def test_missing_mind_id_returns_422(self, _behavior_client) -> None:  # noqa: ANN001
+        response = _behavior_client.post(
+            "/api/voice/calibration/start", json={"some_other_field": "x"}
+        )
+        assert response.status_code == 422, response.text
+
+    def test_empty_mind_id_returns_422(self, _behavior_client) -> None:  # noqa: ANN001
+        response = _behavior_client.post("/api/voice/calibration/start", json={"mind_id": ""})
+        assert response.status_code == 422, response.text
+
+    def test_oversized_mind_id_returns_422(self, _behavior_client) -> None:  # noqa: ANN001
+        # The Pydantic schema caps mind_id at 64 chars.
+        response = _behavior_client.post(
+            "/api/voice/calibration/start", json={"mind_id": "x" * 65}
+        )
+        assert response.status_code == 422, response.text
+
+    def test_no_auth_returns_401_or_403(self, _behavior_app) -> None:  # noqa: ANN001
+        # FastAPI's default for missing Authorization header is 401
+        # (or 403 depending on the dependency; both are acceptable
+        # per the route's auth contract — what matters is REJECTION).
+        from fastapi.testclient import TestClient
+
+        anon_client = TestClient(_behavior_app)  # No Authorization header
+        response = anon_client.post("/api/voice/calibration/start", json={"mind_id": "default"})
+        assert response.status_code in (401, 403), (
+            f"unauthenticated request must be rejected; got {response.status_code}"
+        )
+
+    def test_wrong_token_returns_401_or_403(self, _behavior_app) -> None:  # noqa: ANN001
+        from fastapi.testclient import TestClient
+
+        bad_client = TestClient(_behavior_app, headers={"Authorization": "Bearer wrong-token"})
+        response = bad_client.post("/api/voice/calibration/start", json={"mind_id": "default"})
+        assert response.status_code in (401, 403)
+
+
+@pytest.mark.integration
+class TestCancelEndpointBehavior:
+    """POST /jobs/{id}/cancel: rejects unauthenticated; idempotent on missing job."""
+
+    def test_cancel_no_auth_returns_401_or_403(self, _behavior_app) -> None:  # noqa: ANN001
+        from fastapi.testclient import TestClient
+
+        anon_client = TestClient(_behavior_app)
+        response = anon_client.post("/api/voice/calibration/jobs/default/cancel")
+        assert response.status_code in (401, 403)
+
+    def test_cancel_unknown_job_is_idempotent(self, _behavior_client) -> None:  # noqa: ANN001
+        # The cancel endpoint touches the .cancel file regardless of
+        # whether a job exists; running on an unknown mind_id returns
+        # 200 with already_terminal=False.
+        response = _behavior_client.post("/api/voice/calibration/jobs/never-started/cancel")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["job_id"] == "never-started"
+        assert body["cancel_signal_written"] is True
+
+
+@pytest.mark.integration
+class TestWebSocketAuthBehavior:
+    """WS /jobs/{id}/stream: accepts query-param token; rejects wrong tokens."""
+
+    def test_ws_accepts_query_param_token(self, _behavior_app) -> None:  # noqa: ANN001
+        from fastapi.testclient import TestClient
+
+        client = TestClient(_behavior_app)
+        # Successful auth → connect() returns the WS context manager
+        # without raising. We don't try to receive (no job is running
+        # so the handler waits indefinitely on the JSONL tail). The
+        # absence of a 1008 close on entry is itself the assertion.
+        with client.websocket_connect(
+            f"/api/voice/calibration/jobs/anything/stream?token={_AUDIT_TOKEN}"
+        ) as ws:
+            ws.close()
+
+    def test_ws_rejects_no_token(self, _behavior_app) -> None:  # noqa: ANN001
+        from fastapi.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        client = TestClient(_behavior_app)
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect("/api/voice/calibration/jobs/anything/stream") as ws,
+        ):
+            ws.receive_json()
+        # Code 1008 is the "policy violation" close used by the
+        # WS handler when the auth check fails.
+        assert exc_info.value.code == 1008
+
+    def test_ws_rejects_wrong_token(self, _behavior_app) -> None:  # noqa: ANN001
+        from fastapi.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        client = TestClient(_behavior_app)
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect(
+                "/api/voice/calibration/jobs/anything/stream?token=NOT_THE_TOKEN"
+            ) as ws,
+        ):
+            ws.receive_json()
+        assert exc_info.value.code == 1008

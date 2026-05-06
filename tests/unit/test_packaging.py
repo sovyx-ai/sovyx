@@ -13,12 +13,15 @@ class TestPackaging:
         assert app is not None
 
     def test_version_string(self) -> None:
-        """Version is a valid semver string."""
+        """Version is a valid semver string (or PEP 440 prerelease)."""
+        import re
+
         from sovyx import __version__
 
-        parts = __version__.split(".")
-        assert len(parts) == 3  # noqa: PLR2004
-        assert all(p.isdigit() for p in parts)
+        # Accept ``X.Y.Z`` (release) or ``X.Y.Zrc<N>`` (PEP 440 RC).
+        # uv/pip normalize ``X.Y.Z-rc.N`` from pyproject.toml to
+        # ``X.Y.ZrcN`` at metadata read time per PEP 440 §3.3.
+        assert re.match(r"^\d+\.\d+\.\d+(?:rc\d+)?$", __version__), __version__
 
     def test_dockerfile_exists(self) -> None:
         """Dockerfile is present in repo root."""
