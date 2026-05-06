@@ -149,6 +149,44 @@ configuration (offline), plus database, brain, LLM connectivity, channels, and
 cost budget (online, requires the daemon). Use `sovyx doctor --json` for
 machine-readable output.
 
+### Voice diagnostics + calibration (Linux)
+
+If voice capture isn't working, the same `doctor` command has a voice subsurface:
+
+```bash
+sovyx doctor voice                       # quick health check (cross-platform)
+sovyx doctor voice --full-diag           # 8-12 min forensic diag + triage (Linux)
+sovyx doctor voice --fix --yes           # apply known mixer remediation
+sovyx doctor voice --calibrate           # full pipeline: fingerprint + diag + rules
+sovyx doctor voice --calibrate --show    # render last persisted profile (read-only)
+sovyx doctor voice --calibrate --rollback  # restore prior profile from .bak slot
+```
+
+`--calibrate` produces a signed `CalibrationProfile` at
+`<data_dir>/<mind_id>/calibration.json` recording every applicable decision
+(set / advise / preserve) with full provenance. See
+[modules/voice-calibration.md](modules/voice-calibration.md) for the rule
+registry, profile schema, telemetry namespace, and rollback semantics.
+
+The dashboard onboarding wizard can host the calibration step. The mount is
+gated by `EngineConfig.voice.calibration_wizard_enabled` (default `False`
+during the v0.30.x soak). To opt in:
+
+```bash
+SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED=true sovyx start
+```
+
+Or in `system.yaml`:
+
+```yaml
+voice:
+  calibration_wizard_enabled: true
+```
+
+The Settings → Voice → Advanced section also exposes a runtime toggle that
+flips the in-memory copy on the running daemon (the env / yaml change is
+still required for the value to survive a daemon restart).
+
 ## Common Commands
 
 | Command | Does |
