@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "profile_id": "11111111-2222-3333-4444-555555555555",
+  "mind_id": "default",
+  "fingerprint": {
+    "schema_version": 1,
+    "captured_at_utc": "2026-05-05T18:00:00Z",
+    "distro_id": "linuxmint",
+    "distro_id_like": "debian",
+    "kernel_release": "6.8.0-50-generic",
+    "kernel_major_minor": "6.8",
+    "cpu_model": "Intel Core i5-1240P",
+    "cpu_cores": 12,
+    "ram_mb": 16384,
+    "has_gpu": false,
+    "gpu_vram_mb": 0,
+    "audio_stack": "pipewire",
+    "pipewire_version": "1.0.5",
+    "pulseaudio_version": null,
+    "alsa_lib_version": "1.2.10",
+    "codec_id": "10ec:0257",
+    "driver_family": "hda",
+    "system_vendor": "Sony",
+    "system_product": "VJFE69F11X-B0221H",
+    "capture_card_count": 1,
+    "capture_devices": ["Internal Mic"],
+    "apo_active": false,
+    "apo_name": null,
+    "hal_interceptors": [],
+    "pulse_modules_destructive": []
+  },
+  "measurements": {
+    "schema_version": 1,
+    "captured_at_utc": "2026-05-05T18:01:00Z",
+    "duration_s": 600.0,
+    "rms_dbfs_per_capture": [-90.0],
+    "vad_speech_probability_max": 0.001,
+    "vad_speech_probability_p99": 0.001,
+    "noise_floor_dbfs_estimate": -95.0,
+    "capture_callback_p99_ms": 12.0,
+    "capture_jitter_ms": 0.5,
+    "portaudio_latency_advertised_ms": 10.0,
+    "mixer_card_index": 0,
+    "mixer_capture_pct": 5,
+    "mixer_boost_pct": 0,
+    "mixer_internal_mic_boost_pct": 0,
+    "mixer_attenuation_regime": "attenuated",
+    "echo_correlation_db": null,
+    "triage_winner_hid": "H10",
+    "triage_winner_confidence": 0.95
+  },
+  "decisions": [
+    {
+      "target": "advice.action",
+      "target_class": "TuningAdvice",
+      "operation": "advise",
+      "value": "sovyx doctor voice --fix --yes",
+      "rationale": "fixture: H10 mixer attenuated case",
+      "rule_id": "R10_mic_attenuated",
+      "rule_version": 1,
+      "confidence": "high"
+    }
+  ],
+  "provenance": [
+    {
+      "rule_id": "R10_mic_attenuated",
+      "rule_version": 1,
+      "fired_at_utc": "2026-05-05T18:02:00.000000+00:00",
+      "matched_conditions": [
+        "fingerprint.audio_stack == 'pipewire'",
+        "measurements.mixer_attenuation_regime == 'attenuated'",
+        "triage_result.winner.hid == 'H10' (confidence=0.95 >= 0.70)"
+      ],
+      "produced_decisions": ["advise: advice.action = 'sovyx doctor voice --fix --yes' (high)"],
+      "confidence": "high"
+    }
+  ],
+  "generated_by_engine_version": "0.30.22",
+  "generated_by_rule_set_version": 10,
+  "generated_at_utc": "2026-05-05T18:02:00.000000+00:00",
+  "signature": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+}

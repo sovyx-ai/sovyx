@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-05-05T18:01:00Z",
+  "duration_s": 600.0,
+  "rms_dbfs_per_capture": [-90.0, -89.5, -91.0],
+  "vad_speech_probability_max": 0.001,
+  "vad_speech_probability_p99": 0.001,
+  "noise_floor_dbfs_estimate": -95.0,
+  "capture_callback_p99_ms": 12.0,
+  "capture_jitter_ms": 0.5,
+  "portaudio_latency_advertised_ms": 10.0,
+  "mixer_card_index": 0,
+  "mixer_capture_pct": 5,
+  "mixer_boost_pct": 0,
+  "mixer_internal_mic_boost_pct": 0,
+  "mixer_attenuation_regime": "attenuated",
+  "echo_correlation_db": null,
+  "triage_winner_hid": "H10",
+  "triage_winner_confidence": 0.95
+}
