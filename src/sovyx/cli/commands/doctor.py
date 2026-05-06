@@ -755,9 +755,19 @@ def _run_voice_calibrate(
     step_label = "Dry-run (no persistence)" if dry_run else "Applying + persisting"
     console.print(f"\n[dim](6/6) {step_label}...[/dim]")
     data_dir = Path.home() / ".sovyx"
-    applier = CalibrationApplier(data_dir=data_dir)
+    applier = CalibrationApplier(
+        data_dir=data_dir,
+        mind_yaml_path=data_dir / mind_id / "mind.yaml",
+    )
     try:
-        apply_result = applier.apply(profile, dry_run=dry_run)
+        # CalibrationApplier.apply is async (P1+; runs handlers via
+        # asyncio.to_thread). The CLI command is sync; use asyncio.run
+        # to drive it. ``allow_medium=True`` mirrors the operator's
+        # explicit ``--yes`` posture for ``sovyx doctor voice
+        # --calibrate`` (the calibrate flow is opt-in by definition).
+        import asyncio  # noqa: PLC0415 -- local import; CLI call boundary
+
+        apply_result = asyncio.run(applier.apply(profile, dry_run=dry_run, allow_medium=True))
     except ApplyError as exc:
         console.print(f"\n[red]Calibration apply failed:[/red] {exc}")
         return EXIT_DOCTOR_GENERIC_FAILURE

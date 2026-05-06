@@ -183,10 +183,6 @@ class WizardOrchestrator:
             "voice.calibration.wizard.job_started",
             job_id_hash=short_hash(job_id),
             mind_id_hash=short_hash(mind_id),
-            # Deprecated raw fields (removal in v0.30.29 per
-            # MISSION-voice-calibration-extreme-audit-2026-05-06 §4.4):
-            job_id=job_id,
-            mind_id=mind_id,
         )
 
         try:
@@ -208,9 +204,6 @@ class WizardOrchestrator:
                 "voice.calibration.wizard.unhandled",
                 job_id_hash=short_hash(job_id),
                 mind_id_hash=short_hash(mind_id),
-                # Deprecated raw fields (removal in v0.30.29):
-                job_id=job_id,
-                mind_id=mind_id,
             )
             failed = self._transition(
                 state,
@@ -252,9 +245,6 @@ class WizardOrchestrator:
             status=state.status.value,
             triage_winner_hid=state.triage_winner_hid or "",
             fallback_reason=state.fallback_reason or "",
-            # Deprecated raw fields (removal in v0.30.29):
-            job_id=state.job_id,
-            mind_id=state.mind_id,
         )
 
         # v0.30.24 T3.8: spec §8.3 dispatch.
@@ -271,9 +261,6 @@ class WizardOrchestrator:
                 duration_s=duration_s,
                 success=True,
                 triage_winner_hid=state.triage_winner_hid or "",
-                # Deprecated raw fields (removal in v0.30.29):
-                job_id=state.job_id,
-                mind_id=state.mind_id,
             )
         elif state.status is WizardStatus.CANCELLED:
             logger.info(
@@ -286,9 +273,6 @@ class WizardOrchestrator:
                 # checkpoints + transitions to CANCELLED with the
                 # current_stage_message preserving prior status info.
                 step=_terminal_step_label(state),
-                # Deprecated raw fields (removal in v0.30.29):
-                job_id=state.job_id,
-                mind_id=state.mind_id,
             )
         elif state.status is WizardStatus.FALLBACK:
             logger.info(
@@ -298,9 +282,6 @@ class WizardOrchestrator:
                 path=path_label,
                 duration_s=duration_s,
                 reason=state.fallback_reason or "unspecified",
-                # Deprecated raw fields (removal in v0.30.29):
-                job_id=state.job_id,
-                mind_id=state.mind_id,
             )
         elif state.status is WizardStatus.FAILED:
             # Spec §8.3 doesn't list a "failed" event but the operator
@@ -314,9 +295,6 @@ class WizardOrchestrator:
                 duration_s=duration_s,
                 success=False,
                 triage_winner_hid=state.triage_winner_hid or "",
-                # Deprecated raw fields (removal in v0.30.29):
-                job_id=state.job_id,
-                mind_id=state.mind_id,
             )
 
     def _emit_step_entered(self, state: WizardJobState, *, step: str) -> None:
@@ -332,9 +310,6 @@ class WizardOrchestrator:
             job_id_hash=short_hash(state.job_id),
             mind_id_hash=short_hash(state.mind_id),
             step=step,
-            # Deprecated raw fields (removal in v0.30.29):
-            job_id=state.job_id,
-            mind_id=state.mind_id,
         )
 
     def _emit_path_chosen(self, state: WizardJobState, *, path: str) -> None:
@@ -350,9 +325,6 @@ class WizardOrchestrator:
             job_id_hash=short_hash(state.job_id),
             mind_id_hash=short_hash(state.mind_id),
             path=path,
-            # Deprecated raw fields (removal in v0.30.29):
-            job_id=state.job_id,
-            mind_id=state.mind_id,
         )
 
     def _emit_state(self, state: WizardJobState, tracker: WizardProgressTracker) -> None:
@@ -373,9 +345,6 @@ class WizardOrchestrator:
             mind_id_hash=short_hash(state.mind_id),
             status=state.status.value,
             progress=state.progress,
-            # Deprecated raw fields (removal in v0.30.29):
-            job_id=state.job_id,
-            mind_id=state.mind_id,
         )
 
     # ====================================================================
@@ -508,9 +477,12 @@ class WizardOrchestrator:
             triage_winner_hid=triage_winner_hid,
         )
         self._emit_state(state, tracker)
-        applier = CalibrationApplier(data_dir=self._data_dir)
+        applier = CalibrationApplier(
+            data_dir=self._data_dir,
+            mind_yaml_path=self._data_dir / state.mind_id / "mind.yaml",
+        )
         try:
-            apply_result = applier.apply(profile, dry_run=False)
+            apply_result = await applier.apply(profile, dry_run=False)
         except ApplyError as exc:
             return self._emit_failed(
                 state,
@@ -606,9 +578,12 @@ class WizardOrchestrator:
         )
         self._emit_state(state, tracker)
 
-        applier = CalibrationApplier(data_dir=self._data_dir)
+        applier = CalibrationApplier(
+            data_dir=self._data_dir,
+            mind_yaml_path=self._data_dir / mind_id / "mind.yaml",
+        )
         try:
-            apply_result = applier.apply(replayed, dry_run=False)
+            apply_result = await applier.apply(replayed, dry_run=False)
         except ApplyError as exc:
             return self._emit_failed(state, tracker, summary=str(exc))
 

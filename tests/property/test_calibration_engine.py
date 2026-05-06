@@ -251,6 +251,8 @@ def test_engine_determinism_under_random_rules(
 )
 def test_apply_is_idempotent(advice_count: int, tmp_path: Path) -> None:
     """Applying the same profile twice -> same persisted bytes."""
+    import asyncio  # local import — sync-test driving async applier
+
     rule_objs = tuple(
         _SyntheticAdviseRule(rule_id=f"R_AD{i}", priority=50 + i, value=f"v{i}")
         for i in range(advice_count)
@@ -259,9 +261,11 @@ def test_apply_is_idempotent(advice_count: int, tmp_path: Path) -> None:
     profile = _evaluate_pinned(engine)
 
     applier = CalibrationApplier(data_dir=tmp_path)
-    first = applier.apply(profile)
+    # P1 (v0.30.29): CalibrationApplier.apply is async; sync property tests
+    # drive it via asyncio.run.
+    first = asyncio.run(applier.apply(profile))
     first_bytes = first.profile_path.read_bytes()
-    second = applier.apply(profile)
+    second = asyncio.run(applier.apply(profile))
     second_bytes = second.profile_path.read_bytes()
 
     assert first.profile_path == second.profile_path

@@ -1,17 +1,24 @@
 """Unit tests for sovyx.voice.calibration._applier.CalibrationApplier.
 
-Coverage:
-* ApplyResult shape: applied_decisions + skipped_decisions partition
-* dry_run skips persistence + state mutation
-* Non-dry-run persists profile via save_calibration_profile
+Coverage matrix (post-P1 v0.30.29):
+
+* :class:`ApplyResult` shape — applied/skipped/confirm_required partition + frozen
+* dry_run + non-dry-run persistence semantics
 * advised_actions extracted from advise decisions
-* SET decisions raise ApplyError (v0.30.15 has no SET dispatch)
-* Frozen ApplyResult invariants
+* Confidence-band gating (D7): HIGH auto / MEDIUM confirm-required without flag,
+  auto with allow_medium / LOW advise / EXPERIMENTAL skip
+* Handler registry: register pair + lookup + unknown target_class raises ApplyError
+* :class:`_PreApplySnapshot` — captured pre-apply state + per-decision tokens
+* LIFO rollback: 3-decision-third-fails scenario reverts decisions in reverse order
+* Rollback step itself raising → logged but does not mask original ApplyError
+* Telemetry: apply_started + apply_succeeded + apply_failed_with_rollback +
+  rollback_step_failed
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -26,10 +33,17 @@ from sovyx.voice.calibration import (
     MeasurementSnapshot,
     profile_path,
 )
+from sovyx.voice.calibration._applier import (
+    _TARGET_CLASS_HANDLERS,
+    _classify_decision_disposition,
+    _DecisionDisposition,
+    _PreApplySnapshot,
+    register_target_class_pair,
+)
 
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 # Fixtures
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 
 
 def _fingerprint() -> HardwareFingerprint:
@@ -98,16 +112,47 @@ def _advise() -> CalibrationDecision:
     )
 
 
-def _set(*, target: str = "mind.voice.voice_input_device_name") -> CalibrationDecision:
+def _set_high(
+    *,
+    target: str = "mind.voice.voice_input_device_name",
+    target_class: str = "MindConfig.voice",
+    value: Any = "Internal Mic",
+) -> CalibrationDecision:
     return CalibrationDecision(
         target=target,
-        target_class="MindConfig.voice",
+        target_class=target_class,
         operation="set",
-        value="Internal Mic",
+        value=value,
         rationale="synthetic",
         rule_id="R_synthetic",
         rule_version=1,
         confidence=CalibrationConfidence.HIGH,
+    )
+
+
+def _set_medium() -> CalibrationDecision:
+    return CalibrationDecision(
+        target="mind.voice.vad_threshold",
+        target_class="MindConfig.voice",
+        operation="set",
+        value=0.4,
+        rationale="medium-confidence vad tune",
+        rule_id="R_medium",
+        rule_version=1,
+        confidence=CalibrationConfidence.MEDIUM,
+    )
+
+
+def _set_low() -> CalibrationDecision:
+    return CalibrationDecision(
+        target="mind.voice.energy_threshold",
+        target_class="MindConfig.voice",
+        operation="set",
+        value=0.05,
+        rationale="low-confidence",
+        rule_id="R_low",
+        rule_version=1,
+        confidence=CalibrationConfidence.LOW,
     )
 
 
@@ -133,142 +178,441 @@ def _profile(*, decisions: tuple[CalibrationDecision, ...]) -> CalibrationProfil
         measurements=_measurements(),
         decisions=decisions,
         provenance=(),
-        generated_by_engine_version="0.30.15",
-        generated_by_rule_set_version=1,
+        generated_by_engine_version="0.30.29",
+        generated_by_rule_set_version=11,
         generated_at_utc="2026-05-05T18:02:00Z",
         signature=None,
     )
 
 
-# ====================================================================
-# advise-only profile (the v0.30.15 happy path with R10)
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
+# Capturing logger pattern (xdist-safe; per-test fresh instance)
+# ════════════════════════════════════════════════════════════════════
 
 
+def _capture_logger() -> tuple[list[tuple[str, dict[str, Any]]], Any]:
+    from sovyx.voice.calibration import _applier as applier_module
+
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    class _Capturing:
+        def info(self, event: str, **kwargs: Any) -> None:
+            events.append((event, kwargs))
+
+        def warning(self, event: str, **kwargs: Any) -> None:
+            events.append((event, kwargs))
+
+        def debug(self, event: str, **kwargs: Any) -> None:
+            events.append((event, kwargs))
+
+    original = applier_module.logger
+    applier_module.logger = _Capturing()  # type: ignore[assignment]
+    return events, original
+
+
+def _restore_logger(original: Any) -> None:
+    from sovyx.voice.calibration import _applier as applier_module
+
+    applier_module.logger = original  # type: ignore[assignment]
+
+
+# ════════════════════════════════════════════════════════════════════
+# advise-only profile (R10 v0.30.28 path; remains valid post-P1)
+# ════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio()
 class TestAdviseOnlyProfile:
-    """R10's advise decisions: zero applied, advice surfaced for operator."""
-
-    def test_apply_advise_only_persists_profile(self, tmp_path: Path) -> None:
+    async def test_apply_advise_only_persists_profile(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
         profile = _profile(decisions=(_advise(),))
-        result = applier.apply(profile)
+        result = await applier.apply(profile)
 
         assert isinstance(result, ApplyResult)
         assert result.dry_run is False
-        # advise decisions are NOT applicable -> applied is empty.
         assert result.applied_decisions == ()
-        # The advise decision lands in skipped (not "set" + non-experimental).
         assert len(result.skipped_decisions) == 1
-        # The advice action surfaces for operator copy-paste.
         assert result.advised_actions == ("sovyx doctor voice --fix --yes",)
 
-    def test_apply_persists_to_canonical_path(self, tmp_path: Path) -> None:
+    async def test_apply_persists_to_canonical_path(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
         profile = _profile(decisions=(_advise(),))
-        result = applier.apply(profile)
+        result = await applier.apply(profile)
         expected = profile_path(data_dir=tmp_path, mind_id="default")
         assert result.profile_path == expected
         assert expected.is_file()
 
-    def test_dry_run_skips_persistence(self, tmp_path: Path) -> None:
+    async def test_dry_run_skips_persistence(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
         profile = _profile(decisions=(_advise(),))
-        result = applier.apply(profile, dry_run=True)
+        result = await applier.apply(profile, dry_run=True)
         assert result.dry_run is True
-        # Path is computed but the file is NOT written.
         expected = profile_path(data_dir=tmp_path, mind_id="default")
         assert result.profile_path == expected
         assert not expected.exists()
 
-    def test_dry_run_still_returns_advice(self, tmp_path: Path) -> None:
-        # The operator should still SEE the advice in --dry-run output
-        # so they know what would happen.
+    async def test_dry_run_still_returns_advice(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
         profile = _profile(decisions=(_advise(),))
-        result = applier.apply(profile, dry_run=True)
+        result = await applier.apply(profile, dry_run=True)
         assert result.advised_actions == ("sovyx doctor voice --fix --yes",)
 
 
-# ====================================================================
-# Mixed decisions: experimental SET filtered out
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
+# Confidence-band gating (D7)
+# ════════════════════════════════════════════════════════════════════
 
 
-class TestMixedDecisions:
-    """Profile with advise + experimental-set: experimental filtered."""
+class TestConfidenceBandClassification:
+    """Pure-function classification of decision disposition."""
 
-    def test_experimental_set_is_skipped_not_applied(self, tmp_path: Path) -> None:
+    def test_high_set_auto_apply(self) -> None:
+        d = _set_high()
+        assert (
+            _classify_decision_disposition(d, allow_medium=False)
+            == _DecisionDisposition.AUTO_APPLY
+        )
+
+    def test_medium_set_confirm_required_without_flag(self) -> None:
+        d = _set_medium()
+        assert (
+            _classify_decision_disposition(d, allow_medium=False)
+            == _DecisionDisposition.CONFIRM_REQUIRED
+        )
+
+    def test_medium_set_auto_apply_with_allow_medium(self) -> None:
+        d = _set_medium()
+        assert (
+            _classify_decision_disposition(d, allow_medium=True) == _DecisionDisposition.AUTO_APPLY
+        )
+
+    def test_low_set_advise_only(self) -> None:
+        d = _set_low()
+        assert (
+            _classify_decision_disposition(d, allow_medium=True)
+            == _DecisionDisposition.ADVISE_ONLY
+        )
+
+    def test_experimental_set_skipped(self) -> None:
+        d = _experimental_set()
+        assert _classify_decision_disposition(d, allow_medium=True) == _DecisionDisposition.SKIP
+
+    def test_advise_operation_advise_only(self) -> None:
+        d = _advise()
+        assert (
+            _classify_decision_disposition(d, allow_medium=True)
+            == _DecisionDisposition.ADVISE_ONLY
+        )
+
+
+@pytest.mark.asyncio()
+class TestConfidenceBandPartition:
+    """The applier groups decisions into auto / confirm / skipped buckets."""
+
+    async def test_medium_decision_lands_in_confirm_required_without_flag(
+        self, tmp_path: Path
+    ) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
-        profile = _profile(decisions=(_advise(), _experimental_set()))
-        result = applier.apply(profile)
-        # Neither decision is "applicable" (advise is not SET;
-        # experimental SET is filtered by applicable_decisions).
+        profile = _profile(decisions=(_set_medium(),))
+        result = await applier.apply(profile, allow_medium=False)
         assert result.applied_decisions == ()
-        assert len(result.skipped_decisions) == 2
-        # Advice still surfaces.
-        assert result.advised_actions == ("sovyx doctor voice --fix --yes",)
+        assert len(result.confirm_required_decisions) == 1
+        assert result.confirm_required_decisions[0].confidence == CalibrationConfidence.MEDIUM
 
-
-# ====================================================================
-# SET decisions raise (no dispatch in v0.30.15)
-# ====================================================================
-
-
-class TestSetDispatchNotImplemented:
-    """v0.30.15 has no SET dispatch; raise ApplyError when one fires."""
-
-    def test_set_decision_raises_apply_error(self, tmp_path: Path) -> None:
+    async def test_low_decision_lands_in_skipped(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
-        profile = _profile(decisions=(_set(),))
-        with pytest.raises(ApplyError) as exc_info:
-            applier.apply(profile)
-        assert exc_info.value.decision.target == "mind.voice.voice_input_device_name"
-        assert "v0.30.15" in str(exc_info.value)
+        profile = _profile(decisions=(_set_low(),))
+        result = await applier.apply(profile)
+        assert result.applied_decisions == ()
+        assert result.confirm_required_decisions == ()
+        assert len(result.skipped_decisions) == 1
 
-    def test_apply_error_carries_decision(self, tmp_path: Path) -> None:
+    async def test_experimental_decision_lands_in_skipped(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
-        decision = _set(target="mind.voice.wake_word_enabled")
+        profile = _profile(decisions=(_experimental_set(),))
+        result = await applier.apply(profile)
+        assert result.applied_decisions == ()
+        assert result.confirm_required_decisions == ()
+        assert len(result.skipped_decisions) == 1
+
+
+# ════════════════════════════════════════════════════════════════════
+# Handler registry
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestRegistryFoundation:
+    def test_built_in_handlers_registered_on_import(self) -> None:
+        assert "LinuxMixerApply" in _TARGET_CLASS_HANDLERS
+        assert "MindConfig.voice" in _TARGET_CLASS_HANDLERS
+
+    def test_pair_lookup_returns_apply_and_revert(self) -> None:
+        apply_fn, revert_fn = _TARGET_CLASS_HANDLERS["MindConfig.voice"]
+        assert apply_fn is not None
+        assert revert_fn is not None
+
+    def test_register_pair_overwrites_existing(self) -> None:
+        async def _noop_apply(*args: Any, **kwargs: Any) -> str:
+            return "tok"
+
+        async def _noop_revert(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        # Save originals so we can restore.
+        orig_apply, orig_revert = _TARGET_CLASS_HANDLERS["MindConfig.voice"]
+        try:
+            register_target_class_pair("MindConfig.voice", apply=_noop_apply, revert=_noop_revert)
+            apply_fn, revert_fn = _TARGET_CLASS_HANDLERS["MindConfig.voice"]
+            assert apply_fn is _noop_apply
+            assert revert_fn is _noop_revert
+        finally:
+            register_target_class_pair("MindConfig.voice", apply=orig_apply, revert=orig_revert)
+
+
+@pytest.mark.asyncio()
+class TestUnknownTargetClass:
+    async def test_unknown_target_class_raises_apply_error(self, tmp_path: Path) -> None:
+        decision = _set_high(target_class="DoesNotExist")
+        applier = CalibrationApplier(data_dir=tmp_path)
         profile = _profile(decisions=(decision,))
         with pytest.raises(ApplyError) as exc_info:
-            applier.apply(profile)
-        assert exc_info.value.decision == decision
+            await applier.apply(profile)
+        assert exc_info.value.decision.target_class == "DoesNotExist"
+        assert "no handler registered" in str(exc_info.value)
 
-    def test_set_decision_dry_run_still_raises(self, tmp_path: Path) -> None:
-        # Dry-run goes through the dispatch path so it surfaces the
-        # gap early; otherwise an operator running --dry-run might
-        # get false confidence that an unsupported SET is "ready".
+
+# ════════════════════════════════════════════════════════════════════
+# LIFO rollback
+# ════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio()
+class TestLifoRollback:
+    """Three-decision third-fails: apply LIFO-reverts decisions 0 and 1."""
+
+    async def test_third_decision_failure_triggers_lifo_rollback(self, tmp_path: Path) -> None:
+        # Build a fake target_class with deterministic apply + revert
+        # that we can introspect.
+        applied_calls: list[int] = []
+        reverted_calls: list[int] = []
+
+        async def _apply_test(decision: CalibrationDecision, snapshot: Any, applier: Any) -> int:
+            idx = int(decision.value)  # type: ignore[arg-type]
+            if idx == 2:
+                raise ApplyError(
+                    f"synthetic third-fails at idx={idx}",
+                    decision=decision,
+                    decision_index=idx,
+                )
+            applied_calls.append(idx)
+            return idx
+
+        async def _revert_test(token: int, snapshot: Any, applier: Any) -> None:
+            reverted_calls.append(token)
+
+        register_target_class_pair("TestRollback", apply=_apply_test, revert=_revert_test)
+        try:
+            applier = CalibrationApplier(data_dir=tmp_path)
+            decisions = (
+                _set_high(target_class="TestRollback", value=0, target="t.0"),
+                _set_high(target_class="TestRollback", value=1, target="t.1"),
+                _set_high(target_class="TestRollback", value=2, target="t.2"),
+            )
+            profile = _profile(decisions=decisions)
+            with pytest.raises(ApplyError):
+                await applier.apply(profile)
+
+            # Apply chain: 0, 1 succeeded; 2 failed.
+            assert applied_calls == [0, 1]
+            # LIFO rollback: 1 reverted before 0.
+            assert reverted_calls == [1, 0]
+        finally:
+            del _TARGET_CLASS_HANDLERS["TestRollback"]
+
+    async def test_rollback_step_failure_does_not_mask_original_error(
+        self, tmp_path: Path
+    ) -> None:
+        async def _apply_fragile(
+            decision: CalibrationDecision, snapshot: Any, applier: Any
+        ) -> int:
+            idx = int(decision.value)  # type: ignore[arg-type]
+            if idx == 1:
+                raise ApplyError(
+                    f"second-fails at idx={idx}",
+                    decision=decision,
+                    decision_index=idx,
+                )
+            return idx
+
+        async def _revert_explodes(token: int, snapshot: Any, applier: Any) -> None:
+            raise RuntimeError(f"revert exploded for token={token}")
+
+        register_target_class_pair(
+            "TestFragileRevert", apply=_apply_fragile, revert=_revert_explodes
+        )
+        try:
+            applier = CalibrationApplier(data_dir=tmp_path)
+            decisions = (
+                _set_high(target_class="TestFragileRevert", value=0, target="x.0"),
+                _set_high(target_class="TestFragileRevert", value=1, target="x.1"),
+            )
+            profile = _profile(decisions=decisions)
+            with pytest.raises(ApplyError) as exc_info:
+                await applier.apply(profile)
+            # Original ApplyError surfaces — NOT the rollback's RuntimeError.
+            assert "second-fails" in str(exc_info.value)
+            assert exc_info.value.decision_index == 1
+        finally:
+            del _TARGET_CLASS_HANDLERS["TestFragileRevert"]
+
+    async def test_empty_applicable_no_op(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
-        profile = _profile(decisions=(_set(),))
-        with pytest.raises(ApplyError):
-            applier.apply(profile, dry_run=True)
+        profile = _profile(decisions=(_advise(),))
+        result = await applier.apply(profile)
+        assert result.rolled_back is False
 
 
-# ====================================================================
-# Empty profile
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
+# Snapshot dataclass
+# ════════════════════════════════════════════════════════════════════
 
 
+class TestPreApplySnapshot:
+    def test_default_construction(self) -> None:
+        s = _PreApplySnapshot()
+        assert s.mind_config_before == {}
+        assert s.mixer_snapshots == {}
+        assert s.decision_results == []
+
+    def test_appendable_decision_results(self) -> None:
+        s = _PreApplySnapshot()
+        s.decision_results.append((0, True, "tok"))
+        assert s.decision_results == [(0, True, "tok")]
+
+
+# ════════════════════════════════════════════════════════════════════
+# Telemetry events
+# ════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio()
+class TestApplierTelemetry:
+    async def test_apply_started_emitted_with_hashes(self, tmp_path: Path) -> None:
+        events, original = _capture_logger()
+        try:
+            applier = CalibrationApplier(data_dir=tmp_path)
+            profile = _profile(decisions=(_advise(),))
+            await applier.apply(profile)
+        finally:
+            _restore_logger(original)
+
+        started = next(e for e in events if e[0] == "voice.calibration.applier.apply_started")
+        assert "profile_id_hash" in started[1]
+        assert "mind_id_hash" in started[1]
+        assert started[1]["mind_id_hash"] != "default"
+        assert isinstance(started[1]["profile_id_hash"], str)
+        assert len(started[1]["profile_id_hash"]) == 16
+
+    async def test_apply_succeeded_includes_decisions_applied_field(self, tmp_path: Path) -> None:
+        events, original = _capture_logger()
+        try:
+            applier = CalibrationApplier(data_dir=tmp_path)
+            profile = _profile(decisions=(_advise(),))
+            await applier.apply(profile)
+        finally:
+            _restore_logger(original)
+
+        succeeded = next(e for e in events if e[0] == "voice.calibration.applier.apply_succeeded")
+        assert "decisions_applied" in succeeded[1]
+        assert "applicable_count" in succeeded[1]
+        assert succeeded[1]["decisions_applied"] == succeeded[1]["applicable_count"]
+
+    async def test_apply_failed_with_rollback_telemetry(self, tmp_path: Path) -> None:
+        async def _apply_test(decision: CalibrationDecision, snapshot: Any, applier: Any) -> int:
+            idx = int(decision.value)  # type: ignore[arg-type]
+            if idx == 1:
+                raise ApplyError(f"synthetic fail at {idx}", decision=decision, decision_index=idx)
+            return idx
+
+        async def _revert_test(token: int, snapshot: Any, applier: Any) -> None:
+            return None
+
+        register_target_class_pair("TestTelemetry", apply=_apply_test, revert=_revert_test)
+        try:
+            events, original = _capture_logger()
+            try:
+                applier = CalibrationApplier(data_dir=tmp_path)
+                decisions = (
+                    _set_high(target_class="TestTelemetry", value=0, target="y.0"),
+                    _set_high(target_class="TestTelemetry", value=1, target="y.1"),
+                )
+                profile = _profile(decisions=decisions)
+                with pytest.raises(ApplyError):
+                    await applier.apply(profile)
+            finally:
+                _restore_logger(original)
+
+            rollback_event = next(
+                e for e in events if e[0] == "voice.calibration.applier.apply_failed_with_rollback"
+            )
+            assert rollback_event[1]["decisions_rolled_back"] == 1
+            assert "rollback_duration_s" in rollback_event[1]
+            assert isinstance(rollback_event[1]["rollback_duration_s"], (int, float))
+        finally:
+            del _TARGET_CLASS_HANDLERS["TestTelemetry"]
+
+    async def test_rollback_step_failed_telemetry(self, tmp_path: Path) -> None:
+        async def _apply_test(decision: CalibrationDecision, snapshot: Any, applier: Any) -> int:
+            idx = int(decision.value)  # type: ignore[arg-type]
+            if idx == 1:
+                raise ApplyError("synthetic", decision=decision, decision_index=idx)
+            return idx
+
+        async def _revert_explodes(token: int, snapshot: Any, applier: Any) -> None:
+            raise RuntimeError("revert blew up")
+
+        register_target_class_pair("TestRevertFails", apply=_apply_test, revert=_revert_explodes)
+        try:
+            events, original = _capture_logger()
+            try:
+                applier = CalibrationApplier(data_dir=tmp_path)
+                decisions = (
+                    _set_high(target_class="TestRevertFails", value=0, target="z.0"),
+                    _set_high(target_class="TestRevertFails", value=1, target="z.1"),
+                )
+                profile = _profile(decisions=decisions)
+                with pytest.raises(ApplyError):
+                    await applier.apply(profile)
+            finally:
+                _restore_logger(original)
+
+            step_failed = next(
+                e for e in events if e[0] == "voice.calibration.applier.rollback_step_failed"
+            )
+            assert step_failed[1]["target_class"] == "TestRevertFails"
+            assert step_failed[1]["exception_type"] == "RuntimeError"
+        finally:
+            del _TARGET_CLASS_HANDLERS["TestRevertFails"]
+
+
+# ════════════════════════════════════════════════════════════════════
+# Empty profile + invariants
+# ════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio()
 class TestEmptyProfile:
-    """Profile with no decisions: still persists, returns empty tuples."""
-
-    def test_apply_empty_profile(self, tmp_path: Path) -> None:
+    async def test_apply_empty_profile(self, tmp_path: Path) -> None:
         applier = CalibrationApplier(data_dir=tmp_path)
         profile = _profile(decisions=())
-        result = applier.apply(profile)
+        result = await applier.apply(profile)
         assert result.applied_decisions == ()
         assert result.skipped_decisions == ()
         assert result.advised_actions == ()
         assert result.profile_path.is_file()
 
 
-# ====================================================================
-# ApplyResult invariants
-# ====================================================================
-
-
 class TestApplyResultInvariants:
-    """ApplyResult is frozen."""
-
     def test_apply_result_is_frozen(self) -> None:
         from dataclasses import FrozenInstanceError
 
@@ -281,83 +625,3 @@ class TestApplyResultInvariants:
         )
         with pytest.raises(FrozenInstanceError):
             result.dry_run = True  # type: ignore[misc]
-
-
-# ====================================================================
-# Telemetry events (T2.10) -- applier.apply_started / apply_failed
-# ====================================================================
-
-
-class TestApplierTelemetry:
-    """voice.calibration.applier.* events fire with hashed identifiers."""
-
-    def _capture_logger(self) -> tuple[list[tuple[str, dict[str, object]]], object]:
-        from sovyx.voice.calibration import _applier as applier_module
-
-        events: list[tuple[str, dict[str, object]]] = []
-
-        class _Capturing:
-            def info(self, event: str, **kwargs: object) -> None:
-                events.append((event, kwargs))
-
-            def warning(self, event: str, **kwargs: object) -> None:
-                events.append((event, kwargs))
-
-        original = applier_module.logger
-        applier_module.logger = _Capturing()  # type: ignore[assignment]
-        return events, original
-
-    def _restore(self, original: object) -> None:
-        from sovyx.voice.calibration import _applier as applier_module
-
-        applier_module.logger = original  # type: ignore[assignment]
-
-    def test_apply_started_emitted_with_hashes(self, tmp_path: Path) -> None:
-        events, original = self._capture_logger()
-        try:
-            applier = CalibrationApplier(data_dir=tmp_path)
-            profile = _profile(decisions=(_advise(),))
-            applier.apply(profile)
-        finally:
-            self._restore(original)
-
-        started = next(e for e in events if e[0] == "voice.calibration.applier.apply_started")
-        assert "profile_id_hash" in started[1]
-        assert "mind_id_hash" in started[1]
-        # Hashed -> not the raw mind_id "default"
-        assert started[1]["mind_id_hash"] != "default"
-        assert isinstance(started[1]["profile_id_hash"], str)
-        assert len(started[1]["profile_id_hash"]) == 16
-
-    def test_apply_failed_emitted_when_set_dispatch_unsupported(self, tmp_path: Path) -> None:
-        events, original = self._capture_logger()
-        try:
-            applier = CalibrationApplier(data_dir=tmp_path)
-            profile = _profile(decisions=(_set(),))
-            with pytest.raises(ApplyError):
-                applier.apply(profile)
-        finally:
-            self._restore(original)
-
-        failed = next(e for e in events if e[0] == "voice.calibration.applier.apply_failed")
-        assert failed[1]["target"] == "mind.voice.voice_input_device_name"
-        assert failed[1]["operation"] == "set"
-        assert failed[1]["failure_reason"] == "set_dispatch_unsupported"
-
-    def test_apply_succeeded_includes_decisions_applied_field(self, tmp_path: Path) -> None:
-        """v0.30.26 spec §8.3: applier.apply_succeeded carries decisions_applied."""
-        events, original = self._capture_logger()
-        try:
-            applier = CalibrationApplier(data_dir=tmp_path)
-            profile = _profile(decisions=(_advise(),))
-            applier.apply(profile)
-        finally:
-            self._restore(original)
-
-        succeeded = next(e for e in events if e[0] == "voice.calibration.applier.apply_succeeded")
-        # Spec §8.3 canonical field name:
-        assert "decisions_applied" in succeeded[1]
-        # Backward-compat alias retained:
-        assert "applicable_count" in succeeded[1]
-        # Both report the same int (semantically equivalent).
-        assert succeeded[1]["decisions_applied"] == succeeded[1]["applicable_count"]
