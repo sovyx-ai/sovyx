@@ -72,6 +72,12 @@ from sovyx.voice.calibration._persistence import (
     save_calibration_profile,
 )
 from sovyx.voice.calibration._provenance import ProvenanceRecorder
+from sovyx.voice.calibration._wizard_orchestrator import WizardOrchestrator
+from sovyx.voice.calibration._wizard_progress import (
+    ProgressEvent,
+    WizardProgressTracker,
+)
+from sovyx.voice.calibration._wizard_state import WizardJobState, WizardStatus
 from sovyx.voice.calibration.engine import CalibrationEngine, EngineMode
 from sovyx.voice.calibration.rules import (
     RULE_SET_VERSION,
@@ -113,6 +119,11 @@ __all__ = [
     "ProvenanceTrace",
     "RuleContext",
     "RuleEvaluation",
+    "ProgressEvent",
+    "WizardJobState",
+    "WizardOrchestrator",
+    "WizardProgressTracker",
+    "WizardStatus",
     "capture_fingerprint",
     "capture_measurements",
     "iter_rules",
