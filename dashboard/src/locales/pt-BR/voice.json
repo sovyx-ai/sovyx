@@ -504,7 +504,7 @@
     },
     "review": {
       "title": "Calibração aplicada",
-      "decision_explanation": "O perfil persistido (caminho acima) contém o rastro completo de regras + decisões aplicadas. Rode `sovyx doctor voice --calibrate --show` no CLI para inspecionar os detalhes, ou clique em confirmar para continuar. Se a calibração não ajudou, você pode reverter abaixo.",
+      "decision_explanation": "O perfil persistido (caminho acima) contém o rastro completo de regras + decisões aplicadas. Rode `sovyx doctor voice --calibrate --show` no CLI para inspecionar os detalhes, ou clique em confirmar para continuar. Se a calibração não ajudou, rode `sovyx doctor voice --calibrate --rollback` no CLI para restaurar o perfil anterior.",
       "confirm": "Confirmar e continuar",
       "rollback": "Reverter esta calibração"
     },

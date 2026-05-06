@@ -162,11 +162,15 @@ sovyx doctor voice --calibrate --show    # render last persisted profile (read-o
 sovyx doctor voice --calibrate --rollback  # restore prior profile from .bak slot
 ```
 
-`--calibrate` produces a signed `CalibrationProfile` at
+`--calibrate` produces a `CalibrationProfile` at
 `<data_dir>/<mind_id>/calibration.json` recording every applicable decision
-(set / advise / preserve) with full provenance. See
-[modules/voice-calibration.md](modules/voice-calibration.md) for the rule
-registry, profile schema, telemetry namespace, and rollback semantics.
+(set / advise / preserve) with full provenance. By default the profile
+is **unsigned** (LENIENT-loadable; STRICT mode rejects); pass
+`--signing-key <pem-path>` to sign with an Ed25519 private key. The
+verdict renderer surfaces signed/unsigned status so you know at a glance.
+See [modules/voice-calibration.md](modules/voice-calibration.md) for the
+rule registry, profile schema, telemetry namespace, signing model, and
+rollback semantics.
 
 The dashboard onboarding wizard can host the calibration step. The mount is
 gated by `EngineConfig.voice.calibration_wizard_enabled` (default `False`
@@ -194,8 +198,9 @@ still required for the value to survive a daemon restart).
 8–12 minutes on first run. The pipeline captures a hardware fingerprint
 (~1 s), runs the bundled forensic diagnostic (8–12 min, includes 3 short
 speech windows), triages the result, evaluates the rule engine, and
-persists a signed `CalibrationProfile`. Subsequent runs on the same
-hardware replay the cached profile in ~5 seconds via the fast path.
+persists a `CalibrationProfile` (unsigned by default; pass
+`--signing-key` to sign). Subsequent runs on the same hardware replay
+the cached profile in ~5 seconds via the fast path.
 
 **Q: My calibration ended in `fallback`. What happened?**
 
