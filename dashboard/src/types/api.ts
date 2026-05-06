@@ -1892,3 +1892,123 @@ export type TrainingJobStreamMessage =
   | { type: "snapshot"; state: Record<string, string | number> }
   | { type: "terminal"; state: Record<string, string | number> }
   | { type: "error"; message: string };
+
+/* ── Voice calibration wizard — MISSION-voice-self-calibrating-system-2026-05-05 §L3 ─
+ *
+ * Backend endpoints (v0.30.16+):
+ *   POST   /api/voice/calibration/start                 -> StartCalibrationResponse
+ *   GET    /api/voice/calibration/jobs/{id}             -> WizardJobSnapshot
+ *   POST   /api/voice/calibration/jobs/{id}/cancel      -> CancelJobResponse
+ *   GET    /api/voice/calibration/preview-fingerprint   -> PreviewFingerprintResponse
+ *   WS     /api/voice/calibration/jobs/{id}/stream      -> WizardJobSnapshot per message
+ *
+ * Frontend wiring (v0.30.17+, behind CALIBRATION_WIZARD_ENABLED feature flag):
+ * Zustand calibration slice mirrors the wake-word training pattern. WS
+ * emits the raw WizardJobSnapshot dict per state transition (no
+ * discriminated-union wrapper -- the snapshot's ``status`` field is
+ * the discriminator; ``WizardCalibrationStatus.is_terminal`` checks
+ * if it's the closing message).
+ */
+
+/**
+ * Lifecycle phases of a calibration wizard job. Closed enum so OTel
+ * cardinality on ``voice.calibration.wizard.*`` events stays bounded.
+ *
+ * Terminal states (``done`` | ``failed`` | ``cancelled`` | ``fallback``)
+ * accept no further transitions; the WS server closes after sending
+ * the terminal snapshot.
+ *
+ * The ``fallback`` state is distinguished from ``failed`` because the
+ * frontend renders it as a polite "let's use the simple setup wizard
+ * instead" banner rather than as an error.
+ */
+export type WizardCalibrationStatus =
+  | "pending"
+  | "probing"
+  | "fast_path_lookup"
+  | "fast_path_apply"
+  | "fast_path_validate"
+  | "slow_path_diag"
+  | "slow_path_calibrate"
+  | "slow_path_apply"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "fallback";
+
+/**
+ * One snapshot emitted by the wizard orchestrator. Mirrors the
+ * backend's :class:`WizardJobState` dataclass byte-for-byte.
+ *
+ * The progress field is in [0.0, 1.0]; the frontend renders a
+ * progress bar at ``Math.round(progress * 100)`` percent. The
+ * current_stage_message is the english fallback; the frontend
+ * looks up ``calibration.status.<status>`` in i18n first and falls
+ * back to this string when no key exists.
+ */
+export interface WizardJobSnapshot {
+  job_id: string;
+  mind_id: string;
+  status: WizardCalibrationStatus;
+  /** Fractional [0.0, 1.0] -- coarsely mapped per stage. */
+  progress: number;
+  /** Operator-facing english fallback for the stage description. */
+  current_stage_message: string;
+  /** ISO-8601 UTC. */
+  created_at_utc: string;
+  /** ISO-8601 UTC. */
+  updated_at_utc: string;
+  /** Populated on DONE -- absolute path to the persisted profile. */
+  profile_path: string | null;
+  /** Populated post-triage -- the H1..H10 short id when triage produced a verdict. */
+  triage_winner_hid: string | null;
+  /** Populated on FAILED -- short operator-facing error message. */
+  error_summary: string | null;
+  /** Populated on FALLBACK -- reason the pipeline opted out (e.g. ``diag_run_failed``). */
+  fallback_reason: string | null;
+}
+
+export interface StartCalibrationRequest {
+  /** The mind whose calibration to compute. 1-64 chars. */
+  mind_id: string;
+}
+
+export interface StartCalibrationResponse {
+  /** Stable identifier; equal to ``mind_id`` for v0.30.16 (one job per mind). */
+  job_id: string;
+  /**
+   * Relative WebSocket path for live progress (e.g.,
+   * ``/api/voice/calibration/jobs/default/stream``). Open via
+   * ``new WebSocket(host + stream_url + "?token=" + token)``.
+   */
+  stream_url: string;
+}
+
+export interface PreviewFingerprintResponse {
+  /** SHA256 of the host fingerprint -- the L4 community-KB lookup key. */
+  fingerprint_hash: string;
+  audio_stack: string;
+  system_vendor: string;
+  system_product: string;
+  /**
+   * Recommended path: ``"slow_path"`` always in v0.30.16. v0.30.17+
+   * may return ``"fast_path"`` when the local KB has a high-confidence
+   * match for the fingerprint hash.
+   */
+  recommendation: "slow_path" | "fast_path";
+}
+
+/**
+ * Returns true when the wizard status accepts no further transitions
+ * (the WS server has closed after sending this snapshot).
+ */
+export function isWizardCalibrationTerminal(
+  status: WizardCalibrationStatus,
+): boolean {
+  return (
+    status === "done" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "fallback"
+  );
+}

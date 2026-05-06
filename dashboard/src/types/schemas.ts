@@ -1493,3 +1493,51 @@ export const TrainingJobStreamMessageSchema = z.discriminatedUnion("type", [
     message: z.string(),
   }),
 ]);
+
+/* ── Voice calibration wizard runtime schemas — Mission L3 v0.30.17 ── */
+
+export const WizardCalibrationStatusSchema = z.enum([
+  "pending",
+  "probing",
+  "fast_path_lookup",
+  "fast_path_apply",
+  "fast_path_validate",
+  "slow_path_diag",
+  "slow_path_calibrate",
+  "slow_path_apply",
+  "done",
+  "failed",
+  "cancelled",
+  "fallback",
+]);
+
+export const WizardJobSnapshotSchema = z.object({
+  job_id: z.string(),
+  mind_id: z.string(),
+  status: WizardCalibrationStatusSchema,
+  progress: z.number().min(0).max(1),
+  current_stage_message: z.string(),
+  created_at_utc: z.string(),
+  updated_at_utc: z.string(),
+  profile_path: z.string().nullable(),
+  triage_winner_hid: z.string().nullable(),
+  error_summary: z.string().nullable(),
+  fallback_reason: z.string().nullable(),
+});
+
+export const StartCalibrationRequestSchema = z.object({
+  mind_id: z.string().min(1).max(64),
+});
+
+export const StartCalibrationResponseSchema = z.object({
+  job_id: z.string(),
+  stream_url: z.string(),
+});
+
+export const PreviewFingerprintResponseSchema = z.object({
+  fingerprint_hash: z.string(),
+  audio_stack: z.string(),
+  system_vendor: z.string(),
+  system_product: z.string(),
+  recommendation: z.enum(["slow_path", "fast_path"]),
+});
