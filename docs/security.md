@@ -305,6 +305,83 @@ evidence that the extract is integrity-protected.
 
 ---
 
+## Calibration telemetry retention
+
+The voice calibration subsystem (Layer 2 + Layer 3 — wizard + applier
++ persistence + KB cache) emits structured events under two prefixes:
+
+* `voice.calibration.*` — engine, applier, persistence, wizard,
+  KB cache (~25 distinct events).
+* `voice.diagnostics.*` — full-diag runner + cancellation
+  (~5 events).
+
+### Where events go
+
+* **Local file:** `<data_dir>/logs/sovyx.log` (rotated per Sovyx's
+  standard logging policy; default 50 MB per file, 5-file retention
+  via `RotatingFileHandler`).
+* **OTel collector** (when configured via env per the standard
+  Sovyx tracing setup): events ship to whatever sink the operator
+  configured.
+
+### What's hashed vs raw (post-P0 + P1)
+
+Per the privacy contract enforced by
+`tests/integration/test_telemetry_privacy_audit.py`:
+
+* **Hashed** (16-hex SHA256 prefix via `sovyx.observability.privacy.short_hash`):
+  - `mind_id_hash` — replaces operator-set `mind_id`.
+  - `job_id_hash` — replaces calibration job IDs.
+  - `profile_id_hash` — replaces UUID4 calibration profile IDs.
+  - `cached_mind_id_hash` — KB cache lookups.
+* **Raw** (closed-enum fields with bounded cardinality):
+  - `status`, `step`, `path`, `mode`, `signature_status`, `verdict`,
+    `prompt_type`, `rule_id`, `triage_winner_hid`, `audio_stack`,
+    `system_vendor`, `system_product`, `failure_reason`, `trigger`,
+    `rollback_reason`.
+* **Removed** (P1 v0.30.29): no filesystem `path` fields. The pre-P0
+  loader emitted absolute paths to operator-host filesystem; those
+  fields were deprecated in P0 and dropped in P1.
+
+### Cryptographic verdicts (P4 v0.30.32+)
+
+Calibration profile signatures are verified against
+`src/sovyx/voice/calibration/_trusted_keys/v1.pub` (Ed25519). The
+`voice.calibration.profile.signature.invalid{verdict}` event carries
+the closed-enum verdict for forensic triage. See the
+"Cryptographic primitives" section above for the algorithm contract.
+
+### How operators audit
+
+Grep `<data_dir>/logs/sovyx.log` for `voice.calibration.` to see all
+calibration events. Sample queries:
+
+```bash
+# All signature verdicts the loader emitted on startup
+jq 'select(.event | startswith("voice.calibration.profile.signature"))' sovyx.log
+
+# Apply-rollback occurrences
+jq 'select(.event == "voice.calibration.applier.apply_failed_with_rollback")' sovyx.log
+
+# Migration failures (if a future schema bump runs)
+jq 'select(.event == "voice.calibration.profile.migration_failed")' sovyx.log
+```
+
+### CI gate
+
+`tests/integration/test_telemetry_privacy_audit.py` walks every
+`voice.calibration.*` and `voice.diagnostics.*` emission in three
+end-to-end scenarios (slow-path DONE / FALLBACK / CANCELLED) plus
+direct module emissions (persistence, KB cache, progress) and
+asserts ZERO field values match the raw-mind-id heuristic
+(non-hex string > 16 chars) or the filesystem-path heuristic
+(starts with `/`, `\`, `C:`, `D:`). The gate fails CI on any new
+emission that leaks an operator-set string. The complete exempt
+list (closed enums, dynamic exception text, deprecated aliases) is
+documented in the test file itself.
+
+---
+
 ## Reporting vulnerabilities
 
 Please email **security@sovyx.ai** with a minimal reproduction and the
