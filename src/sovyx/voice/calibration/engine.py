@@ -32,7 +32,6 @@ History: introduced in v0.30.15 as T2.4 of mission
 
 from __future__ import annotations
 
-import hashlib
 import time
 import uuid
 from datetime import UTC, datetime
@@ -42,6 +41,7 @@ from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.privacy import short_hash as _short_hash
 from sovyx.voice.calibration._provenance import ProvenanceRecorder
 from sovyx.voice.calibration.rules import RULE_SET_VERSION, iter_rules
 from sovyx.voice.calibration.rules._base import (
@@ -63,19 +63,6 @@ if TYPE_CHECKING:
     from sovyx.voice.diagnostics import TriageResult
 
 logger = get_logger(__name__)
-
-
-def _short_hash(value: str) -> str:
-    """Return the 16-hex-char SHA256 prefix of ``value``.
-
-    Used for telemetry labels (mind_id_hash, profile_id_hash) so we
-    can correlate events across the engine + applier + persistence
-    pipeline WITHOUT shipping the raw mind_id (which is operator-set
-    and may be PII per anti-pattern #1 of the privacy contract).
-    Bounded cardinality: 16 hex chars = 64 bits = ample for
-    deduplication, low enough to keep telemetry index size manageable.
-    """
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _read_engine_version() -> str:

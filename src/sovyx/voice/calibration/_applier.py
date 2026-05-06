@@ -32,11 +32,11 @@ History: introduced in v0.30.15 as T2.8 of mission
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.privacy import short_hash as _short_hash
 from sovyx.voice.calibration._persistence import (
     profile_path,
     save_calibration_profile,
@@ -51,11 +51,6 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
-
-
-def _short_hash(value: str) -> str:
-    """16-hex-char SHA256 prefix; matches engine.py for cross-event correlation."""
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)
