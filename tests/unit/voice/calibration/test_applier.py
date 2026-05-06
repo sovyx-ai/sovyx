@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -699,3 +700,168 @@ class TestMindYamlHelperRaiseRegressions:
         assert failed[1]["target_class"] == "MindConfig.voice"
         assert failed[1]["operation"] == "set"
         assert failed[1]["failure_reason"] == "set_dispatch_failed"
+
+
+# ════════════════════════════════════════════════════════════════════
+# rc.3 (Agent 1 #6) — _restore_mind_yaml_voice_field surfaces failures
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestRestoreMindYamlSurfacesErrors:
+    """Regression: revert-write failures must raise a typed error so the
+    LIFO rollback walker emits ``rollback_step_failed`` telemetry.
+
+    Pre-rc.3 the helper silently ``return``-ed on OSError / yaml.YAMLError
+    during revert, which meant a partial-rollback that left mind.yaml in
+    an inconsistent state was indistinguishable from a clean revert in
+    the logs. Operators triaging "auto-rollback fired but my voice
+    config is still broken" had no forensic evidence to work with.
+    Post-rc.3 the helper raises ``_MindYamlMutateError`` and the registry
+    walker catches + emits ``rollback_step_failed`` with exception_type.
+    """
+
+    def test_write_failure_raises_typed_error(self, tmp_path: Path) -> None:
+        from sovyx.voice.calibration._applier import (
+            _MindYamlMutateError,
+            _restore_mind_yaml_voice_field,
+        )
+
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text("voice:\n  vad_threshold: 0.3\n", encoding="utf-8")
+
+        with (
+            patch.object(Path, "write_text", side_effect=OSError("disk full")),
+            pytest.raises(_MindYamlMutateError) as exc_info,
+        ):
+            _restore_mind_yaml_voice_field(yaml_path, "vad_threshold", 0.5)
+
+        assert "failed to write" in str(exc_info.value)
+        assert str(yaml_path) in str(exc_info.value)
+
+    def test_read_failure_raises_typed_error(self, tmp_path: Path) -> None:
+        from sovyx.voice.calibration._applier import (
+            _MindYamlMutateError,
+            _restore_mind_yaml_voice_field,
+        )
+
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text("voice:\n  vad_threshold: 0.3\n", encoding="utf-8")
+
+        with (
+            patch.object(Path, "read_text", side_effect=OSError("permission denied")),
+            pytest.raises(_MindYamlMutateError) as exc_info,
+        ):
+            _restore_mind_yaml_voice_field(yaml_path, "vad_threshold", 0.5)
+
+        assert "failed to read" in str(exc_info.value)
+
+    def test_missing_file_returns_silently(self, tmp_path: Path) -> None:
+        """The ``yaml_path.is_file()`` early-return is preserved: a
+        missing mind.yaml on revert means there's nothing to restore
+        (apply must have failed BEFORE writing), which is a no-op.
+        """
+        from sovyx.voice.calibration._applier import _restore_mind_yaml_voice_field
+
+        # Should NOT raise — file simply doesn't exist.
+        _restore_mind_yaml_voice_field(tmp_path / "never_existed.yaml", "vad_threshold", 0.5)
+
+    def test_malformed_yaml_raises_typed_error(self, tmp_path: Path) -> None:
+        from sovyx.voice.calibration._applier import (
+            _MindYamlMutateError,
+            _restore_mind_yaml_voice_field,
+        )
+
+        yaml_path = tmp_path / "mind.yaml"
+        # Construct a yaml-malformed file
+        yaml_path.write_text("voice: {bad: [\n", encoding="utf-8")
+
+        with pytest.raises(_MindYamlMutateError) as exc_info:
+            _restore_mind_yaml_voice_field(yaml_path, "vad_threshold", 0.5)
+
+        assert "failed to read" in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+class TestRollbackEmitsStepFailedOnRevertWriteError:
+    """End-to-end: revert raising during LIFO rollback emits
+    ``rollback_step_failed`` with the exception_type set.
+
+    Drives the canonical chain:
+    1. Decision A (MindConfig.voice) succeeds → mind.yaml mutated.
+    2. Decision B (synthetic class) raises ApplyError.
+    3. LIFO rollback fires → ``_revert_mind_config_voice`` runs.
+    4. Patched ``write_text`` raises OSError on the revert write.
+    5. Walker catches via generic ``except Exception`` → emits
+       ``rollback_step_failed{exception_type=_MindYamlMutateError}``.
+    """
+
+    async def test_revert_write_failure_emits_rollback_step_failed(self, tmp_path: Path) -> None:
+        # Pre-existing mind.yaml so the apply path succeeds.
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text("voice:\n  existing: keep\n", encoding="utf-8")
+        applier = CalibrationApplier(data_dir=tmp_path, mind_yaml_path=yaml_path)
+
+        async def _fail_immediately(decision: Any, snapshot: Any, applier: Any) -> int:  # noqa: ARG001
+            raise ApplyError("synthetic 2nd-decision fail", decision=decision)
+
+        async def _noop_revert(token: Any, snapshot: Any, applier: Any) -> None:  # noqa: ARG001
+            return None
+
+        register_target_class_pair(
+            "TestSyntheticFail", apply=_fail_immediately, revert=_noop_revert
+        )
+        try:
+            decisions = (
+                _set_high(
+                    target="mind.voice.vad_threshold", value=0.42
+                ),  # MindConfig.voice — succeeds
+                CalibrationDecision(
+                    target="t.synthetic",
+                    target_class="TestSyntheticFail",
+                    operation="set",
+                    value="raises",
+                    rationale="r",
+                    rule_id="R_synth",
+                    rule_version=1,
+                    confidence=CalibrationConfidence.HIGH,
+                ),
+            )
+            profile = _profile(decisions=decisions)
+
+            events, original = _capture_logger()
+            try:
+                # Patch BOTH read and write on the revert path. We patch
+                # write_text (not read_text) so the revert reads the
+                # (already-mutated) file successfully and then fails on
+                # write — that's the most common real-world failure
+                # mode (disk full, permission lost mid-run).
+                original_write = Path.write_text
+                call_count = {"n": 0}
+
+                def _selective_write(self: Path, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+                    # First call = apply path's write. Second call = revert.
+                    call_count["n"] += 1
+                    if call_count["n"] >= 2:
+                        raise OSError("synthetic revert write failure")
+                    return original_write(self, *args, **kwargs)
+
+                with (
+                    patch.object(Path, "write_text", _selective_write),
+                    pytest.raises(ApplyError),
+                ):
+                    await applier.apply(profile)
+            finally:
+                _restore_logger(original)
+
+            rollback_failed = [
+                e for e in events if e[0] == "voice.calibration.applier.rollback_step_failed"
+            ]
+            assert rollback_failed, (
+                "rollback_step_failed must fire when revert helper raises "
+                "_MindYamlMutateError; pre-rc.3 it was silently swallowed"
+            )
+            # The walker captures exception_type via type(exc).__name__.
+            assert rollback_failed[0][1]["target_class"] == "MindConfig.voice"
+            assert rollback_failed[0][1]["exception_type"] == "_MindYamlMutateError"
+        finally:
+            del _TARGET_CLASS_HANDLERS["TestSyntheticFail"]

@@ -29,6 +29,8 @@ the cross-cutting contract.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -354,3 +356,151 @@ class TestWebSocketAuthBehavior:
         ):
             ws.receive_json()
         assert exc_info.value.code == 1008
+
+
+# ════════════════════════════════════════════════════════════════════
+# rc.3 (Agent 2 #18) — concurrent-POST integration test for QA-FIX-5 race
+# ════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.integration
+class TestConcurrentStartRaceQaFix5:
+    """End-to-end verification of the per-mind ``_START_LOCKS`` race fix.
+
+    QA-FIX-5 (v0.31.0-rc.2) added an ``LRULockDict[str]`` keyed by mind_id
+    around the ``(_job_in_flight check + _active_jobs register)`` to make
+    the in-flight gate atomic. The fix shipped with code-review-only
+    coverage (no concurrent integration test). rc.3 closes the gap.
+
+    Contract:
+    * Two concurrent POST /start for the SAME mind_id → exactly one 202
+      + one 409.
+    * Concurrent POST for DIFFERENT mind_ids → both 202 (per-mind lock,
+      not a global lock).
+    * After the in-flight task completes, a fresh POST for the same
+      mind_id is permitted (lock self-prunes via _active_jobs cleanup).
+    """
+
+    @pytest.mark.asyncio()
+    async def test_concurrent_same_mind_yields_one_202_and_one_409(self, tmp_path: Path) -> None:
+        """Two concurrent /start for same mind_id → exactly one 202 + one 409.
+
+        We force the orchestrator's runner to block so the first POST's
+        ``_active_jobs`` registration is observable while the second POST
+        contests the per-mind ``_START_LOCKS`` lock. Pre-rc.2 (no lock)
+        both POSTs would pass the in-flight check before either wrote a
+        snapshot — both would 202 and corrupt the JSONL.
+        """
+        import asyncio as _asyncio
+
+        import httpx
+
+        from sovyx.dashboard.routes import voice_calibration as vc_route
+        from sovyx.dashboard.server import create_app
+        from sovyx.engine._lock_dict import LRULockDict
+
+        app = create_app(token=_AUDIT_TOKEN)
+        # Resolve the route's data_dir into the test sandbox so the
+        # JSONL progress files don't land in ~/.sovyx (anti-pattern #23).
+        app.state.engine_config = type("C", (), {"data_dir": tmp_path})()
+
+        # Reset the module-level registries so prior tests don't bleed in.
+        vc_route._active_jobs.clear()
+        vc_route._START_LOCKS = LRULockDict(maxsize=256)
+
+        # Patch the route's runner-spawn so the spawned task is a never-
+        # completing sentinel future. The first POST's lock body
+        # registers the future into ``_active_jobs``; when the second POST
+        # acquires the lock, the in-flight check sees the registered
+        # task with ``done() == False`` and raises 409. This is more
+        # deterministic than mocking the entire WizardOrchestrator: we
+        # don't depend on the runner coroutine ever starting.
+        def _never_done_future_spawn(coro: Any) -> _asyncio.Future[None]:
+            # Discard the runner coroutine so it doesn't actually run
+            # (closing it cleanly to avoid 'never awaited' warnings).
+            coro.close()
+            return _asyncio.get_running_loop().create_future()
+
+        try:
+            with patch.object(_asyncio, "ensure_future", _never_done_future_spawn):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app),
+                    base_url="http://testserver",
+                    headers={"Authorization": f"Bearer {_AUDIT_TOKEN}"},
+                ) as client:
+                    r1, r2 = await _asyncio.gather(
+                        client.post(
+                            "/api/voice/calibration/start",
+                            json={"mind_id": "rc3-race-mind"},
+                        ),
+                        client.post(
+                            "/api/voice/calibration/start",
+                            json={"mind_id": "rc3-race-mind"},
+                        ),
+                    )
+
+            statuses = sorted([r1.status_code, r2.status_code])
+            assert statuses == [202, 409], (
+                f"expected exactly one 202 + one 409 from concurrent "
+                f"same-mind POSTs; got {statuses} "
+                f"(bodies: {r1.text!r}, {r2.text!r})"
+            )
+
+            assert "rc3-race-mind" in vc_route._active_jobs
+            assert len(vc_route._active_jobs) == 1
+        finally:
+            # Cancel the sentinel future + clear the registry so no
+            # state leaks into the next test.
+            for fut in list(vc_route._active_jobs.values()):
+                if not fut.done():
+                    fut.cancel()
+            vc_route._active_jobs.clear()
+
+    @pytest.mark.asyncio()
+    async def test_concurrent_different_minds_both_get_202(self, tmp_path: Path) -> None:
+        """Per-mind lock — distinct mind_ids do NOT serialise."""
+        import asyncio as _asyncio
+
+        import httpx
+
+        from sovyx.dashboard.routes import voice_calibration as vc_route
+        from sovyx.dashboard.server import create_app
+        from sovyx.engine._lock_dict import LRULockDict
+
+        app = create_app(token=_AUDIT_TOKEN)
+        app.state.engine_config = type("C", (), {"data_dir": tmp_path})()
+
+        vc_route._active_jobs.clear()
+        vc_route._START_LOCKS = LRULockDict(maxsize=256)
+
+        def _never_done_future_spawn(coro: Any) -> _asyncio.Future[None]:
+            coro.close()
+            return _asyncio.get_running_loop().create_future()
+
+        try:
+            with patch.object(_asyncio, "ensure_future", _never_done_future_spawn):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app),
+                    base_url="http://testserver",
+                    headers={"Authorization": f"Bearer {_AUDIT_TOKEN}"},
+                ) as client:
+                    r1, r2 = await _asyncio.gather(
+                        client.post(
+                            "/api/voice/calibration/start",
+                            json={"mind_id": "rc3-mind-A"},
+                        ),
+                        client.post(
+                            "/api/voice/calibration/start",
+                            json={"mind_id": "rc3-mind-B"},
+                        ),
+                    )
+                    assert sorted([r1.status_code, r2.status_code]) == [202, 202], (
+                        f"distinct mind_ids must NOT serialise; "
+                        f"got {r1.status_code} + {r2.status_code}"
+                    )
+                    assert len(vc_route._active_jobs) == 2
+        finally:
+            for fut in list(vc_route._active_jobs.values()):
+                if not fut.done():
+                    fut.cancel()
+            vc_route._active_jobs.clear()

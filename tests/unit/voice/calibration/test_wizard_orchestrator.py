@@ -692,3 +692,115 @@ class TestSpecTelemetryAlignment:
         assert triggered[1]["reason"] == "diag_prerequisite_unmet"
         # Path is reclassified to fallback even though slow was chosen first.
         assert triggered[1]["path"] == "fallback"
+
+
+# ====================================================================
+# rc.3 (Agent 3 #10): current_prompt strip on terminal transitions
+# ====================================================================
+
+
+class TestTerminalCurrentPromptStrip:
+    """Regression: ``extras['current_prompt']`` MUST be cleared on any
+    terminal transition (FAILED / CANCELLED / FALLBACK / DONE).
+
+    The slow-path tail loop populates ``current_prompt`` while bash diag
+    runs; without an explicit strip a mid-flight failure leaves the
+    last "say X" / "stay silent" card rendered on top of the dashboard
+    TerminalView. The strip lives in ``WizardOrchestrator._transition``
+    (single shared mutation point) so every terminal emitter inherits
+    the contract uniformly.
+    """
+
+    @staticmethod
+    def _state_with_prompt(tmp_path: Path, status: WizardStatus) -> WizardJobState:
+        return WizardJobState(
+            job_id="rc3job",
+            mind_id="default",
+            status=status,
+            progress=0.10,
+            current_stage_message="m",
+            created_at_utc="2026-05-06T00:00:00Z",
+            updated_at_utc="2026-05-06T00:00:00Z",
+            extras={
+                "current_prompt": {"type": "speak", "phrase": "the quick brown fox"},
+                "operator_unrelated": "preserved",
+            },
+        )
+
+    def test_emit_failed_strips_current_prompt(self, tmp_path: Path) -> None:
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        state = self._state_with_prompt(tmp_path, WizardStatus.SLOW_PATH_DIAG)
+        tracker = WizardProgressTracker(orch.progress_path("rc3job"))
+        orch.job_dir("rc3job").mkdir(parents=True, exist_ok=True)
+        result = orch._emit_failed(state, tracker, summary="boom")
+        assert result.status == WizardStatus.FAILED
+        assert "current_prompt" not in result.extras
+        # Non-transient extras keys MUST survive the strip.
+        assert result.extras.get("operator_unrelated") == "preserved"
+
+    def test_emit_failed_with_rolled_back_strips_current_prompt(self, tmp_path: Path) -> None:
+        """The rolled_back rebuild path must NOT reintroduce the prompt."""
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        state = self._state_with_prompt(tmp_path, WizardStatus.SLOW_PATH_DIAG)
+        tracker = WizardProgressTracker(orch.progress_path("rc3job"))
+        orch.job_dir("rc3job").mkdir(parents=True, exist_ok=True)
+        result = orch._emit_failed(state, tracker, summary="boom", rolled_back=True)
+        assert result.status == WizardStatus.FAILED
+        assert "current_prompt" not in result.extras
+        assert result.extras.get("rolled_back") is True
+        assert result.extras.get("operator_unrelated") == "preserved"
+
+    def test_emit_cancelled_strips_current_prompt(self, tmp_path: Path) -> None:
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        state = self._state_with_prompt(tmp_path, WizardStatus.SLOW_PATH_DIAG)
+        tracker = WizardProgressTracker(orch.progress_path("rc3job"))
+        orch.job_dir("rc3job").mkdir(parents=True, exist_ok=True)
+        result = orch._emit_cancelled(state, tracker)
+        assert result.status == WizardStatus.CANCELLED
+        assert "current_prompt" not in result.extras
+        assert result.extras.get("operator_unrelated") == "preserved"
+
+    def test_emit_fallback_strips_current_prompt(self, tmp_path: Path) -> None:
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        state = self._state_with_prompt(tmp_path, WizardStatus.SLOW_PATH_DIAG)
+        tracker = WizardProgressTracker(orch.progress_path("rc3job"))
+        orch.job_dir("rc3job").mkdir(parents=True, exist_ok=True)
+        result = orch._emit_fallback(state, tracker, reason="diag_run_failed", summary="boom")
+        assert result.status == WizardStatus.FALLBACK
+        assert "current_prompt" not in result.extras
+        assert result.extras.get("operator_unrelated") == "preserved"
+
+    def test_transition_to_terminal_strips_via_run_top_level_handler(self, tmp_path: Path) -> None:
+        """The CancelledError handler in ``run()`` calls ``_transition``
+        directly with status=CANCELLED. Verify the strip fires there too.
+        """
+        state = self._state_with_prompt(tmp_path, WizardStatus.SLOW_PATH_DIAG)
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        terminal = orch._transition(
+            state,
+            status=WizardStatus.CANCELLED,
+            progress=state.progress,
+            message="op cancelled",
+        )
+        assert "current_prompt" not in terminal.extras
+        assert terminal.extras.get("operator_unrelated") == "preserved"
+
+    def test_transition_to_non_terminal_preserves_current_prompt(self, tmp_path: Path) -> None:
+        """Non-terminal transitions (e.g. PROBING → SLOW_PATH_DIAG) must
+        NOT strip current_prompt -- the tail loop owns that key for the
+        live duration of slow_path_diag.
+        """
+        state = self._state_with_prompt(tmp_path, WizardStatus.PROBING)
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        next_state = orch._transition(
+            state,
+            status=WizardStatus.SLOW_PATH_DIAG,
+            progress=0.10,
+            message="m",
+        )
+        # current_prompt persists across non-terminal transitions; the
+        # frontend keeps rendering the active prompt while diag runs.
+        assert next_state.extras.get("current_prompt") == {
+            "type": "speak",
+            "phrase": "the quick brown fox",
+        }

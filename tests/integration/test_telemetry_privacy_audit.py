@@ -42,10 +42,17 @@ from sovyx.voice.calibration import (
     MeasurementSnapshot,
     WizardOrchestrator,
 )
+from sovyx.voice.calibration import _applier as applier_module
 from sovyx.voice.calibration import _kb_cache as kb_cache
 from sovyx.voice.calibration import _persistence as persistence
 from sovyx.voice.calibration import _wizard_orchestrator as wo
 from sovyx.voice.calibration import _wizard_progress as wizard_progress
+from sovyx.voice.calibration._applier import (
+    _TARGET_CLASS_HANDLERS,
+    ApplyError,
+    CalibrationApplier,
+    register_target_class_pair,
+)
 from sovyx.voice.calibration._persistence import (
     load_calibration_profile,
     save_calibration_profile,
@@ -115,6 +122,24 @@ CLOSED_ENUM_FIELDS: frozenset[str] = frozenset(
         "verdict",  # signing verdict closed enum (P4+)
         "system_vendor",  # hardware vendor string from DMI (bounded)
         "system_product",  # hardware product string from DMI (bounded)
+        # rc.3 (Agent 3 #1): bounded via the dispatch registry —
+        # production values are TuningAdvice / LinuxMixerApply /
+        # MindConfig.voice. Adding new target_class values requires a
+        # ``register_target_class_pair`` call in code review, so the
+        # cardinality is gated.
+        "target_class",
+        # ``target`` is the dotted path on the target_class
+        # (e.g. ``mind.voice.vad_threshold``); strings are bounded by
+        # the rule set + target_class registry. Cardinality is finite.
+        "target",
+        # rc.3 (Agent 3 #1): exception_type from rollback_step_failed
+        # is the Python class name of the raised exception (KeyError,
+        # NotImplementedError, RuntimeError, etc.). Cardinality finite.
+        "exception_type",
+        # rc.3: operation enum on CalibrationDecision (set/advise).
+        "operation",
+        # rc.3: rollback semantic reason (e.g. "no_revert_registered").
+        "reason_kind",
     }
 )
 
@@ -462,3 +487,248 @@ class TestTelemetryPrivacyAudit:
             {"mind_id_hash": "0fae56d5786cade8"},
         )
         assert leaks == []
+
+
+# ────────────────────────────────────────────────────────────────────
+# rc.3 (Agent 3 #1): Privacy gate covers _applier.py emission sites
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestApplierEmissionPrivacy:
+    """Walk the 7 emission sites in ``_applier.py`` through the privacy
+    heuristic. Pre-rc.3 the gate patched ``wo`` / ``wizard_progress`` /
+    ``persistence`` / ``kb_cache`` but NOT ``_applier``; the wizard's
+    ``mock CalibrationApplier.apply`` short-circuited every applier
+    emission, so a future regression emitting raw ``mind_id`` instead
+    of ``mind_id_hash`` on (e.g.) ``apply_failed_with_rollback`` would
+    have slipped past CI.
+
+    Drives the real ``CalibrationApplier.apply`` chain through synthetic
+    target-class registrations so we don't need real mixer/yaml state.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_apply_started_and_succeeded_emit_no_raw_pii(self, tmp_path: Path) -> None:
+        async def _noop_apply(decision: Any, snapshot: Any, applier: Any) -> int:  # noqa: ARG001
+            return 0
+
+        async def _noop_revert(token: Any, snapshot: Any, applier: Any) -> None:  # noqa: ARG001
+            return None
+
+        register_target_class_pair("PrivAuditOk", apply=_noop_apply, revert=_noop_revert)
+        try:
+            applier_logger = MagicMock()
+            with patch.object(applier_module, "logger", applier_logger):
+                profile = CalibrationProfile(
+                    schema_version=1,
+                    profile_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                    mind_id=SUSPICIOUS_MIND_ID,
+                    fingerprint=_fingerprint(),
+                    measurements=_measurements(),
+                    decisions=(
+                        CalibrationDecision(
+                            target="t.0",
+                            target_class="PrivAuditOk",
+                            operation="set",
+                            value=0,
+                            rationale="r",
+                            rule_id="R_audit",
+                            rule_version=1,
+                            confidence=CalibrationConfidence.HIGH,
+                        ),
+                    ),
+                    provenance=(),
+                    generated_by_engine_version="0.31.0-rc.3",
+                    generated_by_rule_set_version=1,
+                    generated_at_utc="2026-05-06T18:02:00Z",
+                    signature=None,
+                )
+                applier = CalibrationApplier(data_dir=tmp_path)
+                await applier.apply(profile)
+        finally:
+            del _TARGET_CLASS_HANDLERS["PrivAuditOk"]
+
+        events = _audited(_flatten_calls([applier_logger]))
+        names = {n for n, _ in events}
+        assert "voice.calibration.applier.apply_started" in names
+        assert "voice.calibration.applier.apply_succeeded" in names
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (apply_started/succeeded): {leaks}"
+
+    @pytest.mark.asyncio()
+    async def test_apply_failed_with_rollback_emits_no_raw_pii(self, tmp_path: Path) -> None:
+        """apply_failed_with_rollback + rollback_step_failed both fire when
+        the second decision raises and the synthetic revert blows up.
+        Drives the most sensitive failure path; both emissions MUST surface
+        only hashed identifiers + closed-enum target_class.
+        """
+
+        async def _apply_test(decision: Any, snapshot: Any, applier: Any) -> int:  # noqa: ARG001
+            idx = int(decision.value)
+            if idx == 1:
+                raise ApplyError(f"synthetic fail at {idx}", decision=decision, decision_index=idx)
+            return idx
+
+        async def _revert_explodes(token: Any, snapshot: Any, applier: Any) -> None:  # noqa: ARG001
+            raise RuntimeError("synthetic revert failure")
+
+        register_target_class_pair("PrivAuditRollback", apply=_apply_test, revert=_revert_explodes)
+        try:
+            applier_logger = MagicMock()
+            with patch.object(applier_module, "logger", applier_logger):
+                profile = CalibrationProfile(
+                    schema_version=1,
+                    profile_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                    mind_id=SUSPICIOUS_MIND_ID,
+                    fingerprint=_fingerprint(),
+                    measurements=_measurements(),
+                    decisions=(
+                        CalibrationDecision(
+                            target="t.0",
+                            target_class="PrivAuditRollback",
+                            operation="set",
+                            value=0,
+                            rationale="r",
+                            rule_id="R_audit",
+                            rule_version=1,
+                            confidence=CalibrationConfidence.HIGH,
+                        ),
+                        CalibrationDecision(
+                            target="t.1",
+                            target_class="PrivAuditRollback",
+                            operation="set",
+                            value=1,  # this one raises
+                            rationale="r",
+                            rule_id="R_audit",
+                            rule_version=1,
+                            confidence=CalibrationConfidence.HIGH,
+                        ),
+                    ),
+                    provenance=(),
+                    generated_by_engine_version="0.31.0-rc.3",
+                    generated_by_rule_set_version=1,
+                    generated_at_utc="2026-05-06T18:02:00Z",
+                    signature=None,
+                )
+                applier = CalibrationApplier(data_dir=tmp_path)
+                with pytest.raises(ApplyError):
+                    await applier.apply(profile)
+        finally:
+            del _TARGET_CLASS_HANDLERS["PrivAuditRollback"]
+
+        events = _audited(_flatten_calls([applier_logger]))
+        names = {n for n, _ in events}
+        assert "voice.calibration.applier.apply_started" in names
+        assert "voice.calibration.applier.apply_failed_with_rollback" in names
+        assert "voice.calibration.applier.rollback_step_failed" in names
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (rollback chain): {leaks}"
+
+    @pytest.mark.asyncio()
+    async def test_apply_failed_sync_raise_emits_no_raw_pii(self, tmp_path: Path) -> None:
+        """The eager-validation apply_failed event (no rollback path)
+        fires when a single decision raises before any successful apply.
+        Different code path than apply_failed_with_rollback; both must
+        be privacy-clean.
+        """
+
+        async def _fail_immediately(decision: Any, snapshot: Any, applier: Any) -> int:  # noqa: ARG001
+            raise ApplyError("synthetic fail", decision=decision)
+
+        async def _noop_revert(token: Any, snapshot: Any, applier: Any) -> None:  # noqa: ARG001
+            return None
+
+        register_target_class_pair(
+            "PrivAuditSyncFail", apply=_fail_immediately, revert=_noop_revert
+        )
+        try:
+            applier_logger = MagicMock()
+            with patch.object(applier_module, "logger", applier_logger):
+                profile = CalibrationProfile(
+                    schema_version=1,
+                    profile_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                    mind_id=SUSPICIOUS_MIND_ID,
+                    fingerprint=_fingerprint(),
+                    measurements=_measurements(),
+                    decisions=(
+                        CalibrationDecision(
+                            target="t.0",
+                            target_class="PrivAuditSyncFail",
+                            operation="set",
+                            value="x",
+                            rationale="r",
+                            rule_id="R_audit",
+                            rule_version=1,
+                            confidence=CalibrationConfidence.HIGH,
+                        ),
+                    ),
+                    provenance=(),
+                    generated_by_engine_version="0.31.0-rc.3",
+                    generated_by_rule_set_version=1,
+                    generated_at_utc="2026-05-06T18:02:00Z",
+                    signature=None,
+                )
+                applier = CalibrationApplier(data_dir=tmp_path)
+                with pytest.raises(ApplyError):
+                    await applier.apply(profile)
+        finally:
+            del _TARGET_CLASS_HANDLERS["PrivAuditSyncFail"]
+
+        events = _audited(_flatten_calls([applier_logger]))
+        names = {n for n, _ in events}
+        # The pre-validation apply_failed branch fires when a single
+        # decision raises immediately (no prior success → nothing to roll
+        # back). The exact event name varies by code path; what matters
+        # for the privacy gate is that ALL emitted events are clean.
+        assert names, "expected at least one applier emission"
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (sync-fail path): {leaks}"
+
+    @pytest.mark.asyncio()
+    async def test_dry_run_emits_no_raw_pii(self, tmp_path: Path) -> None:
+        """dry_run path emits ``apply_started`` + ``dry_run`` events."""
+
+        async def _noop_apply(decision: Any, snapshot: Any, applier: Any) -> int:  # noqa: ARG001
+            return 0
+
+        async def _noop_revert(token: Any, snapshot: Any, applier: Any) -> None:  # noqa: ARG001
+            return None
+
+        register_target_class_pair("PrivAuditDry", apply=_noop_apply, revert=_noop_revert)
+        try:
+            applier_logger = MagicMock()
+            with patch.object(applier_module, "logger", applier_logger):
+                profile = CalibrationProfile(
+                    schema_version=1,
+                    profile_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                    mind_id=SUSPICIOUS_MIND_ID,
+                    fingerprint=_fingerprint(),
+                    measurements=_measurements(),
+                    decisions=(
+                        CalibrationDecision(
+                            target="t.0",
+                            target_class="PrivAuditDry",
+                            operation="set",
+                            value=0,
+                            rationale="r",
+                            rule_id="R_audit",
+                            rule_version=1,
+                            confidence=CalibrationConfidence.HIGH,
+                        ),
+                    ),
+                    provenance=(),
+                    generated_by_engine_version="0.31.0-rc.3",
+                    generated_by_rule_set_version=1,
+                    generated_at_utc="2026-05-06T18:02:00Z",
+                    signature=None,
+                )
+                applier = CalibrationApplier(data_dir=tmp_path)
+                await applier.apply(profile, dry_run=True)
+        finally:
+            del _TARGET_CLASS_HANDLERS["PrivAuditDry"]
+
+        events = _audited(_flatten_calls([applier_logger]))
+        names = {n for n, _ in events}
+        assert "voice.calibration.applier.dry_run" in names
+        leaks = [leak for name, kw in events for leak in _scan_kwargs_for_leaks(name, kw)]
+        assert not leaks, f"raw PII leaks (dry-run): {leaks}"

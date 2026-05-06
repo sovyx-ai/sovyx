@@ -128,3 +128,69 @@ class TestLayerEnabledHelper:
         # Letter "AB" should NOT match "A" — boundary check via comma split.
         result = _bash('SOVYX_DIAG_FLAG_ONLY="AB,CD"; _layer_enabled "A" && echo YES || echo NO')
         assert result.stdout.strip() == "NO"
+
+
+# ════════════════════════════════════════════════════════════════════
+# rc.3 (Agent 2 #8) — trap-EXIT cleans up /tmp/.sovyx_prompts_err.<pid>
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestPromptsErrFileCleanup:
+    """``_cleanup`` removes the per-pid prompts-err capture file.
+
+    QA-FIX-3 (v0.31.0-rc.2) added stderr-capture for
+    ``prompt_emit_structured`` with the path
+    ``/tmp/.sovyx_prompts_err.$$``. The inline ``rm -f`` after each
+    call covers the happy path, but a SIGTERM/SIGINT/SIGHUP between
+    the echo and the rm leaks the file.
+
+    rc.3 (Agent 2 #8) extends ``_cleanup`` (registered via trap on
+    EXIT/INT/TERM/HUP) to mop up the file. SIGKILL inherently leaks
+    one such file per process death (no userspace handler can run);
+    the file is ≤ 4 KB so the leak is bounded.
+    """
+
+    def test_cleanup_line_present_in_common_sh(self) -> None:
+        """Regression-grep: the cleanup line MUST be inside ``_cleanup``."""
+        text = _BASH_LIB.read_text(encoding="utf-8")
+        # The cleanup line lives between the trap-EXIT body and the
+        # final ``exit "$exit_code"``.
+        assert 'rm -f "/tmp/.sovyx_prompts_err.$$"' in text, (
+            "rc.3 regression: _cleanup must remove the per-pid prompts-err "
+            "capture file so SIGTERM/INT/HUP exits don't leak /tmp files"
+        )
+
+    def test_cleanup_removes_prompts_err_file(self, tmp_path: Path) -> None:
+        """Functional: pre-create the file + call ``_cleanup`` + assert gone.
+
+        We invoke ``_cleanup`` in a subshell so its ``exit`` doesn't kill
+        the parent bash. The test bash records its own ``$$`` BEFORE the
+        subshell so we can verify the file removal AFTER ``_cleanup``
+        completed (the subshell inherits parent's ``$$`` via
+        ``BASH_SUBSHELL``-aware ``$BASHPID`` not ``$$``; bash 4+ docs).
+        """
+        # The file path uses parent shell's PID. We capture it BEFORE
+        # invoking _cleanup in a subshell. Touch the file, invoke
+        # _cleanup in a () subshell (so its ``exit`` exits only the
+        # subshell), then check the file is gone.
+        snippet = (
+            'errfile="/tmp/.sovyx_prompts_err.$$"; '
+            'touch "$errfile"; '
+            '[[ -f "$errfile" ]] && echo BEFORE_EXISTS || echo BEFORE_MISSING; '
+            # Set the run-completed sentinel so _cleanup's "partial"
+            # branch doesn't trigger; mute its log spam.
+            "SOVYX_DIAG_RUN_COMPLETED=1; "
+            'SOVYX_DIAG_OUTDIR=""; '
+            # Run _cleanup in a subshell so its exit doesn't kill us.
+            "(_cleanup) >/dev/null 2>&1; "
+            '[[ -f "$errfile" ]] && echo AFTER_EXISTS || echo AFTER_REMOVED'
+        )
+        result = _bash(snippet)
+        lines = [line for line in result.stdout.strip().splitlines() if line]
+        assert "BEFORE_EXISTS" in lines, (
+            f"setup failed: file not created. stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert "AFTER_REMOVED" in lines, (
+            f"_cleanup did not remove /tmp/.sovyx_prompts_err.<pid>; "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
