@@ -256,8 +256,16 @@ class CalibrationEngine:
                         # Conflict -- a higher-priority rule already
                         # wrote this target. Skip this decision and
                         # surface the collision via structured event.
+                        # Spec §8.3 field names: rule_a_id is the
+                        # higher-priority writer (winner per evaluation
+                        # order); rule_b_id is the loser whose decision
+                        # is dropped. Semantic-clear aliases shipped
+                        # alongside for readability across telemetry
+                        # consumers.
                         logger.info(
                             "voice.calibration.engine.rule_conflict",
+                            rule_a_id=set_target_owners[key],
+                            rule_b_id=rule.rule_id,
                             rule_winner_id=set_target_owners[key],
                             rule_loser_id=rule.rule_id,
                             target_field=f"{d.target_class}.{d.target}",
@@ -311,13 +319,22 @@ class CalibrationEngine:
             ),
             signature=None,  # Signed at persistence boundary (T2.7).
         )
+        elapsed_s = time.monotonic() - run_started_mono
+        # Spec §8.3 mandates ``duration_s`` + ``applied_count`` fields.
+        # ``applied_count`` is the number of SET decisions the applier
+        # would mutate state for (advise + experimental SETs are
+        # excluded). The engine doesn't apply -- it only counts what
+        # WOULD be applied.
+        applied_count = len(profile.applicable_decisions)
         logger.info(
             "voice.calibration.engine.run_completed",
             mode=mode.value,
             mind_id_hash=mind_hash,
             profile_id_hash=_short_hash(profile.profile_id),
-            duration_ms=int((time.monotonic() - run_started_mono) * 1000),
+            duration_s=round(elapsed_s, 3),
+            duration_ms=int(elapsed_s * 1000),
             decisions_count=len(profile.decisions),
+            applied_count=applied_count,
             rules_fired=len(profile.provenance),
             rules_total=len(self._rules),
         )

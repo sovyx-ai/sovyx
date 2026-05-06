@@ -127,10 +127,19 @@ def _classify_diag_mode(extra_args: tuple[str, ...]) -> str:
     return "full"
 
 
+# Closed-enum spec §8.3: who triggered the diag run. ``cli`` = direct
+# operator invocation via ``sovyx doctor voice --full-diag/--calibrate``.
+# ``wizard`` = dashboard onboarding flow's slow-path orchestrator.
+# Bounded cardinality at 2 values; future trigger sources (e.g. cron,
+# RPC) extend this enum + the spec.
+_TRIGGER_VALUES: tuple[str, ...] = ("cli", "wizard")
+
+
 def run_full_diag(
     *,
     extra_args: tuple[str, ...] = (),
     output_root: Path | None = None,
+    trigger: str = "cli",
 ) -> DiagRunResult:
     """Materialize the bundled bash diag, run it interactively, return the tarball path.
 
@@ -148,6 +157,11 @@ def run_full_diag(
             tarball is searched. Defaults to ``Path.home()``. Provided
             for testability and for operators with non-default
             ``$HOME`` setups.
+        trigger: Closed enum (``"cli"`` | ``"wizard"``) that propagates
+            into the ``voice.diagnostics.full_diag_started{trigger=...}``
+            telemetry field per spec §8.3. Defaults to ``"cli"`` so
+            direct CLI callers don't need to override; the wizard
+            orchestrator passes ``"wizard"``.
 
     Returns:
         A :class:`DiagRunResult` carrying the absolute path to the
@@ -162,9 +176,16 @@ def run_full_diag(
     """
     _check_prerequisites()
 
+    if trigger not in _TRIGGER_VALUES:
+        # Defensive: spec §8.3 closed enum. If a caller passes an
+        # unknown trigger we coerce to "cli" rather than poisoning
+        # OTel cardinality with arbitrary strings.
+        trigger = "cli"
+
     mode = _classify_diag_mode(extra_args)
     logger.info(
         "voice.diagnostics.full_diag_started",
+        trigger=trigger,
         mode=mode,
         extra_arg_count=len(extra_args),
     )
@@ -231,6 +252,16 @@ def run_full_diag(
             duration_s=round(duration_s, 3),
             exit_code=completed.returncode,
             tarball_size_bytes=tarball.stat().st_size,
+            # Spec §8.3 prescribes hypothesis_winner here. The runner
+            # has zero knowledge of triage (which runs AFTER the diag
+            # exits + reads the tarball); we emit empty string from
+            # this layer + downstream callers (CLI _run_voice_calibrate,
+            # wizard orchestrator's slow-path) emit triage-aware events
+            # via voice.calibration.engine.run_completed which carries
+            # triage_winner_hid. Keeping the field in this event with
+            # an explicit empty value preserves the spec field set
+            # without falsely claiming knowledge the runner doesn't have.
+            hypothesis_winner="",
         )
 
         return DiagRunResult(

@@ -369,3 +369,27 @@ class TestPersistenceTelemetry:
 
         loaded = next(e for e in events if e[0] == "voice.calibration.profile.loaded")
         assert loaded[1]["signature_status"] == "missing"
+
+    def test_rolled_back_event_includes_profile_id_hash(self, tmp_path: Path) -> None:
+        """v0.30.26 spec §8.3: rolled_back event carries profile_id_hash."""
+        from dataclasses import replace
+
+        from sovyx.voice.calibration import rollback_calibration_profile
+
+        # Save twice -- first becomes the .bak, second the canonical.
+        first = _profile(signature=None)
+        second = replace(first, profile_id="22222222-2222-3333-4444-555555555555")
+        save_calibration_profile(first, data_dir=tmp_path)
+        save_calibration_profile(second, data_dir=tmp_path)
+
+        events, original = self._capture_logger()
+        try:
+            rollback_calibration_profile(data_dir=tmp_path, mind_id="default")
+        finally:
+            self._restore(original)
+
+        rolled = next(e for e in events if e[0] == "voice.calibration.applier.rolled_back")
+        assert "profile_id_hash" in rolled[1]
+        assert isinstance(rolled[1]["profile_id_hash"], str)
+        assert len(rolled[1]["profile_id_hash"]) == 16
+        assert rolled[1]["rollback_reason"] == "operator_initiated"

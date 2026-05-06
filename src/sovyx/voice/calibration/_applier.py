@@ -199,10 +199,15 @@ class CalibrationApplier:
             )
         else:
             target_path = save_calibration_profile(profile, data_dir=self._data_dir)
+            # Spec §8.3 ``decisions_applied`` is the canonical field name
+            # for the count of SET decisions the applier mutated state
+            # for. ``applicable_count`` is the alias for backward-compat
+            # with v0.30.19 telemetry consumers.
             logger.info(
                 "voice.calibration.applier.apply_succeeded",
                 profile_id_hash=profile_hash,
                 mind_id_hash=mind_hash,
+                decisions_applied=len(applicable),
                 applicable_count=len(applicable),
                 skipped_count=len(skipped),
                 advised_count=len(advised_actions),

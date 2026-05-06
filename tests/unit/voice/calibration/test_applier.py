@@ -343,3 +343,21 @@ class TestApplierTelemetry:
         assert failed[1]["target"] == "mind.voice.voice_input_device_name"
         assert failed[1]["operation"] == "set"
         assert failed[1]["failure_reason"] == "set_dispatch_unsupported"
+
+    def test_apply_succeeded_includes_decisions_applied_field(self, tmp_path: Path) -> None:
+        """v0.30.26 spec §8.3: applier.apply_succeeded carries decisions_applied."""
+        events, original = self._capture_logger()
+        try:
+            applier = CalibrationApplier(data_dir=tmp_path)
+            profile = _profile(decisions=(_advise(),))
+            applier.apply(profile)
+        finally:
+            self._restore(original)
+
+        succeeded = next(e for e in events if e[0] == "voice.calibration.applier.apply_succeeded")
+        # Spec §8.3 canonical field name:
+        assert "decisions_applied" in succeeded[1]
+        # Backward-compat alias retained:
+        assert "applicable_count" in succeeded[1]
+        # Both report the same int (semantically equivalent).
+        assert succeeded[1]["decisions_applied"] == succeeded[1]["applicable_count"]

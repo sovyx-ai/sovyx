@@ -572,6 +572,118 @@ class TestDiagnosticsTelemetry:
         assert failed[1]["exit_code"] == 3
         assert failed[1]["failure_reason"] == "selftest_failed"
 
+    def test_started_event_carries_trigger_field(self, tmp_path: Path) -> None:
+        """v0.30.26 spec §8.3: trigger ∈ {cli, wizard} on full_diag_started."""
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        output_root = tmp_path / "home"
+        output_root.mkdir()
+        _make_result_tarball(output_root)
+
+        events, original = self._capture()
+        try:
+            with (
+                patch.object(_runner, "_check_prerequisites"),
+                patch.object(
+                    _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+                ),
+                patch.object(
+                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                ),
+            ):
+                # Default trigger is "cli"
+                run_full_diag(output_root=output_root)
+        finally:
+            self._restore(original)
+
+        started = next(e for e in events if e[0] == "voice.diagnostics.full_diag_started")
+        assert started[1]["trigger"] == "cli"
+
+    def test_started_event_honours_wizard_trigger(self, tmp_path: Path) -> None:
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        output_root = tmp_path / "home"
+        output_root.mkdir()
+        _make_result_tarball(output_root)
+
+        events, original = self._capture()
+        try:
+            with (
+                patch.object(_runner, "_check_prerequisites"),
+                patch.object(
+                    _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+                ),
+                patch.object(
+                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                ),
+            ):
+                run_full_diag(output_root=output_root, trigger="wizard")
+        finally:
+            self._restore(original)
+
+        started = next(e for e in events if e[0] == "voice.diagnostics.full_diag_started")
+        assert started[1]["trigger"] == "wizard"
+
+    def test_started_event_coerces_unknown_trigger_to_cli(self, tmp_path: Path) -> None:
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        output_root = tmp_path / "home"
+        output_root.mkdir()
+        _make_result_tarball(output_root)
+
+        events, original = self._capture()
+        try:
+            with (
+                patch.object(_runner, "_check_prerequisites"),
+                patch.object(
+                    _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+                ),
+                patch.object(
+                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                ),
+            ):
+                # Defensive: unknown trigger value is coerced to "cli"
+                # to keep OTel cardinality bounded.
+                run_full_diag(output_root=output_root, trigger="malicious")
+        finally:
+            self._restore(original)
+
+        started = next(e for e in events if e[0] == "voice.diagnostics.full_diag_started")
+        assert started[1]["trigger"] == "cli"
+
+    def test_completed_event_includes_hypothesis_winner_field(self, tmp_path: Path) -> None:
+        """v0.30.26 spec §8.3: hypothesis_winner present (empty at runner layer)."""
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        output_root = tmp_path / "home"
+        output_root.mkdir()
+        _make_result_tarball(output_root)
+
+        events, original = self._capture()
+        try:
+            with (
+                patch.object(_runner, "_check_prerequisites"),
+                patch.object(
+                    _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+                ),
+                patch.object(
+                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                ),
+            ):
+                run_full_diag(output_root=output_root)
+        finally:
+            self._restore(original)
+
+        completed = next(e for e in events if e[0] == "voice.diagnostics.full_diag_completed")
+        # Field present with empty value -- the runner has no triage
+        # knowledge but the field exists for spec contract preservation.
+        assert "hypothesis_winner" in completed[1]
+        assert completed[1]["hypothesis_winner"] == ""
+
     def test_failed_fires_when_tarball_missing(self, tmp_path: Path) -> None:
         extracted = tmp_path / "extracted"
         extracted.mkdir()

@@ -204,10 +204,12 @@ def rollback_calibration_profile(
 
     # Best-effort: if the rollback can't load the backup as a valid
     # profile we surface the error early so the operator doesn't end
-    # up with an unloadable canonical file.
+    # up with an unloadable canonical file. The validated profile
+    # also gives us its ``profile_id`` for the rolled_back telemetry
+    # event's spec §8.3 ``profile_id_hash`` field.
     try:
         raw = json.loads(backup.read_text(encoding="utf-8"))
-        _profile_from_dict(raw)
+        backup_profile = _profile_from_dict(raw)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise CalibrationProfileRollbackError(
             f"backup at {backup} is unreadable: {exc}. Refusing to roll back to a corrupt state."
@@ -220,6 +222,7 @@ def rollback_calibration_profile(
 
     logger.info(
         "voice.calibration.applier.rolled_back",
+        profile_id_hash=_short_hash(backup_profile.profile_id),
         mind_id_hash=_short_hash(mind_id),
         path=str(target),
         rollback_reason="operator_initiated",

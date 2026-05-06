@@ -470,6 +470,40 @@ class TestEngineTelemetry:
 
         conflicts = [e for e in events if e[0] == "voice.calibration.engine.rule_conflict"]
         assert len(conflicts) == 1
+        # v0.30.26 spec §8.3 canonical field names:
+        assert conflicts[0][1]["rule_a_id"] == "R_HIGH"
+        assert conflicts[0][1]["rule_b_id"] == "R_LOW"
+        # Backward-compat aliases retained:
         assert conflicts[0][1]["rule_winner_id"] == "R_HIGH"
         assert conflicts[0][1]["rule_loser_id"] == "R_LOW"
         assert conflicts[0][1]["target_field"] == "MindConfig.voice.x"
+
+    def test_run_completed_includes_spec_canonical_fields(self) -> None:
+        """v0.30.26 spec §8.3: applied_count + duration_s on engine.run_completed."""
+        from sovyx.voice.calibration import engine as engine_module
+
+        events, original = self._capture_events(engine_module, "logger")
+        try:
+            rule = _FixedDecisionRule(
+                rule_id="R_test",
+                priority=50,
+                decisions=(_set_decision(target="t", value="v"),),
+            )
+            engine = CalibrationEngine(rules=(rule,), engine_version="0.30.26", rule_set_version=1)
+            engine.evaluate(
+                mind_id="default",
+                fingerprint=_fingerprint(),
+                measurements=_measurements_healthy(),
+            )
+        finally:
+            engine_module.logger = original
+
+        completed = next(e for e in events if e[0] == "voice.calibration.engine.run_completed")
+        # Spec §8.3 mandates these field names + types.
+        assert "duration_s" in completed[1]
+        assert isinstance(completed[1]["duration_s"], float)
+        assert "applied_count" in completed[1]
+        assert isinstance(completed[1]["applied_count"], int)
+        # Backward-compat field still present.
+        assert "duration_ms" in completed[1]
+        assert "decisions_count" in completed[1]
