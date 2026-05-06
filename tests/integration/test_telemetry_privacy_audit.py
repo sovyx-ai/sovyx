@@ -64,15 +64,12 @@ from sovyx.voice.diagnostics import (
 # Privacy contract: known-deprecated fields and dynamic-text fields
 # ────────────────────────────────────────────────────────────────────
 
-DEPRECATED_FIELDS: frozenset[str] = frozenset(
-    {
-        # Removal scheduled for v0.30.29 per mission §4.4 backward-compat.
-        "mind_id",
-        "job_id",
-        "cached_mind_id",
-        "path",
-    }
-)
+DEPRECATED_FIELDS: frozenset[str] = frozenset()
+"""v0.30.28 backward-compat aliases (mind_id / job_id / cached_mind_id /
+path) were removed in v0.30.29 (P1.T9). The exempt set is now empty —
+any new field that fails the heuristic must be EITHER a closed enum
+(add to :data:`CLOSED_ENUM_FIELDS`) OR a hashed identifier (use
+``*_hash`` suffix)."""
 
 DYNAMIC_TEXT_FIELDS: frozenset[str] = frozenset(
     {

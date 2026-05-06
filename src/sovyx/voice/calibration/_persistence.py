@@ -156,9 +156,6 @@ def save_calibration_profile(
         profile_id_hash=_short_hash(profile.profile_id),
         signed=profile.signature is not None,
         backup_present=backup_target.is_file(),
-        # Deprecated raw filesystem path (removal in v0.30.29 per
-        # MISSION-voice-calibration-extreme-audit-2026-05-06 §4.2):
-        path=str(target),
     )
     return target
 
@@ -222,8 +219,6 @@ def rollback_calibration_profile(
         profile_id_hash=_short_hash(backup_profile.profile_id),
         mind_id_hash=_short_hash(mind_id),
         rollback_reason="operator_initiated",
-        # Deprecated raw filesystem path (removal in v0.30.29):
-        path=str(target),
     )
     return target
 
@@ -321,8 +316,6 @@ def load_calibration_profile(
             mind_id_hash=mind_hash,
             profile_id_hash=profile_hash,
             mode=mode.value,
-            # Deprecated raw filesystem path (removal in v0.30.29):
-            path=str(path),
         )
     else:
         # v0.30.19: signature presence reported as "accepted" until the

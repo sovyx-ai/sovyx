@@ -119,9 +119,6 @@ class WizardProgressTracker:
                 "voice.calibration.wizard.progress_read_failed",
                 job_id_hash=short_hash(self._path.parent.name),
                 reason=str(exc),
-                # Deprecated raw filesystem path (removal in v0.30.29 per
-                # MISSION-voice-calibration-extreme-audit-2026-05-06 §4.2):
-                path=str(self._path),
             )
             return []
         for line_no, raw_line in enumerate(content.splitlines(), start=1):

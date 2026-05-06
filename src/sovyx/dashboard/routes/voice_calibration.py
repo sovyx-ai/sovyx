@@ -324,9 +324,6 @@ async def start_calibration_job(
                 "voice.calibration.wizard.runner_failed",
                 job_id_hash=short_hash(job_id),
                 mind_id_hash=short_hash(body.mind_id),
-                # Deprecated raw fields (removal in v0.30.29):
-                job_id=job_id,
-                mind_id=body.mind_id,
             )
 
     # Use asyncio.ensure_future so the task is properly scheduled in
@@ -337,9 +334,6 @@ async def start_calibration_job(
         "voice.calibration.wizard.start",
         job_id_hash=short_hash(job_id),
         mind_id_hash=short_hash(body.mind_id),
-        # Deprecated raw fields (removal in v0.30.29):
-        job_id=job_id,
-        mind_id=body.mind_id,
     )
 
     return StartCalibrationResponse(
@@ -400,8 +394,6 @@ async def cancel_calibration_job(
         "voice.calibration.wizard.cancel_signaled",
         job_id_hash=short_hash(job_id),
         already_terminal=already_terminal,
-        # Deprecated raw fields (removal in v0.30.29):
-        job_id=job_id,
     )
 
     return CancelCalibrationResponse(
@@ -569,8 +561,6 @@ async def stream_calibration_job(
             "voice.calibration.wizard.subscriber_rejected",
             job_id_hash=short_hash(job_id),
             reason="auth",
-            # Deprecated raw fields (removal in v0.30.29):
-            job_id=job_id,
         )
         await websocket.close(code=1008, reason="auth")
         return
@@ -579,8 +569,6 @@ async def stream_calibration_job(
     logger.info(
         "voice.calibration.wizard.subscriber_connected",
         job_id_hash=short_hash(job_id),
-        # Deprecated raw fields (removal in v0.30.29):
-        job_id=job_id,
     )
 
     data_dir = (
@@ -626,16 +614,12 @@ async def stream_calibration_job(
             "voice.calibration.wizard.subscriber_disconnected",
             job_id_hash=short_hash(job_id),
             reason="client_close",
-            # Deprecated raw fields (removal in v0.30.29):
-            job_id=job_id,
         )
         return
     except Exception:
         logger.exception(
             "voice.calibration.wizard.ws_stream_failed",
             job_id_hash=short_hash(job_id),
-            # Deprecated raw fields (removal in v0.30.29):
-            job_id=job_id,
         )
         with contextlib.suppress(Exception):
             await websocket.close(code=1011, reason="stream_error")
@@ -649,6 +633,4 @@ async def stream_calibration_job(
             logger.debug(
                 "voice.calibration.wizard.subscriber_loop_exited",
                 job_id_hash=short_hash(job_id),
-                # Deprecated raw fields (removal in v0.30.29):
-                job_id=job_id,
             )
