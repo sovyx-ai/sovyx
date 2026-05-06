@@ -187,6 +187,67 @@ The Settings → Voice → Advanced section also exposes a runtime toggle that
 flips the in-memory copy on the running daemon (the env / yaml change is
 still required for the value to survive a daemon restart).
 
+#### Calibration FAQ
+
+**Q: How long does the first calibration take?**
+
+8–12 minutes on first run. The pipeline captures a hardware fingerprint
+(~1 s), runs the bundled forensic diagnostic (8–12 min, includes 3 short
+speech windows), triages the result, evaluates the rule engine, and
+persists a signed `CalibrationProfile`. Subsequent runs on the same
+hardware replay the cached profile in ~5 seconds via the fast path.
+
+**Q: My calibration ended in `fallback`. What happened?**
+
+The orchestrator hit a precondition it can't satisfy: missing `bash 4+`,
+non-Linux platform, the diag selftest aborted, or the hypothesis triage
+couldn't crown a winner with confidence ≥ 0.7. The dashboard renders the
+specific reason in the FALLBACK banner; common values are
+`diag_prerequisite_unmet`, `diag_run_failed`, `triage_failed`. Click
+"Use simple setup" to fall back to the v0.30.x device-test wizard.
+
+**Q: Can I roll back a calibration I disagree with?**
+
+Yes — `sovyx doctor voice --calibrate --rollback` restores the prior
+profile from `<data_dir>/<mind_id>/calibration.json.bak`. Single-step
+only; the .bak slot is consumed by the swap. To regenerate, re-run
+`--calibrate` after rollback.
+
+**Q: How do I see what the engine decided without applying anything?**
+
+`sovyx doctor voice --calibrate --dry-run` runs the full pipeline but
+skips persistence + state mutation. Pair with `--explain` to render the
+rule trace (which rules fired, what conditions matched, what they
+produced).
+
+**Q: Where do `voice.diagnostics.*` and `voice.calibration.*` events go?**
+
+To `<data_dir>/logs/sovyx.log` (file handler always JSON) and to the
+configured OTel collector if observability is enabled. Closed-enum
+fields keep the cardinality bounded: `mode ∈ {full, skip_captures,
+surgical}`, `path ∈ {fast, slow, fallback, unknown}`, `step ∈ {probe,
+fast_path, slow_path, review, fallback, unknown}`.
+
+#### Calibration data flow
+
+```text
+operator                bash diag                triage             engine             applier
+   │                        │                       │                  │                  │
+   ├─ --calibrate ─────────▶│                       │                  │                  │
+   │                        │── 8-12min (W1..W3) ──▶│                  │                  │
+   │                        │  result.tar.gz ──────▶│                  │                  │
+   │                        │                       │── HypothesisVerdict ───────────────▶│
+   │ ◀────────────────────────────────────── voice.calibration.*       │                  │
+   │                                              ▲                    │                  │
+   │                                              │                    ▼                  │
+   │                                              │           CalibrationProfile          │
+   │                                              │           (frozen + signed)           │
+   │                                              │                    │                  │
+   │                                              │                    ▼                  │
+   │                                              │     <data_dir>/<mind_id>/calibration.json
+   │ ◀──────────────── advised_actions [ "sovyx doctor voice --fix --yes" ] ──────────────│
+```
+
 ## Common Commands
 
 | Command | Does |
