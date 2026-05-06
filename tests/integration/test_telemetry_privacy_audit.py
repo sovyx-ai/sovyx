@@ -138,8 +138,14 @@ CLOSED_ENUM_FIELDS: frozenset[str] = frozenset(
         "exception_type",
         # rc.3: operation enum on CalibrationDecision (set/advise).
         "operation",
-        # rc.3: rollback semantic reason (e.g. "no_revert_registered").
-        "reason_kind",
+        # NOTE rc.4 (Agent 2 D.3): ``reason_kind`` was speculatively
+        # added in rc.3 but is NEVER emitted in production code (zero
+        # ``reason_kind=`` hits in src/). The actual emission uses
+        # ``reason=`` (DYNAMIC_TEXT_FIELDS) which is bounded by the
+        # specific reason values we hardcode in ``_lifo_rollback``
+        # (``handler_unregistered_during_rollback`` /
+        # ``no_revert_registered``). Removed to keep the test contract
+        # aligned with production.
     }
 )
 

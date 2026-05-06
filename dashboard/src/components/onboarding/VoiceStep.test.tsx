@@ -191,3 +191,126 @@ describe("VoiceStep", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// rc.4 (Agent 3 #8) — VoiceStep single-flow conditional coverage.
+// Pre-rc.4 the conditional at VoiceStep.tsx:212 had no vitest coverage:
+// the existing tests above only exercise the calibrationWizardEnabled=
+// false branch (default store state). A regression that re-introduced
+// dual-mount of <HardwareDetection /> + <VoiceCalibrationStep /> would
+// land green. These tests assert the contract: EXACTLY ONE branch
+// mounts, never both.
+// ════════════════════════════════════════════════════════════════════
+
+import { useDashboardStore } from "@/stores/dashboard";
+
+// Replace VoiceCalibrationStep with a sentinel so we can assert mount
+// presence without pulling in its complex side effects (fingerprint
+// fetch, websocket, etc). Same pattern as recalibrate-button.test.tsx.
+vi.mock("@/components/onboarding/VoiceCalibrationStep", () => ({
+  VoiceCalibrationStep: () => (
+    <div data-testid="voice-calibration-step-sentinel">calibration-step</div>
+  ),
+}));
+
+/** Compose stubGets() with the calibration feature-flag endpoint
+ * stubbed to a specific response so VoiceStep's mount-time
+ * loadCalibrationFeatureFlag() resolves to the desired value (instead
+ * of a default rejection that nukes our preloaded state).
+ */
+function stubGetsWithCalibrationFlag(flag: {
+  enabled: boolean;
+  runtime_override_active?: boolean;
+}) {
+  mockGet.mockImplementation((url: string) => {
+    if (url === "/api/voice/hardware-detect") return Promise.resolve(hardwareInfo);
+    if (url === "/api/voice/voices") return Promise.resolve(voiceCatalog);
+    if (url === "/api/voice/models/status") return Promise.resolve(modelsStatus);
+    if (url === "/api/voice/calibration/feature-flag") return Promise.resolve(flag);
+    if (url === "/api/voice/wizard/devices") return Promise.resolve({ devices: [] });
+    return Promise.reject(new Error(`unexpected GET ${url}`));
+  });
+}
+
+describe("VoiceStep — single-flow conditional (rc.4 Agent 3 #8)", () => {
+  beforeEach(() => {
+    // Reset the calibration slice's feature-flag state between tests.
+    useDashboardStore.setState({ calibrationFeatureFlag: null });
+  });
+
+  it("renders <HardwareDetection /> + does NOT render <VoiceCalibrationStep /> when flag is OFF", async () => {
+    // Mount-time loadCalibrationFeatureFlag resolves to enabled=false.
+    stubGetsWithCalibrationFlag({ enabled: false, runtime_override_active: false });
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+
+    // Hardware detection runs and renders the cores summary.
+    await screen.findByText(/8 cores/i);
+
+    // The legacy "Open setup wizard" affordance is present (legacy path).
+    expect(
+      screen.getByRole("button", { name: /open setup wizard/i }),
+    ).toBeInTheDocument();
+
+    // The calibration step sentinel is NOT mounted.
+    expect(
+      screen.queryByTestId("voice-calibration-step-sentinel"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders <VoiceCalibrationStep /> + does NOT render <HardwareDetection /> when flag is ON", async () => {
+    // Mount-time loadCalibrationFeatureFlag resolves to enabled=true.
+    // We also pre-set the store so the FIRST render already sees the
+    // flag as enabled (otherwise the first paint would briefly show the
+    // legacy branch, and our absence assertion below would race).
+    useDashboardStore.setState({
+      calibrationFeatureFlag: { enabled: true, runtime_override_active: false },
+    });
+    stubGetsWithCalibrationFlag({ enabled: true, runtime_override_active: false });
+
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+
+    // Calibration step sentinel mounts.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-calibration-step-sentinel"),
+      ).toBeInTheDocument();
+    });
+
+    // HardwareDetection's "8 cores" summary is NOT shown — the
+    // conditional took the calibration branch and the legacy component
+    // never mounts.
+    expect(screen.queryByText(/8 cores/i)).not.toBeInTheDocument();
+
+    // The legacy "Open setup wizard" affordance is also NOT mounted.
+    expect(
+      screen.queryByRole("button", { name: /open setup wizard/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("never dual-mounts both branches under any feature-flag state", async () => {
+    // Flag ON path.
+    useDashboardStore.setState({
+      calibrationFeatureFlag: { enabled: true, runtime_override_active: false },
+    });
+    stubGetsWithCalibrationFlag({ enabled: true, runtime_override_active: false });
+
+    const { unmount } = render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-calibration-step-sentinel"),
+      ).toBeInTheDocument();
+    });
+    // Hardware detection sub-strings are absent.
+    expect(screen.queryByText(/8 cores/i)).not.toBeInTheDocument();
+    unmount();
+
+    // Flag OFF path (separate render with reset state).
+    useDashboardStore.setState({ calibrationFeatureFlag: null });
+    stubGetsWithCalibrationFlag({ enabled: false, runtime_override_active: false });
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+    await screen.findByText(/8 cores/i);
+    expect(
+      screen.queryByTestId("voice-calibration-step-sentinel"),
+    ).not.toBeInTheDocument();
+  });
+});

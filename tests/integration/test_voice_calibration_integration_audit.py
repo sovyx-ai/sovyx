@@ -361,9 +361,18 @@ class TestWebSocketAuthBehavior:
 # ════════════════════════════════════════════════════════════════════
 # rc.3 (Agent 2 #18) — concurrent-POST integration test for QA-FIX-5 race
 # ════════════════════════════════════════════════════════════════════
+#
+# rc.4 (Agent 2 E.3): the @pytest.mark.integration marker was REMOVED
+# because this class doesn't fit the marker's documented criteria
+# ("real ML models, SQLite heavy IO, or cross-component wiring"). The
+# tests run httpx + ASGITransport in-process — pure Python, no external
+# resources. Pre-rc.4 the marker caused CI to silently SKIP the
+# QA-FIX-5 race regression (pyproject.toml addopts excludes
+# ``-m 'not integration'`` and the workflow doesn't opt in). A future
+# regression to ``_START_LOCKS`` would have slipped past CI green.
+# Removing the marker makes these tests run on every push.
 
 
-@pytest.mark.integration
 class TestConcurrentStartRaceQaFix5:
     """End-to-end verification of the per-mind ``_START_LOCKS`` race fix.
 

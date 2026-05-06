@@ -584,6 +584,186 @@ class TestCancellation:
         assert completed[1]["escalated_to_sigkill"] is False
         assert "duration_s" in completed[1]
 
+    # ────────────────────────────────────────────────────────────────
+    # rc.4 (Agent 3 #2) — POSIX cancellation path coverage. Pre-rc.4
+    # every TestCancellation test forced ``sys.platform == "win32"`` so
+    # the production POSIX chain (``os.killpg`` + ``start_new_session``)
+    # had ZERO direct test coverage. These tests close the gap on the
+    # path that's actually exercised in production.
+    # ────────────────────────────────────────────────────────────────
+
+    @pytest.mark.asyncio()
+    async def test_posix_spawn_passes_start_new_session_true(self, tmp_path: Path) -> None:
+        """Production POSIX runner sets ``start_new_session=True`` so the
+        bash diag becomes a process group leader; ``os.killpg`` then signals
+        every child (arecord, pactl, pw-record, sox, etc.). A regression
+        that drops the kwarg would orphan children on SIGTERM — this test
+        guards it.
+        """
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
+
+        captured_kwargs: list[dict[str, Any]] = []
+
+        async def _factory(*_args: Any, **kwargs: Any) -> _FakeAsyncProcess:
+            captured_kwargs.append(dict(kwargs))
+            return _FakeAsyncProcess(returncode=0)
+
+        with (
+            patch.object(_runner, "_check_prerequisites"),
+            patch.object(
+                _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+            ),
+            patch.object(_runner.asyncio, "create_subprocess_exec", side_effect=_factory),
+            patch.object(_runner.sys, "platform", "linux"),
+        ):
+            await run_full_diag_async(output_root=output_root)
+
+        assert len(captured_kwargs) == 1
+        assert captured_kwargs[0].get("start_new_session") is True, (
+            f"POSIX path MUST pass start_new_session=True so os.killpg "
+            f"signals the entire bash subtree; spawn kwargs={captured_kwargs[0]!r}"
+        )
+
+    @pytest.mark.asyncio()
+    async def test_windows_spawn_does_not_pass_start_new_session(self, tmp_path: Path) -> None:
+        """``start_new_session`` is POSIX-only; Windows spawn must NOT
+        carry the kwarg (asyncio's win32 transport rejects unknown kwargs
+        in some configurations).
+        """
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
+
+        captured_kwargs: list[dict[str, Any]] = []
+
+        async def _factory(*_args: Any, **kwargs: Any) -> _FakeAsyncProcess:
+            captured_kwargs.append(dict(kwargs))
+            return _FakeAsyncProcess(returncode=0)
+
+        with (
+            patch.object(_runner, "_check_prerequisites"),
+            patch.object(
+                _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+            ),
+            patch.object(_runner.asyncio, "create_subprocess_exec", side_effect=_factory),
+            patch.object(_runner.sys, "platform", "win32"),
+        ):
+            await run_full_diag_async(output_root=output_root)
+
+        assert len(captured_kwargs) == 1
+        assert "start_new_session" not in captured_kwargs[0], (
+            f"Windows spawn must NOT pass start_new_session; got {captured_kwargs[0]!r}"
+        )
+
+    @pytest.mark.asyncio()
+    async def test_posix_cancel_calls_killpg_with_sigterm(self, tmp_path: Path) -> None:
+        """On POSIX, ``_cancel_process_tree`` MUST signal the process
+        GROUP (``os.killpg``), not just the process (``os.kill``). A
+        regression that uses ``os.kill`` would leave the bash children
+        running after operator cancel.
+        """
+        killpg_calls: list[tuple[int, int]] = []
+
+        def _fake_killpg(pid: int, sig: int) -> None:
+            killpg_calls.append((pid, sig))
+            # Simulate the bash trap-EXIT cleaning up + the process
+            # group exiting in response to SIGTERM.
+            proc._terminated_event.set()  # noqa: SLF001 — test fixture
+
+        proc = _FakeAsyncProcess(pid=99001, returncode=0, hang_seconds=10.0)
+
+        with (
+            patch.object(_runner.sys, "platform", "linux"),
+            patch.object(_runner.os, "killpg", side_effect=_fake_killpg, create=True),
+        ):
+            await _runner._cancel_process_tree(proc, grace_period_s=1.0)
+
+        assert killpg_calls, "os.killpg was never called on the POSIX cancel path"
+        first_call = killpg_calls[0]
+        assert first_call[0] == 99001, "killpg must target the process group via the spawned PID"
+        import signal as _signal
+
+        assert first_call[1] == _signal.SIGTERM, "first signal must be SIGTERM (graceful)"
+
+    @pytest.mark.asyncio()
+    async def test_posix_cancel_escalates_to_killpg_sigkill(self, tmp_path: Path) -> None:
+        """When SIGTERM grace expires, the POSIX path MUST escalate via
+        ``os.killpg(SIGKILL)`` (not ``os.kill``). Mirrors the Windows
+        escalation test but on the production code path.
+
+        Note: ``signal.SIGKILL`` only exists on POSIX. On Windows test
+        hosts we inject the canonical POSIX value (9) so the production
+        code's ``signal.SIGKILL`` resolves cleanly under the patched
+        ``sys.platform == 'linux'`` guard.
+        """
+        killpg_calls: list[tuple[int, int]] = []
+        # Canonical POSIX SIGKILL value; constant across all POSIX systems.
+        _SIGKILL_VALUE = 9
+
+        def _fake_killpg(pid: int, sig: int) -> None:
+            killpg_calls.append((pid, sig))
+            # SIGKILL terminates immediately; SIGTERM is ignored to force
+            # escalation (mirrors ignore_sigterm=True behaviour).
+            if sig == _SIGKILL_VALUE:
+                proc._terminated_event.set()  # noqa: SLF001
+
+        proc = _FakeAsyncProcess(pid=99002, returncode=0, hang_seconds=30.0, ignore_sigterm=True)
+
+        with (
+            patch.object(_runner.sys, "platform", "linux"),
+            patch.object(_runner.os, "killpg", side_effect=_fake_killpg, create=True),
+            patch.object(_runner.signal, "SIGKILL", _SIGKILL_VALUE, create=True),
+            patch.object(_runner, "_CANCEL_GRACE_PERIOD_S", 0.05),
+            patch.object(_runner, "_CANCEL_SIGKILL_WAIT_S", 0.5),
+        ):
+            await _runner._cancel_process_tree(proc, grace_period_s=0.05)
+
+        import signal as _signal
+
+        signals = [sig for (_pid, sig) in killpg_calls]
+        assert _signal.SIGTERM in signals, "SIGTERM must be sent first"
+        assert _SIGKILL_VALUE in signals, "SIGKILL (9) must escalate when grace expires"
+        # Order: SIGTERM before SIGKILL.
+        assert signals.index(_signal.SIGTERM) < signals.index(_SIGKILL_VALUE)
+
+    @pytest.mark.asyncio()
+    async def test_posix_cancel_completes_within_grace_plus_sigkill_wait(
+        self, tmp_path: Path
+    ) -> None:
+        """SLA: cancel completion (graceful path) must NOT exceed the
+        grace period + a small scheduler slack. Mission §0 promise 2
+        ("Cancel mid-diag → CANCELLED in ≤ 10s") is bounded by this
+        check + the production constants ``_CANCEL_GRACE_PERIOD_S=10.0``
+        and ``_CANCEL_SIGKILL_WAIT_S=5.0`` (worst-case 15s, but typical
+        graceful exit ≈ 1-2s for the bash trap).
+
+        Test uses tight constants (grace=0.10s, sigkill_wait=0.20s) so
+        the wallclock assertion is fast.
+        """
+
+        def _fake_killpg(pid: int, sig: int) -> None:  # noqa: ARG001
+            # SIGTERM terminates the process group cleanly; trap-EXIT
+            # mock-runs in zero time.
+            proc._terminated_event.set()  # noqa: SLF001
+
+        proc = _FakeAsyncProcess(pid=99003, returncode=0, hang_seconds=5.0)
+        import time as _time
+
+        with (
+            patch.object(_runner.sys, "platform", "linux"),
+            patch.object(_runner.os, "killpg", side_effect=_fake_killpg, create=True),
+        ):
+            t0 = _time.monotonic()
+            await _runner._cancel_process_tree(proc, grace_period_s=0.10)
+            wallclock_s = _time.monotonic() - t0
+
+        # Graceful exit: SIGTERM honoured within scheduler slack.
+        # Allow 2s slack for slow CI / Windows clock granularity.
+        assert wallclock_s < 2.0, (
+            f"graceful cancel took {wallclock_s:.3f}s — exceeds the 2s test slack; "
+            f"production wallclock assertion is grace+sigkill_wait = 15s"
+        )
+
     @pytest.mark.asyncio()
     async def test_cancel_grace_expired_telemetry_fires_on_escalation(
         self, tmp_path: Path

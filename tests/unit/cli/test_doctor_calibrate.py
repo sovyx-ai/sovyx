@@ -642,3 +642,178 @@ class TestSurgicalFlag:
         assert "A,C,D,E,J" in extra_args
         # CLI explicitly passes trigger="cli"
         assert captured["kwargs"]["trigger"] == "cli"
+
+
+# ════════════════════════════════════════════════════════════════════
+# rc.4 (Agent 3 #11) — `--evaluate-rules` behavior coverage. Pre-rc.4
+# only the help-text registration was tested; the actual dry-eval flow
+# (capture_fingerprint + capture_measurements + engine.evaluate +
+# render-only with no apply / no diag / no triage) had ZERO behavior
+# coverage. A regression that wired a real apply() instead of dry-eval,
+# or that broke capture_measurements(triage_result=None), or that
+# accidentally triggered run_full_diag would land green pre-rc.4.
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestEvaluateRulesBehavior:
+    """``sovyx doctor voice --calibrate --evaluate-rules`` runs render-only.
+
+    Mission §0 promise 11 (``--evaluate-rules`` CLI mode): "render rule
+    trace without running diag/applying". Tests assert the contract:
+
+    * Calls ``capture_fingerprint`` exactly once.
+    * Calls ``capture_measurements`` exactly once with
+      ``triage_result=None`` and ``diag_tarball_root=None``.
+    * Calls ``CalibrationEngine.evaluate`` exactly once with the
+      captured fingerprint + measurements + ``triage_result=None``.
+    * Does NOT invoke ``run_full_diag`` or ``triage_tarball``.
+    * Does NOT invoke ``CalibrationApplier.apply`` (real or dry).
+    * Returns exit code 0 on success.
+    * Renders ``[dry-eval, no apply]`` marker so the operator sees the
+      mode.
+    """
+
+    def test_evaluate_rules_runs_dry_eval_without_diag_or_apply(self) -> None:
+        # ``_run_voice_calibrate_evaluate_rules`` does a LAZY import:
+        # ``from sovyx.voice.calibration import capture_fingerprint,
+        # CalibrationEngine`` and
+        # ``from sovyx.voice.calibration._measurer import capture_measurements``.
+        # The lazy import resolves attributes on the SOURCE modules at
+        # call-time, so patching the doctor-module attribute would not
+        # affect the lazy binding. Patch the source modules directly.
+        with (
+            patch(
+                "sovyx.voice.calibration.capture_fingerprint",
+                return_value=_fingerprint(),
+            ) as fingerprint_mock,
+            patch(
+                "sovyx.voice.calibration._measurer.capture_measurements",
+                return_value=_measurements(),
+            ) as measurements_mock,
+            patch(
+                "sovyx.voice.calibration.CalibrationEngine.evaluate",
+                return_value=_r10_profile(),
+            ) as evaluate_mock,
+            # Belt-and-suspenders: assert these are NEVER called.
+            patch("sovyx.cli.commands.doctor.run_full_diag") as run_diag_mock,
+            patch("sovyx.cli.commands.doctor.triage_tarball") as triage_mock,
+            patch("sovyx.cli.commands.doctor.CalibrationApplier.apply") as apply_mock,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "doctor",
+                    "voice",
+                    "--calibrate",
+                    "--non-interactive",
+                    "--evaluate-rules",
+                ],
+            )
+
+        assert result.exit_code == 0, (
+            f"unexpected exit {result.exit_code} from --evaluate-rules; output: {result.output!r}"
+        )
+        # Must have rendered the dry-eval banner so the operator knows
+        # nothing was applied.
+        clean = _strip_ansi(result.output)
+        assert "dry-eval" in clean.lower(), (
+            f"--evaluate-rules must render the dry-eval marker; output: {clean!r}"
+        )
+
+        # The 3 expected calls.
+        assert fingerprint_mock.call_count == 1
+        assert measurements_mock.call_count == 1
+        # capture_measurements MUST receive triage_result=None +
+        # diag_tarball_root=None (the dry-eval contract).
+        meas_kwargs = measurements_mock.call_args.kwargs
+        assert meas_kwargs.get("triage_result") is None
+        assert meas_kwargs.get("diag_tarball_root") is None
+        assert evaluate_mock.call_count == 1, (
+            "engine.evaluate must be invoked exactly once on --evaluate-rules"
+        )
+        eng_kwargs = evaluate_mock.call_args.kwargs
+        assert eng_kwargs.get("triage_result") is None, (
+            f"engine.evaluate must be called with triage_result=None on "
+            f"--evaluate-rules; got {eng_kwargs!r}"
+        )
+
+        # The 3 forbidden calls (diag + triage + apply).
+        assert run_diag_mock.call_count == 0, "--evaluate-rules must NOT invoke run_full_diag"
+        assert triage_mock.call_count == 0, "--evaluate-rules must NOT invoke triage_tarball"
+        assert apply_mock.call_count == 0, (
+            "--evaluate-rules must NOT invoke CalibrationApplier.apply (even dry-run)"
+        )
+
+    def test_evaluate_rules_with_explain_flag_invokes_explain_renderer(self) -> None:
+        """``--explain`` should propagate into the verdict renderer."""
+        with (
+            patch(
+                "sovyx.voice.calibration.capture_fingerprint",
+                return_value=_fingerprint(),
+            ),
+            patch(
+                "sovyx.voice.calibration._measurer.capture_measurements",
+                return_value=_measurements(),
+            ),
+            patch(
+                "sovyx.voice.calibration.CalibrationEngine.evaluate",
+                return_value=_r10_profile(),
+            ),
+            patch("sovyx.cli.commands.doctor.run_full_diag"),
+            patch("sovyx.cli.commands.doctor.triage_tarball"),
+            patch("sovyx.cli.commands.doctor.CalibrationApplier.apply"),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "doctor",
+                    "voice",
+                    "--calibrate",
+                    "--non-interactive",
+                    "--evaluate-rules",
+                    "--explain",
+                ],
+            )
+
+        assert result.exit_code == 0
+        clean = _strip_ansi(result.output)
+        # In --explain mode the verdict renderer surfaces the rule_id
+        # alongside the decision; the R10 fixture has rule_id =
+        # "R10_mic_attenuated" so one of those substrings must appear.
+        assert "R10" in clean or "mic_attenuated" in clean, (
+            f"--explain must surface rule detail; output: {clean!r}"
+        )
+
+    def test_evaluate_rules_fingerprint_failure_returns_generic_failure(self) -> None:
+        """Fingerprint capture failure surfaces EXIT_DOCTOR_GENERIC_FAILURE
+        (5) without crashing or invoking downstream stages.
+        """
+        with (
+            patch(
+                "sovyx.voice.calibration.capture_fingerprint",
+                side_effect=RuntimeError("synthetic dmidecode failure"),
+            ),
+            patch("sovyx.voice.calibration._measurer.capture_measurements") as measurements_mock,
+            patch("sovyx.voice.calibration.CalibrationEngine.evaluate") as evaluate_mock,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "doctor",
+                    "voice",
+                    "--calibrate",
+                    "--non-interactive",
+                    "--evaluate-rules",
+                ],
+            )
+
+        # EXIT_DOCTOR_GENERIC_FAILURE = 1 per cli/commands/doctor.py:92.
+        assert result.exit_code == 1, (
+            f"fingerprint failure must yield EXIT_DOCTOR_GENERIC_FAILURE=1; "
+            f"got {result.exit_code} with output {result.output!r}"
+        )
+        clean = _strip_ansi(result.output)
+        assert "Fingerprint capture failed" in clean
+        # Downstream stages MUST be skipped on early failure.
+        assert measurements_mock.call_count == 0
+        assert evaluate_mock.call_count == 0
