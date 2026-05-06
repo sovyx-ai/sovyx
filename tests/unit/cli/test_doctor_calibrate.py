@@ -265,15 +265,86 @@ class TestSigningKeyFailFast:
         assert "no_such_key.pem" in combined_compact
         assert "generate_calibration_signing_key.py" in combined_compact
 
-    def test_signing_key_existing_path_passes_validation(self, tmp_path: Path) -> None:
-        """A real (existing) file path passes the fail-fast check; the
-        downstream pipeline takes over (TTY check / non-interactive / etc).
+    def test_signing_key_malformed_pem_rejected_at_flag_parse(self, tmp_path: Path) -> None:
+        """rc.7 (Agent 2 NEW.1): garbage-bytes file passes ``is_file()``
+        but fails PEM parsing. Pre-rc.7 the operator wasted 8-12 min
+        of diag runtime then landed unsigned. Now the deeper validation
+        fires at flag-parse with a Click BadParameter.
         """
-        existing = tmp_path / "real_key.pem"
-        existing.write_text("-----BEGIN PRIVATE KEY-----\n...\n", encoding="utf-8")
-        # Without --non-interactive on a non-TTY stdin, this hits the TTY
-        # gate at exit_code 4 — proving the signing-key path validation
-        # PASSED (else we'd see exit !=0 with a different message).
+        garbage = tmp_path / "garbage_key.pem"
+        garbage.write_bytes(b"not a valid PEM key, just random bytes\n")
+        result = runner.invoke(
+            app,
+            [
+                "doctor",
+                "voice",
+                "--calibrate",
+                "--non-interactive",
+                "--signing-key",
+                str(garbage),
+            ],
+        )
+        assert result.exit_code != 0
+        combined = _strip_ansi(result.output) + (
+            _strip_ansi(result.stderr) if result.stderr_bytes else ""
+        )
+        compact = "".join(combined.split())
+        assert "--signing-keyvalidationfailed" in compact
+        assert "garbage_key.pem" in compact
+        assert "generate_calibration_signing_key.py" in compact
+
+    def test_signing_key_rsa_not_ed25519_rejected_at_flag_parse(self, tmp_path: Path) -> None:
+        """rc.7 (Agent 2 NEW.1): RSA private key (or any non-Ed25519
+        algorithm) is rejected at flag-parse with a clear message.
+        """
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        rsa_pem = rsa_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        wrong_algo = tmp_path / "rsa_key.pem"
+        wrong_algo.write_bytes(rsa_pem)
+
+        result = runner.invoke(
+            app,
+            [
+                "doctor",
+                "voice",
+                "--calibrate",
+                "--non-interactive",
+                "--signing-key",
+                str(wrong_algo),
+            ],
+        )
+        assert result.exit_code != 0
+        combined = _strip_ansi(result.output) + (
+            _strip_ansi(result.stderr) if result.stderr_bytes else ""
+        )
+        compact = "".join(combined.split())
+        assert "--signing-keyvalidationfailed" in compact
+        assert "Ed25519" in combined  # cite the expected algorithm
+
+    def test_signing_key_valid_ed25519_passes_validation(self, tmp_path: Path) -> None:
+        """rc.7 (Agent 2 NEW.1) — A valid Ed25519 PEM passes the deeper
+        validation; the downstream pipeline (TTY gate / non-interactive
+        check / prerequisite check) takes over.
+        """
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
+        ed_key = ed25519.Ed25519PrivateKey.generate()
+        ed_pem = ed_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        existing = tmp_path / "real_ed25519_key.pem"
+        existing.write_bytes(ed_pem)
+
         result = runner.invoke(
             app,
             [
@@ -284,14 +355,93 @@ class TestSigningKeyFailFast:
                 str(existing),
             ],
         )
-        # The TTY gate fires AFTER the signing-key validation. So either
-        # the run reached the TTY gate (exit 4) or — on a TTY-detected
-        # CI runner — proceeded to the prerequisite check (exit varies).
-        # What we MUST NOT see is the fail-fast --signing-key error.
+        # Validation PASSED — downstream TTY gate or prereq check fires.
         combined = _strip_ansi(result.output) + (
             _strip_ansi(result.stderr) if result.stderr_bytes else ""
         )
-        assert "--signing-key path does not exist" not in combined
+        compact = "".join(combined.split())
+        assert "--signing-keypathdoesnotexist" not in compact
+        assert "--signing-keyvalidationfailed" not in compact
+
+
+# ====================================================================
+# rc.7 (Agent 2 NEW.2/NEW.3): _render_calibration_verdict surfaces
+# signed/unsigned status from `apply_result.signed`, NOT from
+# `profile.signature` (which is always None on frozen profiles).
+# Pre-rc.7 the renderer read profile.signature and showed
+# "Profile is unsigned" on EVERY clean --calibrate run, even when
+# --signing-key worked. This regression class pins the rc.7 contract.
+# ====================================================================
+
+
+class TestRenderCalibrationVerdictSignedStatus:
+    """``_render_calibration_verdict`` surfaces signing status from
+    ``apply_result.signed`` — the disk-side truth — instead of
+    ``profile.signature`` which is always None on the in-memory profile.
+    """
+
+    @staticmethod
+    def _capture_render(signed_status: bool | None, *, dry_run: bool = False) -> str:
+        """Invoke ``_render_calibration_verdict`` with a synthetic
+        ApplyResult carrying the given signed status; capture rendered
+        text via Rich's Console.capture context manager.
+        """
+        from rich.console import Console
+
+        from sovyx.cli.commands import doctor as doctor_module
+
+        # Build minimal apply_result + profile.
+        apply_result = ApplyResult(
+            profile_path=Path("/tmp/calibration.json"),
+            applied_decisions=(),
+            skipped_decisions=(_r10_advise_decision(),),
+            advised_actions=(),
+            dry_run=dry_run,
+            signed=signed_status,
+        )
+        profile = _r10_profile()
+
+        # Replace the doctor module's console with a capturable one.
+        captured_console = Console(record=True, force_terminal=False)
+        original_console = doctor_module.console
+        doctor_module.console = captured_console
+        try:
+            doctor_module._render_calibration_verdict(profile, apply_result, explain=False)
+        finally:
+            doctor_module.console = original_console
+        return _strip_ansi(captured_console.export_text())
+
+    def test_signed_true_renders_green_checkmark_banner(self) -> None:
+        """``apply_result.signed = True`` → green ✓ + STRICT mode hint."""
+        rendered = self._capture_render(signed_status=True)
+        assert "✓" in rendered
+        assert "signed" in rendered
+        assert "Ed25519" in rendered
+        assert "STRICT" in rendered
+
+    def test_signed_false_renders_unsigned_hint(self) -> None:
+        """``apply_result.signed = False`` → dim "unsigned" + --signing-key
+        suggestion. Pre-rc.7 this fired on EVERY clean --calibrate run
+        regardless of the actual signing outcome.
+        """
+        rendered = self._capture_render(signed_status=False)
+        assert "unsigned" in rendered
+        # Hint to the operator that --signing-key would sign next time.
+        assert "--signing-key" in rendered
+        # Critical: must NOT show the "✓ signed" banner.
+        assert "✓" not in rendered
+
+    def test_signed_none_dry_run_renders_no_signing_banner(self) -> None:
+        """``apply_result.signed = None`` (dry-run path) → renderer
+        renders neither banner. Persistence didn't happen so there's
+        nothing to verify.
+        """
+        rendered = self._capture_render(signed_status=None, dry_run=True)
+        assert "signed" not in rendered.lower() or "unsigned" not in rendered
+        # Most explicit: neither the green checkmark nor the unsigned
+        # hint should fire.
+        assert "✓ Profile is" not in rendered
+        assert "Profile is unsigned" not in rendered
 
 
 # ====================================================================

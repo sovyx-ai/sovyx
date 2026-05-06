@@ -38,7 +38,7 @@ import json
 import os
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -71,6 +71,36 @@ logger = get_logger(__name__)
 _PROFILE_FILENAME = "calibration.json"
 _TMP_SUFFIX = ".tmp"
 _BAK_SUFFIX = ".bak"
+
+
+class SaveProfileResult(NamedTuple):
+    """Result of :func:`save_calibration_profile`.
+
+    rc.7 (Agent 2 NEW.2/NEW.3): the renderer at
+    :func:`sovyx.cli.commands.doctor._render_calibration_verdict`
+    needs to know whether the persisted profile was signed so the
+    operator who passed ``--signing-key`` can verify signing actually
+    succeeded. Pre-rc.7 the function returned only ``Path`` and the
+    renderer read ``profile.signature`` (which is always None on the
+    in-memory profile because :class:`CalibrationProfile` is frozen
+    and the signature is injected into a serialized dict copy at
+    :func:`save_calibration_profile`). Result: every clean
+    ``--calibrate`` run rendered "Profile is unsigned" even when
+    signing succeeded — defeating the operator-validation gate Step 6
+    contract.
+
+    Attributes:
+        path: Where the profile was persisted.
+        signed: True when the profile was signed before write
+            (``--signing-key`` resolved + key loaded + signature
+            computed); False otherwise (no key passed, or key
+            load/sign raised + we logged ``signing_failed`` /
+            ``signing_skipped`` and fell through to unsigned).
+    """
+
+    path: Path
+    signed: bool
+
 
 # Trust store: shipped public key is loaded once at first verify call,
 # then cached at module level. Layered v2.pub support (multi-key trust
@@ -258,7 +288,7 @@ def save_calibration_profile(
     *,
     data_dir: Path,
     signing_key_path: Path | None = None,
-) -> Path:
+) -> SaveProfileResult:
     """Persist a calibration profile atomically; optionally sign first.
 
     Writes to a sibling ``.calibration.json.tmp`` first, then
@@ -286,7 +316,12 @@ def save_calibration_profile(
             the v0.30.x staged-adoption window.
 
     Returns:
-        The absolute path the profile was written to.
+        :class:`SaveProfileResult` carrying the persisted path AND a
+        ``signed`` boolean so callers (the renderer in particular) can
+        accurately tell the operator whether the profile landed signed
+        or unsigned. rc.7 (Agent 2 NEW.2/NEW.3): pre-rc.7 returned
+        only ``Path`` and the renderer read ``profile.signature`` which
+        was always ``None`` on the in-memory frozen profile.
     """
     target = profile_path(data_dir=data_dir, mind_id=profile.mind_id)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -357,7 +392,7 @@ def save_calibration_profile(
         signed=was_signed,
         backup_present=backup_target.is_file(),
     )
-    return target
+    return SaveProfileResult(path=target, signed=was_signed)
 
 
 def rollback_calibration_profile(

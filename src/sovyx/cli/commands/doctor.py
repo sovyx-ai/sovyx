@@ -435,14 +435,40 @@ def doctor_voice(
     # crypto): the operator who passed --signing-key explicitly intended
     # signed output; a missing-path on a signed-intent run MUST surface
     # at flag-parse time, not deep in `_persistence.py:319` after the diag.
-    if signing_key is not None and not signing_key.is_file():
-        raise typer.BadParameter(
-            f"--signing-key path does not exist: {signing_key}\n"
-            f"Pass an existing PEM-encoded Ed25519 private key file. "
-            f"Generate via `scripts/dev/generate_calibration_signing_key.py` "
-            f"(dev-only); production rotation per docs/contributing/voice-kb-rotation.md.",
-            param_hint="--signing-key",
+    #
+    # rc.7 (Agent 2 NEW.1): extend the fail-fast to ALSO validate the key
+    # format (PEM parseable + Ed25519 algorithm). Pre-rc.7 a malformed
+    # PEM or non-Ed25519 key (e.g. RSA) passed `is_file()` + ran the
+    # 8-12 min diag + landed UNSIGNED with the only forensic surface
+    # being a structlog WARN. Now `_load_private_signing_key()` runs
+    # at flag-parse time (cost <1ms) and converts its RuntimeError
+    # into a Click BadParameter with the underlying reason.
+    if signing_key is not None:
+        if not signing_key.is_file():
+            raise typer.BadParameter(
+                f"--signing-key path does not exist: {signing_key}\n"
+                f"Pass an existing PEM-encoded Ed25519 private key file. "
+                f"Generate via `scripts/dev/generate_calibration_signing_key.py` "
+                f"(dev-only); production rotation per docs/contributing/voice-kb-rotation.md.",
+                param_hint="--signing-key",
+            )
+        # Lazy import: avoid loading cryptography at startup for callers
+        # who never pass --signing-key.
+        from sovyx.voice.calibration._persistence import (  # noqa: PLC0415
+            _load_private_signing_key,
         )
+
+        try:
+            _load_private_signing_key(signing_key)
+        except RuntimeError as exc:
+            raise typer.BadParameter(
+                f"--signing-key validation failed: {exc}\n"
+                f"Generate a valid Ed25519 PEM via "
+                f"`scripts/dev/generate_calibration_signing_key.py` "
+                f"(dev-only); production rotation per "
+                f"docs/contributing/voice-kb-rotation.md.",
+                param_hint="--signing-key",
+            ) from exc
     exit_code = _run_voice_doctor(
         output_json=output_json,
         device=device,
@@ -1038,29 +1064,36 @@ def _render_calibration_verdict(
             for dec in trace.produced_decisions:
                 console.print(f"    produced: {dec}")
 
-    # rc.6 (Agent 2 A.4): surface the profile's signature status so the
-    # operator can verify --signing-key actually worked (or didn't). Pre-rc.6
-    # the operator who passed --signing-key saw "Profile persisted to:" with
-    # no indication of whether the persisted profile was signed; the only
-    # way to verify was tail $data_dir/logs/sovyx.log | grep signing_skipped.
-    # Now the verdict explicitly confirms signed/unsigned in the green/yellow
-    # banner.
-    signature_present = getattr(profile, "signature", None) is not None
-    if signature_present:
+    # rc.7 (Agent 2 NEW.2/NEW.3): read signed status from apply_result.signed,
+    # NOT from profile.signature. The in-memory profile is a frozen
+    # dataclass with signature=None (set unconditionally at engine.py:307);
+    # the actual signature is injected into a JSON-serialized dict copy
+    # at _persistence.py:334 — never mutates the profile object. So a
+    # `getattr(profile, "signature", None)` check is ALWAYS False
+    # post-calibrate, regardless of whether --signing-key worked.
+    # apply_result.signed (rc.7-added) carries the disk-side truth:
+    # True when persisted signed, False when unsigned, None on dry_run.
+    signed_status = getattr(apply_result, "signed", None)
+    if signed_status is True:
         console.print(
             "\n[green]✓[/green] Profile is [bold green]signed[/bold green] "
             "(Ed25519). Loadable in STRICT mode."
         )
-    else:
-        # Unsigned is the normal path when --signing-key is not passed; only
-        # surface a yellow banner when the dry_run flag is False (we actually
-        # persisted) so the operator knows the file went to disk unsigned.
-        dry_run_attr_for_sig = getattr(apply_result, "dry_run", False)
-        if not dry_run_attr_for_sig:
-            console.print(
-                "\n[dim]Profile is unsigned[/dim] (loadable in LENIENT mode "
-                "only; STRICT mode rejects). Pass --signing-key to sign."
-            )
+    elif signed_status is False:
+        # Persisted unsigned. This is the NORMAL path when --signing-key
+        # is not passed (the dev signing key is dev-only per
+        # docs/contributing/voice-kb-rotation.md). Only surface a hint
+        # when the operator DID pass --signing-key but signing failed
+        # (was_signed=False but key was supplied) — otherwise the
+        # operator who deliberately ran unsigned doesn't need a warning.
+        # We can't know whether the operator passed --signing-key here
+        # (the applier swallows that decision), so we surface a quiet
+        # informational line on every unsigned-but-persisted run.
+        console.print(
+            "\n[dim]Profile is unsigned (LENIENT-loadable). "
+            "Pass --signing-key on next --calibrate to sign.[/dim]"
+        )
+    # signed_status is None → dry_run; render nothing (profile not persisted).
 
     # Profile path footer.
     profile_path_attr = getattr(apply_result, "profile_path", None)

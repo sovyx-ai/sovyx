@@ -107,6 +107,13 @@ class ApplyResult:
     confirm_required_decisions: tuple[CalibrationDecision, ...] = ()
     dry_run: bool = False
     rolled_back: bool = False
+    # rc.7 (Agent 2 NEW.2/NEW.3): True when the persisted profile was
+    # signed (operator passed --signing-key + key loaded + signature
+    # computed); False when persisted unsigned; None on dry_run paths
+    # where no persistence happened. Renderer reads this to surface the
+    # signed/unsigned banner instead of the in-memory profile.signature
+    # which is always None on frozen profiles.
+    signed: bool | None = None
 
 
 class ApplyError(RuntimeError):
@@ -419,6 +426,10 @@ class CalibrationApplier:
                 )
                 raise
 
+        # rc.7 (Agent 2 NEW.2/NEW.3): track persisted-signing status here
+        # so the returned ApplyResult.signed surfaces the truth from
+        # disk. None on dry_run (we didn't persist).
+        signed_status: bool | None = None
         if dry_run:
             target_path = profile_path(data_dir=self._data_dir, mind_id=profile.mind_id)
             logger.info(
@@ -430,11 +441,13 @@ class CalibrationApplier:
                 skipped_count=len(skipped),
             )
         else:
-            target_path = save_calibration_profile(
+            save_result = save_calibration_profile(
                 profile,
                 data_dir=self._data_dir,
                 signing_key_path=self._signing_key_path,
             )
+            target_path = save_result.path
+            signed_status = save_result.signed
             logger.info(
                 "voice.calibration.applier.apply_succeeded",
                 profile_id_hash=profile_hash,
@@ -444,6 +457,7 @@ class CalibrationApplier:
                 confirm_required_count=len(confirm_required),
                 skipped_count=len(skipped),
                 advised_count=len(advised_actions),
+                signed=signed_status,
             )
 
         return ApplyResult(
@@ -453,6 +467,7 @@ class CalibrationApplier:
             advised_actions=advised_actions,
             confirm_required_decisions=confirm_required,
             dry_run=dry_run,
+            signed=signed_status,
             rolled_back=rolled_back,
         )
 

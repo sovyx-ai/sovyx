@@ -406,11 +406,15 @@ class TestSignSaveLoadRoundTrip:
         original = persistence.logger
         persistence.logger = _Cap()  # type: ignore[assignment]
         try:
-            target = save_calibration_profile(
+            # rc.7 (Agent 2 NEW.2/NEW.3): save_calibration_profile now
+            # returns SaveProfileResult(path, signed); unpack to keep
+            # the existing target.is_file() assertion semantics.
+            save_result = save_calibration_profile(
                 _profile(signature=None),
                 data_dir=tmp_path,
                 signing_key_path=bad_key,
             )
+            target = save_result.path
         finally:
             persistence.logger = original  # type: ignore[assignment]
 
@@ -460,15 +464,20 @@ class TestSigningKeyPathMissingObservability:
         original = persistence.logger
         persistence.logger = _Cap()  # type: ignore[assignment]
         try:
-            target = save_calibration_profile(
+            # rc.7 (Agent 2 NEW.2/NEW.3): SaveProfileResult unpack.
+            save_result = save_calibration_profile(
                 _profile(signature=None),
                 data_dir=tmp_path,
                 signing_key_path=nonexistent,
             )
+            target = save_result.path
         finally:
             persistence.logger = original  # type: ignore[assignment]
 
         assert target.is_file(), "profile must still persist (best-effort signing)"
+        assert save_result.signed is False, (
+            "missing key path → signed=False (signing skipped, persisted unsigned)"
+        )
         skipped = next(
             (e for e in events if e[0] == "voice.calibration.profile.signing_skipped"),
             None,
