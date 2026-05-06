@@ -295,14 +295,14 @@ class TestSignatureMode:
         with pytest.raises(CalibrationProfileLoadError, match="unsigned"):
             load_calibration_profile(data_dir=tmp_path, mind_id="default", mode=_LoadMode.STRICT)
 
-    def test_strict_accepts_signed(self, tmp_path: Path) -> None:
+    def test_strict_rejects_invalid_signature(self, tmp_path: Path) -> None:
+        # P4 v0.30.32: real Ed25519 verification. ``"abcdef" * 16`` decodes
+        # to 72 bytes (not 64) → REJECTED_MALFORMED_SIGNATURE; STRICT
+        # raises with verdict in the message. The pre-P4 theater check
+        # accepted any non-None signature; that branch no longer exists.
         save_calibration_profile(_profile(signature="abcdef" * 16), data_dir=tmp_path)
-        # Even STRICT accepts when a signature is present (verification
-        # against a public key lands in v0.30.17).
-        loaded = load_calibration_profile(
-            data_dir=tmp_path, mind_id="default", mode=_LoadMode.STRICT
-        )
-        assert loaded.signature == "abcdef" * 16
+        with pytest.raises(CalibrationProfileLoadError, match="signature verification"):
+            load_calibration_profile(data_dir=tmp_path, mind_id="default", mode=_LoadMode.STRICT)
 
 
 # ====================================================================
@@ -347,7 +347,10 @@ class TestPersistenceTelemetry:
         assert "profile_id_hash" in persisted[1]
         assert persisted[1]["mind_id_hash"] != "default"
 
-    def test_loaded_event_signature_status_accepted(self, tmp_path: Path) -> None:
+    def test_loaded_event_signature_status_invalid(self, tmp_path: Path) -> None:
+        # P4 v0.30.32: ``"abcdef" * 16`` is malformed (72 bytes after
+        # base64 decode, not 64) → ``signature_status="invalid"`` and
+        # the new ``signature.invalid`` event fires with the verdict.
         save_calibration_profile(_profile(signature="abcdef" * 16), data_dir=tmp_path)
         events, original = self._capture_logger()
         try:
@@ -356,8 +359,10 @@ class TestPersistenceTelemetry:
             self._restore(original)
 
         loaded = next(e for e in events if e[0] == "voice.calibration.profile.loaded")
-        assert loaded[1]["signature_status"] == "accepted"
-        assert loaded[1]["mode"] == "lenient"
+        assert loaded[1]["signature_status"] == "invalid"
+        invalid = next(e for e in events if e[0] == "voice.calibration.profile.signature.invalid")
+        assert invalid[1]["verdict"] == "rejected_malformed_signature"
+        assert invalid[1]["mode"] == "lenient"
 
     def test_loaded_event_signature_status_missing(self, tmp_path: Path) -> None:
         save_calibration_profile(_profile(signature=None), data_dir=tmp_path)

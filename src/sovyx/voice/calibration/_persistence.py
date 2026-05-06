@@ -32,16 +32,30 @@ History: introduced in v0.30.15 as T2.7 of mission
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives.serialization import (
+    load_pem_private_key,
+    load_pem_public_key,
+)
 
 from sovyx.observability.logging import get_logger
 from sovyx.observability.privacy import short_hash as _short_hash
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from sovyx.voice.calibration._signing import (
+    VerifyResult,
+    canonical_calibration_payload,
+)
 from sovyx.voice.calibration.schema import (
     CALIBRATION_PROFILE_SCHEMA_VERSION,
     CalibrationConfidence,
@@ -57,6 +71,138 @@ logger = get_logger(__name__)
 _PROFILE_FILENAME = "calibration.json"
 _TMP_SUFFIX = ".tmp"
 _BAK_SUFFIX = ".bak"
+
+# Trust store: shipped public key is loaded once at first verify call,
+# then cached at module level. Layered v2.pub support (multi-key trust
+# during rotation) is deferred to v0.31.0+ per the brief §14.
+_TRUSTED_PUBKEY_PATH = Path(__file__).parent / "_trusted_keys" / "v1.pub"
+_TRUSTED_PUBKEY: Ed25519PublicKey | None = None
+_TRUSTED_PUBKEY_LOADED = False
+
+
+def _load_trusted_calibration_key() -> Ed25519PublicKey | None:
+    """Load + cache the calibration trust-store public key (v1.pub).
+
+    Returns ``None`` when the trust-store file is absent (legitimate
+    during operator-side adoption — operators on hosts without the
+    bundled key MUST regenerate the trust store from the matching
+    private key, or operate in LENIENT mode where the verifier surfaces
+    ``REJECTED_NO_TRUSTED_KEY`` instead of refusing to load).
+
+    Raises :class:`RuntimeError` if the file exists but is NOT an
+    Ed25519 public key — that's a packaging bug, not an operator
+    misconfiguration, and silently returning ``None`` would mask it.
+    """
+    global _TRUSTED_PUBKEY, _TRUSTED_PUBKEY_LOADED
+    if _TRUSTED_PUBKEY_LOADED:
+        return _TRUSTED_PUBKEY
+    _TRUSTED_PUBKEY_LOADED = True
+    if not _TRUSTED_PUBKEY_PATH.is_file():
+        _TRUSTED_PUBKEY = None
+        return None
+    try:
+        pem = _TRUSTED_PUBKEY_PATH.read_bytes()
+    except OSError:
+        _TRUSTED_PUBKEY = None
+        return None
+    try:
+        key = load_pem_public_key(pem)
+    except (ValueError, TypeError) as exc:
+        msg = (
+            f"trusted calibration key at {_TRUSTED_PUBKEY_PATH} is unparseable: "
+            f"{exc}. The shipped wheel is corrupt; reinstall Sovyx."
+        )
+        raise RuntimeError(msg) from exc
+    if not isinstance(key, Ed25519PublicKey):
+        msg = (
+            f"trusted calibration key at {_TRUSTED_PUBKEY_PATH} is not Ed25519 "
+            f"({type(key).__name__}). The shipped wheel is corrupt; reinstall Sovyx."
+        )
+        raise RuntimeError(msg)
+    _TRUSTED_PUBKEY = key
+    return key
+
+
+def _verify_calibration_signature(
+    profile: CalibrationProfile,
+) -> VerifyResult:
+    """Real Ed25519 verification against the calibration trust store.
+
+    Replaces the v0.30.15-31 theater check ("is signature field
+    present?") with cryptographic verification using the shipped
+    ``_trusted_keys/v1.pub`` Ed25519 public key. Returns one of five
+    closed-enum verdicts:
+
+    * :data:`VerifyResult.ACCEPTED` — signature verified.
+    * :data:`VerifyResult.REJECTED_NO_SIGNATURE` — profile carries
+      ``signature is None``; legitimate during the v0.30.x staged
+      adoption window.
+    * :data:`VerifyResult.REJECTED_NO_TRUSTED_KEY` — trust-store file
+      missing or unloadable; LENIENT logs + accepts, STRICT raises.
+    * :data:`VerifyResult.REJECTED_MALFORMED_SIGNATURE` — signature
+      field present but not 64 bytes of valid base64.
+    * :data:`VerifyResult.REJECTED_BAD_SIGNATURE` — bytes valid but
+      Ed25519 ``verify()`` raised :class:`InvalidSignature` (payload
+      tampered OR signed by a different private key).
+
+    The verifier is pure (no logging, no telemetry); the load path
+    branches on the verdict + emits the right structured event.
+    """
+    pubkey = _load_trusted_calibration_key()
+    if pubkey is None:
+        return VerifyResult.REJECTED_NO_TRUSTED_KEY
+
+    if profile.signature is None:
+        return VerifyResult.REJECTED_NO_SIGNATURE
+    if not isinstance(profile.signature, str):
+        return VerifyResult.REJECTED_MALFORMED_SIGNATURE
+
+    try:
+        sig_bytes = base64.b64decode(profile.signature, validate=True)
+    except (binascii.Error, ValueError):
+        return VerifyResult.REJECTED_MALFORMED_SIGNATURE
+    # Ed25519 signatures are exactly 64 bytes; any other length means
+    # the signature was truncated, padded, or generated by a different
+    # algorithm — reject as malformed rather than dispatching to the
+    # cryptographic verify (which would raise InvalidSignature with a
+    # less informative diagnostic).
+    if len(sig_bytes) != 64:
+        return VerifyResult.REJECTED_MALFORMED_SIGNATURE
+
+    payload = canonical_calibration_payload(profile.canonical_signing_payload())
+    try:
+        pubkey.verify(sig_bytes, payload)
+    except InvalidSignature:
+        return VerifyResult.REJECTED_BAD_SIGNATURE
+    return VerifyResult.ACCEPTED
+
+
+def _load_private_signing_key(path: Path) -> Ed25519PrivateKey:
+    """Load an unencrypted Ed25519 private key from PEM at ``path``.
+
+    Raises :class:`RuntimeError` for any failure mode (unreadable,
+    unparseable, wrong algorithm) so callers signing the persistence
+    boundary can degrade to "save unsigned + log warning" without
+    masking the underlying cause.
+    """
+    try:
+        pem = path.read_bytes()
+    except OSError as exc:
+        msg = f"signing key at {path} unreadable: {exc}"
+        raise RuntimeError(msg) from exc
+    try:
+        key = load_pem_private_key(pem, password=None)
+    except (ValueError, TypeError) as exc:
+        msg = f"signing key at {path} is unparseable PEM: {exc}"
+        raise RuntimeError(msg) from exc
+    if not isinstance(key, Ed25519PrivateKey):
+        msg = (
+            f"signing key at {path} is not Ed25519 "
+            f"({type(key).__name__}); regenerate via "
+            f"`scripts/dev/generate_calibration_signing_key.py`."
+        )
+        raise RuntimeError(msg)
+    return key
 
 
 class CalibrationProfileRollbackError(Exception):
@@ -111,18 +257,33 @@ def save_calibration_profile(
     profile: CalibrationProfile,
     *,
     data_dir: Path,
+    signing_key_path: Path | None = None,
 ) -> Path:
-    """Persist a calibration profile atomically.
+    """Persist a calibration profile atomically; optionally sign first.
 
     Writes to a sibling ``.calibration.json.tmp`` first, then
     :func:`os.replace`s into the final path so partial writes never
     corrupt the persisted state.
+
+    Signing (P4 v0.30.32): when ``signing_key_path`` is provided AND the
+    file exists + parses as a valid Ed25519 PEM private key, this
+    function signs the canonical payload (sort_keys=True, separators=
+    (",",":")) and rewrites the in-memory ``signature`` field as a
+    base64 string before serialization. Failure to load the signing key
+    or sign the payload logs a structured WARN
+    (``voice.calibration.profile.signing_failed``) but does NOT raise —
+    the profile lands on disk unsigned, which the load path treats as
+    ``REJECTED_NO_SIGNATURE`` (LENIENT-accepted).
 
     Args:
         profile: The profile to persist. Its ``mind_id`` field
             determines the target directory.
         data_dir: Sovyx data directory; the per-mind subdirectory is
             created if missing.
+        signing_key_path: Path to an unencrypted PEM Ed25519 private
+            key; when supplied, the profile is signed before write.
+            ``None`` (default) writes unsigned profiles, mirroring
+            the v0.30.x staged-adoption window.
 
     Returns:
         The absolute path the profile was written to.
@@ -141,6 +302,27 @@ def save_calibration_profile(
         os.replace(target, backup_target)
 
     serialized = _profile_to_dict(profile)
+
+    # Optional signing at persistence boundary. The signer is best-
+    # effort: any failure (missing key, bad PEM, wrong algorithm)
+    # logs + falls through to the unsigned write path so the operator
+    # always gets a persisted profile they can re-sign later.
+    was_signed = False
+    if signing_key_path is not None and signing_key_path.is_file():
+        try:
+            private_key = _load_private_signing_key(signing_key_path)
+            sig_payload = canonical_calibration_payload(profile.canonical_signing_payload())
+            sig_bytes = private_key.sign(sig_payload)
+            serialized["signature"] = base64.b64encode(sig_bytes).decode("ascii")
+            was_signed = True
+        except (RuntimeError, ValueError) as exc:
+            logger.warning(
+                "voice.calibration.profile.signing_failed",
+                mind_id_hash=_short_hash(profile.mind_id),
+                profile_id_hash=_short_hash(profile.profile_id),
+                reason=str(exc)[:200],
+            )
+
     payload = json.dumps(
         serialized,
         sort_keys=True,
@@ -154,7 +336,7 @@ def save_calibration_profile(
         "voice.calibration.profile.persisted",
         mind_id_hash=_short_hash(profile.mind_id),
         profile_id_hash=_short_hash(profile.profile_id),
-        signed=profile.signature is not None,
+        signed=was_signed,
         backup_present=backup_target.is_file(),
     )
     return target
@@ -297,18 +479,39 @@ def load_calibration_profile(
             f"calibration profile at {path} is malformed: {exc}"
         ) from exc
 
-    # Signature gate. v0.30.15-16 LENIENT default warns + accepts;
-    # v0.30.17 STRICT flip raises. The actual signature verification
-    # against a public key is not yet wired (signing capability ships
-    # in a follow-up pre-tag commit) -- for now we only check
-    # presence/absence and surface the verdict via telemetry.
+    # Signature gate (P4 v0.30.32 — REAL verification).
+    #
+    # v0.30.15-31 ran a "is signature field present?" theater check;
+    # v0.30.32 wires :func:`_verify_calibration_signature` against the
+    # bundled Ed25519 trust store (``_trusted_keys/v1.pub``). The
+    # 5-way verdict drives ``signature_status`` + the matching
+    # structured event:
+    #
+    # * ACCEPTED               -> "accepted"  (DEBUG log; no warning)
+    # * REJECTED_NO_SIGNATURE  -> "missing"   (WARN; STRICT raises)
+    # * REJECTED_BAD_SIGNATURE -> "invalid"   (WARN; STRICT raises)
+    # * REJECTED_MALFORMED_*   -> "invalid"   (WARN; STRICT raises)
+    # * REJECTED_NO_TRUSTED_KEY -> "invalid"  (WARN; STRICT raises)
+    #
+    # STRICT default flip stays deferred to v0.31.0 per
+    # ``feedback_staged_adoption``.
     profile_hash = _short_hash(profile.profile_id)
     mind_hash = _short_hash(mind_id)
-    if profile.signature is None:
+    verdict = _verify_calibration_signature(profile)
+    if verdict == VerifyResult.ACCEPTED:
+        signature_status = "accepted"
+        logger.debug(
+            "voice.calibration.profile.signature.accepted",
+            mind_id_hash=mind_hash,
+            profile_id_hash=profile_hash,
+            mode=mode.value,
+        )
+    elif verdict == VerifyResult.REJECTED_NO_SIGNATURE:
         if mode is _LoadMode.STRICT:
             raise CalibrationProfileLoadError(
                 f"calibration profile at {path} is unsigned; STRICT mode requires "
-                f"a signature. Regenerate via `sovyx doctor voice --calibrate`."
+                f"a signature. Regenerate via `sovyx doctor voice --calibrate "
+                f"--signing-key <path>`."
             )
         signature_status = "missing"
         logger.warning(
@@ -318,12 +521,25 @@ def load_calibration_profile(
             mode=mode.value,
         )
     else:
-        # v0.30.19: signature presence reported as "accepted" until the
-        # public-key verification path lands. When verification ships,
-        # the rejected branch will set signature_status="invalid" + emit
-        # voice.calibration.profile.signature_invalid (already named in
-        # the module docstring per the spec contract).
-        signature_status = "accepted"
+        # REJECTED_BAD_SIGNATURE / REJECTED_MALFORMED_SIGNATURE /
+        # REJECTED_NO_TRUSTED_KEY — all surface as
+        # ``signature.invalid`` with the verdict in the closed-enum
+        # ``verdict`` field so dashboards can distinguish without
+        # parsing free-form messages.
+        signature_status = "invalid"
+        logger.warning(
+            "voice.calibration.profile.signature.invalid",
+            mind_id_hash=mind_hash,
+            profile_id_hash=profile_hash,
+            verdict=verdict.value,
+            mode=mode.value,
+        )
+        if mode is _LoadMode.STRICT:
+            raise CalibrationProfileLoadError(
+                f"calibration profile at {path} failed signature verification: "
+                f"{verdict.value}. STRICT mode requires a valid signature; "
+                f"regenerate via `sovyx doctor voice --calibrate --signing-key <path>`."
+            )
 
     logger.info(
         "voice.calibration.profile.loaded",

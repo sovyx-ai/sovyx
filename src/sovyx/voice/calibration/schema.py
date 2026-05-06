@@ -279,7 +279,7 @@ class CalibrationProfile:
     generated_by_engine_version: str  # "0.30.15"
     generated_by_rule_set_version: int  # bumped on rule additions/removals
     generated_at_utc: str
-    signature: str | None  # Ed25519 signature, hex-encoded; None in LENIENT mode
+    signature: str | None  # Ed25519 signature, base64-encoded; None when unsigned
 
     @property
     def applicable_decisions(self) -> tuple[CalibrationDecision, ...]:
