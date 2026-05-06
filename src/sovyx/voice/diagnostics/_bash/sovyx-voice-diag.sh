@@ -116,6 +116,32 @@ source "$SOVYX_DIAG_LIB_DIR/common.sh"
 # Parse após o source — flags mexem em variáveis de common.sh.
 parse_args "$@"
 
+# rc.6 (Agent 2 C.3): valida o conjunto de letras de layer passado em
+# --only. Pre-rc.6, `--only=Z` (letra desconhecida) era silenciosamente
+# no-op: nenhum layer match → tarball vazio + exit 0 ("diag completed"
+# sem fazer nada). Operadores que digitavam typo perdiam o run sem aviso.
+# Agora rejeita com erro acionável citando as letras válidas.
+if [[ -n "$SOVYX_DIAG_FLAG_ONLY" ]]; then
+    _SOVYX_VALID_LAYER_LETTERS="A B C D E F G H I J K"
+    _SOVYX_INVALID_LETTERS=""
+    IFS=',' read -ra _SOVYX_REQUESTED_LAYERS <<< "$SOVYX_DIAG_FLAG_ONLY"
+    for _letter in "${_SOVYX_REQUESTED_LAYERS[@]}"; do
+        # Trim whitespace.
+        _letter="${_letter// /}"
+        if [[ -z "$_letter" ]]; then continue; fi
+        # Check membership.
+        if [[ ! " $_SOVYX_VALID_LAYER_LETTERS " =~ \ $_letter\  ]]; then
+            _SOVYX_INVALID_LETTERS="$_SOVYX_INVALID_LETTERS $_letter"
+        fi
+    done
+    if [[ -n "$_SOVYX_INVALID_LETTERS" ]]; then
+        echo "sovyx-voice-diag: --only contains unknown layer letter(s):${_SOVYX_INVALID_LETTERS}" >&2
+        echo "Valid layers: A,B,C,D,E,F,G,H,I,J,K (case-sensitive). Example: --only A,C,D,E,J" >&2
+        exit 2
+    fi
+    unset _letter _SOVYX_VALID_LAYER_LETTERS _SOVYX_INVALID_LETTERS _SOVYX_REQUESTED_LAYERS
+fi
+
 # ─────────────────────────────────────────────────────────────────────────
 # Plataforma
 # ─────────────────────────────────────────────────────────────────────────

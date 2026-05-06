@@ -429,6 +429,20 @@ def doctor_voice(
             "Run --show first to confirm what you'd revert TO, then "
             "--rollback in a separate invocation if that's what you want."
         )
+    # rc.6 (Agent 2 A.5): fail-fast on a missing --signing-key path so an
+    # operator typo doesn't waste 8-12 min of diag runtime + then silently
+    # degrade to unsigned. Per Mission §0 promise 5 (LENIENT/STRICT real
+    # crypto): the operator who passed --signing-key explicitly intended
+    # signed output; a missing-path on a signed-intent run MUST surface
+    # at flag-parse time, not deep in `_persistence.py:319` after the diag.
+    if signing_key is not None and not signing_key.is_file():
+        raise typer.BadParameter(
+            f"--signing-key path does not exist: {signing_key}\n"
+            f"Pass an existing PEM-encoded Ed25519 private key file. "
+            f"Generate via `scripts/dev/generate_calibration_signing_key.py` "
+            f"(dev-only); production rotation per docs/contributing/voice-kb-rotation.md.",
+            param_hint="--signing-key",
+        )
     exit_code = _run_voice_doctor(
         output_json=output_json,
         device=device,
@@ -853,9 +867,28 @@ def _run_voice_calibrate_evaluate_rules(*, mind_id: str, explain: bool) -> int:
 
     Returns:
         * EXIT_DOCTOR_OK on a clean evaluation + render.
+        * EXIT_DOCTOR_UNSUPPORTED on non-Linux hosts (fingerprint
+          + measurer probes are Linux-specific: dmidecode + amixer +
+          /sys/class/sound/* paths).
         * EXIT_DOCTOR_GENERIC_FAILURE on fingerprint capture failure
           (rare; mostly Linux-only mixer probe + dmidecode dependency).
     """
+    # rc.6 (Agent 2 A.3): fail-fast on non-Linux hosts so the operator
+    # gets a friendly message instead of a Python exception from the
+    # Linux-only fingerprint + amixer probes. Mission §0 promises 5/6
+    # are Linux-scoped; this flag inherits the same scope.
+    if sys.platform != "linux":
+        console.print(
+            f"\n[red]--evaluate-rules is Linux-only[/red] (current platform: "
+            f"{sys.platform!r}).\n"
+            "The calibration engine probes Linux-specific surfaces "
+            "(dmidecode, amixer, /sys/class/sound/*) which are not "
+            "available on this host.\n"
+            "On Windows / macOS, use `sovyx doctor voice` (cross-platform "
+            "health checks) instead."
+        )
+        return EXIT_DOCTOR_UNSUPPORTED
+
     from sovyx.voice.calibration import (  # noqa: PLC0415 -- lazy import
         CalibrationEngine,
         capture_fingerprint,
@@ -1004,6 +1037,30 @@ def _render_calibration_verdict(
                 console.print(f"    matched: {cond}")
             for dec in trace.produced_decisions:
                 console.print(f"    produced: {dec}")
+
+    # rc.6 (Agent 2 A.4): surface the profile's signature status so the
+    # operator can verify --signing-key actually worked (or didn't). Pre-rc.6
+    # the operator who passed --signing-key saw "Profile persisted to:" with
+    # no indication of whether the persisted profile was signed; the only
+    # way to verify was tail $data_dir/logs/sovyx.log | grep signing_skipped.
+    # Now the verdict explicitly confirms signed/unsigned in the green/yellow
+    # banner.
+    signature_present = getattr(profile, "signature", None) is not None
+    if signature_present:
+        console.print(
+            "\n[green]✓[/green] Profile is [bold green]signed[/bold green] "
+            "(Ed25519). Loadable in STRICT mode."
+        )
+    else:
+        # Unsigned is the normal path when --signing-key is not passed; only
+        # surface a yellow banner when the dry_run flag is False (we actually
+        # persisted) so the operator knows the file went to disk unsigned.
+        dry_run_attr_for_sig = getattr(apply_result, "dry_run", False)
+        if not dry_run_attr_for_sig:
+            console.print(
+                "\n[dim]Profile is unsigned[/dim] (loadable in LENIENT mode "
+                "only; STRICT mode rejects). Pass --signing-key to sign."
+            )
 
     # Profile path footer.
     profile_path_attr = getattr(apply_result, "profile_path", None)

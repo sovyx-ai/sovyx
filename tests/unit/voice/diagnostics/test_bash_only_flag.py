@@ -131,6 +131,73 @@ class TestLayerEnabledHelper:
 
 
 # ════════════════════════════════════════════════════════════════════
+# rc.6 (Agent 2 C.3) — entrypoint validates --only layer letters.
+# Pre-rc.6 a typo like ``--only A,J,Z`` produced a successful-looking
+# run with an empty tarball (no layer matched). Operator wasted minutes
+# with no error indication. The entrypoint now rejects unknown letters
+# with an actionable error message.
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestOnlyFlagEntrypointValidation:
+    """``sovyx-voice-diag.sh --only <list>`` rejects unknown layer letters."""
+
+    @staticmethod
+    def _run_diag(*args: str) -> subprocess.CompletedProcess[str]:
+        """Invoke the diag entrypoint script directly with the given args."""
+        assert _BASH_BIN is not None
+        diag_script = _BASH_LIB.parent.parent / "sovyx-voice-diag.sh"
+        diag_script_posix = _to_bash_path(diag_script)
+        return subprocess.run(  # noqa: S603 — controlled bash invocation
+            [_BASH_BIN, diag_script_posix, *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+    def test_only_with_unknown_letter_rejected_with_actionable_error(self) -> None:
+        result = self._run_diag("--only", "A,J,Z")
+        # Exit code 2 = bash usage error per the entrypoint convention.
+        assert result.returncode == 2, (
+            f"unknown --only letter must yield exit 2; got {result.returncode}"
+        )
+        # Operator-readable stderr: cite the bad letter + suggest the fix.
+        assert "Z" in result.stderr
+        assert "Valid layers: A,B,C,D,E,F,G,H,I,J,K" in result.stderr
+        assert "case-sensitive" in result.stderr
+
+    def test_only_with_only_unknown_letter_also_rejected(self) -> None:
+        """A single bad letter (no valid letter mixed in) MUST also reject
+        — pre-rc.6, ``--only Z`` would silently no-op every layer.
+        """
+        result = self._run_diag("--only", "Z")
+        assert result.returncode == 2
+        assert "Z" in result.stderr
+
+    def test_only_with_all_valid_letters_passes_validation(self) -> None:
+        """``--only A,C,D,E,J`` passes the letter-validation gate.
+
+        On Windows test hosts the diag still exits non-zero at the
+        Linux-only gate AFTER validation, but the validation itself
+        does NOT reject. We assert the validation error is absent.
+        """
+        result = self._run_diag("--only", "A,C,D,E,J")
+        # Either exits 2 (Linux-only on Windows test host) or proceeds —
+        # what matters is the validation error message is NOT in stderr.
+        assert "Valid layers: A,B,C,D,E,F,G,H,I,J,K" not in result.stderr, (
+            f"valid letters MUST pass the validation gate; got stderr: {result.stderr!r}"
+        )
+
+    def test_only_with_whitespace_in_list_handled(self) -> None:
+        """Operator typing `--only "A, C, D"` (with spaces) MUST still work."""
+        result = self._run_diag("--only", "A, C, D")
+        # Validation should accept whitespace; "Valid layers" rejection
+        # must NOT appear.
+        assert "Valid layers: A,B,C,D,E,F,G,H,I,J,K" not in result.stderr
+
+
+# ════════════════════════════════════════════════════════════════════
 # rc.3 (Agent 2 #8) — trap-EXIT cleans up /tmp/.sovyx_prompts_err.<pid>
 # ════════════════════════════════════════════════════════════════════
 

@@ -227,6 +227,74 @@ class TestMutex:
 
 
 # ====================================================================
+# rc.6 (Agent 2 A.5): --signing-key fail-fast on missing path. Operator
+# typo (e.g. ``--signing-key /tmp/nope``) MUST be caught at flag-parse
+# time so the operator doesn't waste 8-12 min of diag runtime then
+# silently land an unsigned profile.
+# ====================================================================
+
+
+class TestSigningKeyFailFast:
+    """``--signing-key /tmp/nonexistent`` rejects at flag-parse, not deep
+    in `_persistence.py:319` after the 8-12 min diag runs."""
+
+    def test_signing_key_missing_path_rejected_before_diag(self, tmp_path: Path) -> None:
+        nonexistent = tmp_path / "no_such_key.pem"
+        result = runner.invoke(
+            app,
+            [
+                "doctor",
+                "voice",
+                "--calibrate",
+                "--non-interactive",
+                "--signing-key",
+                str(nonexistent),
+            ],
+        )
+        assert result.exit_code != 0
+        combined = _strip_ansi(result.output) + (
+            _strip_ansi(result.stderr) if result.stderr_bytes else ""
+        )
+        # Strip whitespace + box-drawing wrapping that Rich introduces in
+        # error panels — the path may span multiple lines.
+        combined_compact = "".join(combined.split())
+        # Operator-readable error: cite the bad path + suggest the fix.
+        assert "--signing-keypathdoesnotexist" in combined_compact
+        # The path filename ("no_such_key.pem") must appear (the full path
+        # may wrap across lines but the leaf filename always lands on one).
+        assert "no_such_key.pem" in combined_compact
+        assert "generate_calibration_signing_key.py" in combined_compact
+
+    def test_signing_key_existing_path_passes_validation(self, tmp_path: Path) -> None:
+        """A real (existing) file path passes the fail-fast check; the
+        downstream pipeline takes over (TTY check / non-interactive / etc).
+        """
+        existing = tmp_path / "real_key.pem"
+        existing.write_text("-----BEGIN PRIVATE KEY-----\n...\n", encoding="utf-8")
+        # Without --non-interactive on a non-TTY stdin, this hits the TTY
+        # gate at exit_code 4 — proving the signing-key path validation
+        # PASSED (else we'd see exit !=0 with a different message).
+        result = runner.invoke(
+            app,
+            [
+                "doctor",
+                "voice",
+                "--calibrate",
+                "--signing-key",
+                str(existing),
+            ],
+        )
+        # The TTY gate fires AFTER the signing-key validation. So either
+        # the run reached the TTY gate (exit 4) or — on a TTY-detected
+        # CI runner — proceeded to the prerequisite check (exit varies).
+        # What we MUST NOT see is the fail-fast --signing-key error.
+        combined = _strip_ansi(result.output) + (
+            _strip_ansi(result.stderr) if result.stderr_bytes else ""
+        )
+        assert "--signing-key path does not exist" not in combined
+
+
+# ====================================================================
 # TTY gate
 # ====================================================================
 
@@ -681,7 +749,12 @@ class TestEvaluateRulesBehavior:
         # The lazy import resolves attributes on the SOURCE modules at
         # call-time, so patching the doctor-module attribute would not
         # affect the lazy binding. Patch the source modules directly.
+        # rc.6 (Agent 2 A.3): the function is now Linux-gated; patch
+        # sys.platform on Windows test hosts so the Linux-only path runs.
+        from sovyx.cli.commands import doctor as doctor_module
+
         with (
+            patch.object(doctor_module.sys, "platform", "linux"),
             patch(
                 "sovyx.voice.calibration.capture_fingerprint",
                 return_value=_fingerprint(),
@@ -746,7 +819,10 @@ class TestEvaluateRulesBehavior:
 
     def test_evaluate_rules_with_explain_flag_invokes_explain_renderer(self) -> None:
         """``--explain`` should propagate into the verdict renderer."""
+        from sovyx.cli.commands import doctor as doctor_module
+
         with (
+            patch.object(doctor_module.sys, "platform", "linux"),
             patch(
                 "sovyx.voice.calibration.capture_fingerprint",
                 return_value=_fingerprint(),
@@ -794,11 +870,43 @@ class TestEvaluateRulesBehavior:
             f"profile.provenance; output: {clean!r}"
         )
 
+    def test_evaluate_rules_non_linux_returns_unsupported(self) -> None:
+        """rc.6 (Agent 2 A.3): non-Linux hosts get a friendly message
+        with EXIT_DOCTOR_UNSUPPORTED (5), NOT a Python exception from
+        the Linux-only fingerprint/amixer probes.
+        """
+        from sovyx.cli.commands import doctor as doctor_module
+
+        with patch.object(doctor_module.sys, "platform", "win32"):
+            result = runner.invoke(
+                app,
+                [
+                    "doctor",
+                    "voice",
+                    "--calibrate",
+                    "--non-interactive",
+                    "--evaluate-rules",
+                ],
+            )
+
+        # EXIT_DOCTOR_UNSUPPORTED = 5 per cli/commands/doctor.py:104.
+        assert result.exit_code == 5, (
+            f"non-Linux must yield EXIT_DOCTOR_UNSUPPORTED=5; "
+            f"got {result.exit_code} with output {result.output!r}"
+        )
+        clean = _strip_ansi(result.output)
+        assert "Linux-only" in clean
+        # Operator-actionable hint: point at the cross-platform alternative.
+        assert "sovyx doctor voice" in clean
+
     def test_evaluate_rules_fingerprint_failure_returns_generic_failure(self) -> None:
         """Fingerprint capture failure surfaces EXIT_DOCTOR_GENERIC_FAILURE
         (5) without crashing or invoking downstream stages.
         """
+        from sovyx.cli.commands import doctor as doctor_module
+
         with (
+            patch.object(doctor_module.sys, "platform", "linux"),
             patch(
                 "sovyx.voice.calibration.capture_fingerprint",
                 side_effect=RuntimeError("synthetic dmidecode failure"),

@@ -226,6 +226,16 @@ def init(
     console.print("\n[bold green]Sovyx initialized![/bold green]")
     console.print(f"Data directory: {data_dir}")
     console.print("\nNext: [bold]sovyx start[/bold] to launch the daemon")
+    # rc.6 (Agent 2 E.2): point operators at the calibration wizard for
+    # silent-mic / hardware-pinned issues. Pre-rc.6 a fresh Sony VAIO +
+    # PipeWire operator following `sovyx init` had no breadcrumb to
+    # `sovyx doctor voice --calibrate`; they would hit silent-mic on
+    # first run and have to dig through docs to find the wizard.
+    console.print(
+        "\n[dim]Voice not working as expected? Run "
+        "[bold]sovyx doctor voice --calibrate[/bold] (Linux, 8-12 min) "
+        "for an automatic mic + mixer + APO calibration.[/dim]"
+    )
 
 
 @app.command()
