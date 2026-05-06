@@ -410,10 +410,19 @@ async def stream_calibration_job(
     """
     expected_token = getattr(websocket.app.state, "auth_token", None)
     if expected_token is None or token != expected_token:
+        logger.info(
+            "voice.calibration.wizard.subscriber_rejected",
+            job_id=job_id,
+            reason="auth",
+        )
         await websocket.close(code=1008, reason="auth")
         return
 
     await websocket.accept()
+    logger.info(
+        "voice.calibration.wizard.subscriber_connected",
+        job_id=job_id,
+    )
 
     data_dir = (
         websocket.app.state.engine_config.data_dir
@@ -454,6 +463,11 @@ async def stream_calibration_job(
                     await websocket.close()
                     return
     except WebSocketDisconnect:
+        logger.info(
+            "voice.calibration.wizard.subscriber_disconnected",
+            job_id=job_id,
+            reason="client_close",
+        )
         return
     except Exception:
         logger.exception(
@@ -462,3 +476,14 @@ async def stream_calibration_job(
         )
         with contextlib.suppress(Exception):
             await websocket.close(code=1011, reason="stream_error")
+    finally:
+        # Best-effort cleanup telemetry: emitted whether the loop
+        # exited via terminal-close, client disconnect, or error
+        # (the WebSocketDisconnect branch already emitted; this is
+        # the catch-all for the terminal-close path so dashboards see
+        # one disconnected event per connection).
+        with contextlib.suppress(Exception):
+            logger.debug(
+                "voice.calibration.wizard.subscriber_loop_exited",
+                job_id=job_id,
+            )

@@ -132,10 +132,21 @@ class WizardOrchestrator:
             created_at_utc=now,
             updated_at_utc=now,
         )
-        tracker.append(state)
+        self._emit_state(state, tracker)
+        # Telemetry: job lifecycle start. Closed-enum cardinality: only
+        # mind_id is high-cardinality and we hash it (mission spec D7
+        # bounded telemetry). job_id == mind_id in v0.30.16+ so we
+        # emit a single field for both.
+        logger.info(
+            "voice.calibration.wizard.job_started",
+            job_id=job_id,
+            mind_id=mind_id,
+        )
 
         try:
-            return await self._run_inner(job_id=job_id, state=state, tracker=tracker)
+            terminal = await self._run_inner(job_id=job_id, state=state, tracker=tracker)
+            self._emit_terminal_telemetry(terminal)
+            return terminal
         except asyncio.CancelledError:
             cancelled = self._transition(
                 state,
@@ -143,7 +154,8 @@ class WizardOrchestrator:
                 progress=state.progress,
                 message=_CANCELLED_MSG,
             )
-            tracker.append(cancelled)
+            self._emit_state(cancelled, tracker)
+            self._emit_terminal_telemetry(cancelled)
             raise
         except Exception as exc:  # noqa: BLE001 -- last-resort safety net
             logger.exception(
@@ -158,8 +170,47 @@ class WizardOrchestrator:
                 message=f"Unhandled error: {type(exc).__name__}",
                 error_summary=str(exc),
             )
-            tracker.append(failed)
+            self._emit_state(failed, tracker)
+            self._emit_terminal_telemetry(failed)
             return failed
+
+    def _emit_terminal_telemetry(self, state: WizardJobState) -> None:
+        """Emit voice.calibration.wizard.terminal at the end of every job.
+
+        Closed-enum cardinality: status, fallback_reason, triage_winner_hid
+        are all from finite sets (12 statuses, ~5 fallback reasons, 10
+        hypotheses). job_id + mind_id are operator-specific but bounded
+        per-host. error_summary is NOT included to avoid unbounded
+        cardinality from arbitrary error text.
+        """
+        logger.info(
+            "voice.calibration.wizard.terminal",
+            job_id=state.job_id,
+            mind_id=state.mind_id,
+            status=state.status.value,
+            triage_winner_hid=state.triage_winner_hid or "",
+            fallback_reason=state.fallback_reason or "",
+        )
+
+    def _emit_state(self, state: WizardJobState, tracker: WizardProgressTracker) -> None:
+        """Persist the snapshot AND emit a stage-transition telemetry event.
+
+        One call site per state mutation -- callers replace
+        ``tracker.append(state)`` with ``self._emit_state(state, tracker)``
+        so JSONL persistence + structured telemetry stay synchronized.
+        Closed-enum cardinality: status is from the 12-value
+        WizardStatus enum; progress is bucketed for OTel histograms;
+        no per-event message string (operator-facing strings live in
+        the JSONL only).
+        """
+        tracker.append(state)
+        logger.info(
+            "voice.calibration.wizard.stage_transition",
+            job_id=state.job_id,
+            mind_id=state.mind_id,
+            status=state.status.value,
+            progress=state.progress,
+        )
 
     # ====================================================================
     # Internals
@@ -182,7 +233,7 @@ class WizardOrchestrator:
             progress=_PROGRESS_PROBING,
             message=_PROBING_MSG,
         )
-        tracker.append(state)
+        self._emit_state(state, tracker)
         fingerprint = await asyncio.to_thread(capture_fingerprint)
 
         if self._is_cancelled(job_id):
@@ -195,7 +246,7 @@ class WizardOrchestrator:
             progress=_PROGRESS_SLOW_PATH_DIAG,
             message=_SLOW_PATH_DIAG_MSG,
         )
-        tracker.append(state)
+        self._emit_state(state, tracker)
         try:
             diag_result = await asyncio.to_thread(
                 run_full_diag,
@@ -226,7 +277,7 @@ class WizardOrchestrator:
             progress=_PROGRESS_SLOW_PATH_CALIBRATE,
             message=_SLOW_PATH_CALIBRATE_MSG,
         )
-        tracker.append(state)
+        self._emit_state(state, tracker)
         try:
             triage = await asyncio.to_thread(triage_tarball, diag_result.tarball_path)
         except (FileNotFoundError, ValueError) as exc:
@@ -264,7 +315,7 @@ class WizardOrchestrator:
             message=_SLOW_PATH_APPLY_MSG,
             triage_winner_hid=triage_winner_hid,
         )
-        tracker.append(state)
+        self._emit_state(state, tracker)
         applier = CalibrationApplier(data_dir=self._data_dir)
         try:
             apply_result = applier.apply(profile, dry_run=False)
@@ -284,7 +335,7 @@ class WizardOrchestrator:
             profile_path=str(apply_result.profile_path),
             triage_winner_hid=triage_winner_hid,
         )
-        tracker.append(done)
+        self._emit_state(done, tracker)
         return done
 
     def _is_cancelled(self, job_id: str) -> bool:
@@ -299,7 +350,7 @@ class WizardOrchestrator:
             progress=state.progress,
             message=_CANCELLED_MSG,
         )
-        tracker.append(cancelled)
+        self._emit_state(cancelled, tracker)
         return cancelled
 
     def _emit_failed(
@@ -316,7 +367,7 @@ class WizardOrchestrator:
             message=f"Calibration failed: {summary[:200]}",
             error_summary=summary,
         )
-        tracker.append(failed)
+        self._emit_state(failed, tracker)
         return failed
 
     def _emit_fallback(
@@ -335,7 +386,7 @@ class WizardOrchestrator:
             fallback_reason=reason,
             error_summary=summary,
         )
-        tracker.append(fallback)
+        self._emit_state(fallback, tracker)
         return fallback
 
     def _transition(
