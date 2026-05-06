@@ -59,6 +59,7 @@ from starlette.status import (
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
+from sovyx.observability.privacy import short_hash
 from sovyx.voice.calibration import (
     WizardJobState,
     WizardOrchestrator,
@@ -321,6 +322,9 @@ async def start_calibration_job(
         except Exception:
             logger.exception(
                 "voice.calibration.wizard.runner_failed",
+                job_id_hash=short_hash(job_id),
+                mind_id_hash=short_hash(body.mind_id),
+                # Deprecated raw fields (removal in v0.30.29):
                 job_id=job_id,
                 mind_id=body.mind_id,
             )
@@ -331,6 +335,9 @@ async def start_calibration_job(
 
     logger.info(
         "voice.calibration.wizard.start",
+        job_id_hash=short_hash(job_id),
+        mind_id_hash=short_hash(body.mind_id),
+        # Deprecated raw fields (removal in v0.30.29):
         job_id=job_id,
         mind_id=body.mind_id,
     )
@@ -391,8 +398,10 @@ async def cancel_calibration_job(
 
     logger.info(
         "voice.calibration.wizard.cancel_signaled",
-        job_id=job_id,
+        job_id_hash=short_hash(job_id),
         already_terminal=already_terminal,
+        # Deprecated raw fields (removal in v0.30.29):
+        job_id=job_id,
     )
 
     return CancelCalibrationResponse(
@@ -558,8 +567,10 @@ async def stream_calibration_job(
     if expected_token is None or token != expected_token:
         logger.info(
             "voice.calibration.wizard.subscriber_rejected",
-            job_id=job_id,
+            job_id_hash=short_hash(job_id),
             reason="auth",
+            # Deprecated raw fields (removal in v0.30.29):
+            job_id=job_id,
         )
         await websocket.close(code=1008, reason="auth")
         return
@@ -567,6 +578,8 @@ async def stream_calibration_job(
     await websocket.accept()
     logger.info(
         "voice.calibration.wizard.subscriber_connected",
+        job_id_hash=short_hash(job_id),
+        # Deprecated raw fields (removal in v0.30.29):
         job_id=job_id,
     )
 
@@ -611,13 +624,17 @@ async def stream_calibration_job(
     except WebSocketDisconnect:
         logger.info(
             "voice.calibration.wizard.subscriber_disconnected",
-            job_id=job_id,
+            job_id_hash=short_hash(job_id),
             reason="client_close",
+            # Deprecated raw fields (removal in v0.30.29):
+            job_id=job_id,
         )
         return
     except Exception:
         logger.exception(
             "voice.calibration.wizard.ws_stream_failed",
+            job_id_hash=short_hash(job_id),
+            # Deprecated raw fields (removal in v0.30.29):
             job_id=job_id,
         )
         with contextlib.suppress(Exception):
@@ -631,5 +648,7 @@ async def stream_calibration_job(
         with contextlib.suppress(Exception):
             logger.debug(
                 "voice.calibration.wizard.subscriber_loop_exited",
+                job_id_hash=short_hash(job_id),
+                # Deprecated raw fields (removal in v0.30.29):
                 job_id=job_id,
             )

@@ -32,13 +32,13 @@ History: introduced in v0.30.15 as T2.7 of mission
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.privacy import short_hash as _short_hash
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -57,11 +57,6 @@ logger = get_logger(__name__)
 _PROFILE_FILENAME = "calibration.json"
 _TMP_SUFFIX = ".tmp"
 _BAK_SUFFIX = ".bak"
-
-
-def _short_hash(value: str) -> str:
-    """16-hex-char SHA256 prefix; matches engine.py + _applier.py."""
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 class CalibrationProfileRollbackError(Exception):
@@ -159,9 +154,11 @@ def save_calibration_profile(
         "voice.calibration.profile.persisted",
         mind_id_hash=_short_hash(profile.mind_id),
         profile_id_hash=_short_hash(profile.profile_id),
-        path=str(target),
         signed=profile.signature is not None,
         backup_present=backup_target.is_file(),
+        # Deprecated raw filesystem path (removal in v0.30.29 per
+        # MISSION-voice-calibration-extreme-audit-2026-05-06 §4.2):
+        path=str(target),
     )
     return target
 
@@ -224,8 +221,9 @@ def rollback_calibration_profile(
         "voice.calibration.applier.rolled_back",
         profile_id_hash=_short_hash(backup_profile.profile_id),
         mind_id_hash=_short_hash(mind_id),
-        path=str(target),
         rollback_reason="operator_initiated",
+        # Deprecated raw filesystem path (removal in v0.30.29):
+        path=str(target),
     )
     return target
 
@@ -323,6 +321,7 @@ def load_calibration_profile(
             mind_id_hash=mind_hash,
             profile_id_hash=profile_hash,
             mode=mode.value,
+            # Deprecated raw filesystem path (removal in v0.30.29):
             path=str(path),
         )
     else:

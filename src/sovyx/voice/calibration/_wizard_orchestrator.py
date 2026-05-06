@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.privacy import short_hash
 from sovyx.voice.calibration._applier import ApplyError, CalibrationApplier
 from sovyx.voice.calibration._fingerprint import capture_fingerprint
 from sovyx.voice.calibration._kb_cache import lookup_profile, store_profile
@@ -177,9 +178,13 @@ class WizardOrchestrator:
         # Telemetry: job lifecycle start. Closed-enum cardinality: only
         # mind_id is high-cardinality and we hash it (mission spec D7
         # bounded telemetry). job_id == mind_id in v0.30.16+ so we
-        # emit a single field for both.
+        # emit a single hashed pair.
         logger.info(
             "voice.calibration.wizard.job_started",
+            job_id_hash=short_hash(job_id),
+            mind_id_hash=short_hash(mind_id),
+            # Deprecated raw fields (removal in v0.30.29 per
+            # MISSION-voice-calibration-extreme-audit-2026-05-06 §4.4):
             job_id=job_id,
             mind_id=mind_id,
         )
@@ -201,6 +206,9 @@ class WizardOrchestrator:
         except Exception as exc:  # noqa: BLE001 -- last-resort safety net
             logger.exception(
                 "voice.calibration.wizard.unhandled",
+                job_id_hash=short_hash(job_id),
+                mind_id_hash=short_hash(mind_id),
+                # Deprecated raw fields (removal in v0.30.29):
                 job_id=job_id,
                 mind_id=mind_id,
             )
@@ -235,50 +243,64 @@ class WizardOrchestrator:
         sets. error_summary is NOT included to avoid unbounded
         cardinality from arbitrary error text.
         """
+        job_id_hash = short_hash(state.job_id)
+        mind_id_hash = short_hash(state.mind_id)
         logger.info(
             "voice.calibration.wizard.terminal",
-            job_id=state.job_id,
-            mind_id=state.mind_id,
+            job_id_hash=job_id_hash,
+            mind_id_hash=mind_id_hash,
             status=state.status.value,
             triage_winner_hid=state.triage_winner_hid or "",
             fallback_reason=state.fallback_reason or "",
+            # Deprecated raw fields (removal in v0.30.29):
+            job_id=state.job_id,
+            mind_id=state.mind_id,
         )
 
         # v0.30.24 T3.8: spec §8.3 dispatch.
-        path = self._path_by_job.pop(state.job_id, "unknown")
+        path_label = self._path_by_job.pop(state.job_id, "unknown")
         started_mono = self._started_mono_by_job.pop(state.job_id, None)
         duration_s = round(time.monotonic() - started_mono, 3) if started_mono is not None else 0.0
 
         if state.status is WizardStatus.DONE:
             logger.info(
                 "voice.calibration.wizard.completed",
-                job_id=state.job_id,
-                mind_id=state.mind_id,
-                path=path,
+                job_id_hash=job_id_hash,
+                mind_id_hash=mind_id_hash,
+                path=path_label,
                 duration_s=duration_s,
                 success=True,
                 triage_winner_hid=state.triage_winner_hid or "",
+                # Deprecated raw fields (removal in v0.30.29):
+                job_id=state.job_id,
+                mind_id=state.mind_id,
             )
         elif state.status is WizardStatus.CANCELLED:
             logger.info(
                 "voice.calibration.wizard.cancelled",
-                job_id=state.job_id,
-                mind_id=state.mind_id,
-                path=path,
+                job_id_hash=job_id_hash,
+                mind_id_hash=mind_id_hash,
+                path=path_label,
                 duration_s=duration_s,
                 # Step at which cancel was honoured -- the orchestrator
                 # checkpoints + transitions to CANCELLED with the
                 # current_stage_message preserving prior status info.
                 step=_terminal_step_label(state),
+                # Deprecated raw fields (removal in v0.30.29):
+                job_id=state.job_id,
+                mind_id=state.mind_id,
             )
         elif state.status is WizardStatus.FALLBACK:
             logger.info(
                 "voice.calibration.wizard.fallback_triggered",
-                job_id=state.job_id,
-                mind_id=state.mind_id,
-                path=path,
+                job_id_hash=job_id_hash,
+                mind_id_hash=mind_id_hash,
+                path=path_label,
                 duration_s=duration_s,
                 reason=state.fallback_reason or "unspecified",
+                # Deprecated raw fields (removal in v0.30.29):
+                job_id=state.job_id,
+                mind_id=state.mind_id,
             )
         elif state.status is WizardStatus.FAILED:
             # Spec §8.3 doesn't list a "failed" event but the operator
@@ -286,12 +308,15 @@ class WizardOrchestrator:
             # FAILED like a `completed{success=False}` for symmetry.
             logger.info(
                 "voice.calibration.wizard.completed",
-                job_id=state.job_id,
-                mind_id=state.mind_id,
-                path=path,
+                job_id_hash=job_id_hash,
+                mind_id_hash=mind_id_hash,
+                path=path_label,
                 duration_s=duration_s,
                 success=False,
                 triage_winner_hid=state.triage_winner_hid or "",
+                # Deprecated raw fields (removal in v0.30.29):
+                job_id=state.job_id,
+                mind_id=state.mind_id,
             )
 
     def _emit_step_entered(self, state: WizardJobState, *, step: str) -> None:
@@ -304,9 +329,12 @@ class WizardOrchestrator:
         """
         logger.info(
             "voice.calibration.wizard.step_entered",
+            job_id_hash=short_hash(state.job_id),
+            mind_id_hash=short_hash(state.mind_id),
+            step=step,
+            # Deprecated raw fields (removal in v0.30.29):
             job_id=state.job_id,
             mind_id=state.mind_id,
-            step=step,
         )
 
     def _emit_path_chosen(self, state: WizardJobState, *, path: str) -> None:
@@ -319,9 +347,12 @@ class WizardOrchestrator:
         self._path_by_job[state.job_id] = path
         logger.info(
             "voice.calibration.wizard.path_chosen",
+            job_id_hash=short_hash(state.job_id),
+            mind_id_hash=short_hash(state.mind_id),
+            path=path,
+            # Deprecated raw fields (removal in v0.30.29):
             job_id=state.job_id,
             mind_id=state.mind_id,
-            path=path,
         )
 
     def _emit_state(self, state: WizardJobState, tracker: WizardProgressTracker) -> None:
@@ -338,10 +369,13 @@ class WizardOrchestrator:
         tracker.append(state)
         logger.info(
             "voice.calibration.wizard.stage_transition",
-            job_id=state.job_id,
-            mind_id=state.mind_id,
+            job_id_hash=short_hash(state.job_id),
+            mind_id_hash=short_hash(state.mind_id),
             status=state.status.value,
             progress=state.progress,
+            # Deprecated raw fields (removal in v0.30.29):
+            job_id=state.job_id,
+            mind_id=state.mind_id,
         )
 
     # ====================================================================

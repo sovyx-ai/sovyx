@@ -40,6 +40,7 @@ import os
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.privacy import short_hash
 from sovyx.voice.calibration._persistence import (
     _profile_from_dict,
     _profile_to_dict,
@@ -106,6 +107,9 @@ def store_profile(profile: CalibrationProfile, *, data_dir: Path) -> Path:
     logger.info(
         "voice.calibration.kb.stored",
         fingerprint_hash=fingerprint_hash,
+        mind_id_hash=short_hash(profile.mind_id),
+        # Deprecated raw fields (removal in v0.30.29 per
+        # MISSION-voice-calibration-extreme-audit-2026-05-06 §4.2):
         mind_id=profile.mind_id,
         path=str(target),
     )
@@ -138,14 +142,16 @@ def lookup_profile(*, data_dir: Path, fingerprint_hash: str) -> CalibrationProfi
         logger.warning(
             "voice.calibration.kb.malformed_json",
             fingerprint_hash=fingerprint_hash,
-            path=str(path),
             reason=str(exc),
+            # Deprecated raw filesystem path (removal in v0.30.29):
+            path=str(path),
         )
         return None
     if not isinstance(raw, dict):
         logger.warning(
             "voice.calibration.kb.not_an_object",
             fingerprint_hash=fingerprint_hash,
+            # Deprecated raw filesystem path (removal in v0.30.29):
             path=str(path),
         )
         return None
@@ -155,13 +161,16 @@ def lookup_profile(*, data_dir: Path, fingerprint_hash: str) -> CalibrationProfi
         logger.warning(
             "voice.calibration.kb.schema_mismatch",
             fingerprint_hash=fingerprint_hash,
-            path=str(path),
             reason=str(exc),
+            # Deprecated raw filesystem path (removal in v0.30.29):
+            path=str(path),
         )
         return None
     logger.info(
         "voice.calibration.kb.hit",
         fingerprint_hash=fingerprint_hash,
+        cached_mind_id_hash=short_hash(profile.mind_id),
+        # Deprecated raw field (removal in v0.30.29):
         cached_mind_id=profile.mind_id,
     )
     return profile

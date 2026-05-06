@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.privacy import short_hash
 from sovyx.voice.calibration._wizard_state import WizardJobState
 
 if TYPE_CHECKING:
@@ -112,10 +113,15 @@ class WizardProgressTracker:
         try:
             content = self._path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
+            # Tracker path layout: ``<data_dir>/voice_calibration/<job_id>/progress.jsonl``;
+            # parent dir name is the job_id, hashed here for telemetry.
             logger.warning(
                 "voice.calibration.wizard.progress_read_failed",
-                path=str(self._path),
+                job_id_hash=short_hash(self._path.parent.name),
                 reason=str(exc),
+                # Deprecated raw filesystem path (removal in v0.30.29 per
+                # MISSION-voice-calibration-extreme-audit-2026-05-06 §4.2):
+                path=str(self._path),
             )
             return []
         for line_no, raw_line in enumerate(content.splitlines(), start=1):
