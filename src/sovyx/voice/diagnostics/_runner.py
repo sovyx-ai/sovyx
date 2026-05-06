@@ -170,6 +170,7 @@ async def run_full_diag_async(
     extra_args: tuple[str, ...] = (),
     output_root: Path | None = None,
     trigger: str = "cli",
+    env_overrides: dict[str, str] | None = None,
 ) -> DiagRunResult:
     """Async-native version of :func:`run_full_diag`.
 
@@ -188,6 +189,13 @@ async def run_full_diag_async(
         extra_args: Same as :func:`run_full_diag`.
         output_root: Same as :func:`run_full_diag`.
         trigger: Same as :func:`run_full_diag`.
+        env_overrides: Optional mapping of environment variables to
+            inject into the bash subprocess. Used by the wizard
+            orchestrator to set ``SOVYX_DIAG_PROMPTS_FILE`` so the
+            bash side emits structured prompts to a JSONL file the
+            orchestrator tails (P3 capture-prompt protocol). When
+            ``None`` (default), the subprocess inherits the parent's
+            full environment via ``os.environ.copy()``.
 
     Returns:
         :class:`DiagRunResult` on successful completion.
@@ -239,6 +247,13 @@ async def run_full_diag_async(
         }
         if sys.platform != "win32":
             spawn_kwargs["start_new_session"] = True
+        # Inject env overrides (P3 capture-prompt protocol uses this to
+        # tell bash where to write prompts.jsonl). Default behaviour:
+        # subprocess inherits full parent env via os.environ.copy.
+        if env_overrides is not None:
+            env = os.environ.copy()
+            env.update(env_overrides)
+            spawn_kwargs["env"] = env
         proc = await asyncio.create_subprocess_exec(*cmd, **spawn_kwargs)  # type: ignore[arg-type]
         try:
             return_code = await proc.wait()

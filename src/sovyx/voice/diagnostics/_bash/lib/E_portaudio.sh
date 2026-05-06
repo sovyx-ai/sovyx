@@ -341,6 +341,7 @@ run_layer_E() {
         return
     fi
 
+    prompt_emit_structured "speak" "Sovyx, me ouça agora: um, dois, três, quatro, cinco."
     prompt_user "Próximas capturas PortAudio (5 wavs). Frase: 'Sovyx, me ouça agora: um, dois, três, quatro, cinco.'" 30 || true
 
     # W10 — PortAudio default (qualquer que seja o host API default)

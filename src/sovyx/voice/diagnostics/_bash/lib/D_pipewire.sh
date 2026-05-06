@@ -328,6 +328,7 @@ run_layer_D() {
     if ! tool_has arecord >/dev/null; then
         log_warn "arecord unavailable — default/pipewire ALSA captures skipped"
     else
+        prompt_emit_structured "speak" "Sovyx, me ouça agora: um, dois, três, quatro, cinco."
         prompt_user "Próximas capturas PipeWire (5 wavs). Frase: 'Sovyx, me ouça agora: um, dois, três, quatro, cinco.'" 30 || true
 
         # W5 — arecord -D default 48k 1ch (alsa-pa bridge)

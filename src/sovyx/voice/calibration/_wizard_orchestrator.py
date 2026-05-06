@@ -35,9 +35,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
 from sovyx.observability.privacy import short_hash
@@ -64,6 +65,12 @@ logger = get_logger(__name__)
 
 _CANCEL_FILE = ".cancel"
 _PROGRESS_FILE = "progress.jsonl"
+# v0.30.31 (P3) capture-prompt side-channel. Bash writes one JSON line per
+# operator-facing prompt; orchestrator tails the file every
+# _PROMPTS_POLL_INTERVAL_S seconds and updates state.extras["current_prompt"]
+# so the dashboard renders the speak/silence card in real time.
+_PROMPTS_FILE = "prompts.jsonl"
+_PROMPTS_POLL_INTERVAL_S = 0.5
 
 _PENDING_MSG = "Calibration job created"
 _PROBING_MSG = "Capturing hardware fingerprint"
@@ -347,6 +354,94 @@ class WizardOrchestrator:
             progress=state.progress,
         )
 
+    async def _tail_prompts_file(
+        self,
+        *,
+        prompts_file: Path,
+        state_holder: dict[str, WizardJobState],
+        tracker: WizardProgressTracker,
+    ) -> None:
+        """Tail the bash side-channel prompts file every 500 ms.
+
+        Bash writes one JSON line per operator-facing prompt
+        (``prompt_emit_structured`` in ``common.sh``). The orchestrator
+        reads new lines on each poll, parses them, and updates
+        ``state.extras["current_prompt"]`` so the dashboard's
+        ``<CapturePrompt>`` component renders the active prompt in
+        real time. One ``voice.calibration.wizard.capture_prompt``
+        telemetry event fires per parsed prompt.
+
+        Failure-mode contract:
+
+        * File never materializes (CLI-only operator who didn't set the
+          env var, or bash diag failed before writing) → loop polls
+          harmlessly until cancelled.
+        * Malformed JSON line → skipped + DEBUG log; subsequent lines
+          processed.
+        * OSError on read (transient) → suppressed; retried on next poll.
+        * The task is spawned by the slow-path-diag stage and cancelled
+          in its ``finally:`` block. CancelledError is the expected
+          terminator and exits cleanly.
+        """
+        sent_offset = 0
+        while True:
+            try:
+                if prompts_file.exists():
+                    raw = prompts_file.read_text(encoding="utf-8", errors="replace")
+                    lines = raw.splitlines()
+                    for line in lines[sent_offset:]:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        try:
+                            prompt_data: dict[str, Any] = json.loads(stripped)
+                        except json.JSONDecodeError:
+                            logger.debug(
+                                "voice.calibration.wizard.capture_prompt_malformed",
+                                preview=stripped[:120],
+                            )
+                            continue
+                        current = state_holder["state"]
+                        # Build a fresh state with current_prompt in extras
+                        # so subscribers see the per-prompt update.
+                        new_extras = dict(current.extras)
+                        new_extras["current_prompt"] = prompt_data
+                        new_state = WizardJobState(
+                            job_id=current.job_id,
+                            mind_id=current.mind_id,
+                            status=current.status,
+                            progress=current.progress,
+                            current_stage_message=current.current_stage_message,
+                            created_at_utc=current.created_at_utc,
+                            updated_at_utc=self._now(),
+                            profile_path=current.profile_path,
+                            triage_winner_hid=current.triage_winner_hid,
+                            error_summary=current.error_summary,
+                            fallback_reason=current.fallback_reason,
+                            extras=new_extras,
+                        )
+                        state_holder["state"] = new_state
+                        self._emit_state(new_state, tracker)
+                        prompt_type = prompt_data.get("type", "")
+                        # Closed-enum guard: only emit telemetry for the
+                        # documented prompt types so OTel cardinality
+                        # stays bounded.
+                        if prompt_type in ("speak", "silence"):
+                            logger.info(
+                                "voice.calibration.wizard.capture_prompt",
+                                job_id_hash=short_hash(current.job_id),
+                                mind_id_hash=short_hash(current.mind_id),
+                                prompt_type=prompt_type,
+                                phrase=str(prompt_data.get("phrase") or ""),
+                            )
+                    sent_offset = len(lines)
+            except OSError as exc:
+                logger.debug(
+                    "voice.calibration.wizard.capture_prompt_read_failed",
+                    reason=str(exc),
+                )
+            await asyncio.sleep(_PROMPTS_POLL_INTERVAL_S)
+
     # ====================================================================
     # Internals
     # ====================================================================
@@ -404,6 +499,29 @@ class WizardOrchestrator:
         )
         self._emit_state(state, tracker)
         self._emit_step_entered(state, step="slow_path")
+        # v0.30.31 (P3) capture-prompt protocol: bash writes structured
+        # prompts to <job_dir>/prompts.jsonl (only when SOVYX_DIAG_PROMPTS_FILE
+        # env is set, so CLI operators are unaffected); the orchestrator
+        # tails the file every 500 ms and pushes each line into
+        # state.extras["current_prompt"] so the dashboard renders the
+        # "say X" / "stay silent for Y" cards in real time.
+        prompts_file = self.job_dir(job_id) / _PROMPTS_FILE
+        prompts_file.parent.mkdir(parents=True, exist_ok=True)
+        # Drop any stale prompts.jsonl from a prior run on the same
+        # job_id so the tail starts at a clean offset.
+        with contextlib.suppress(OSError):
+            prompts_file.unlink(missing_ok=True)
+        # Holder lets the tail loop see the current state without
+        # passing it explicitly (the orchestrator mutates state inside
+        # the loop's lifetime as it builds new transitions).
+        prompt_state_holder: dict[str, WizardJobState] = {"state": state}
+        tail_task = asyncio.create_task(
+            self._tail_prompts_file(
+                prompts_file=prompts_file,
+                state_holder=prompt_state_holder,
+                tracker=tracker,
+            )
+        )
         try:
             # v0.30.26: pass `trigger="wizard"` per spec §8.3 so the
             # voice.diagnostics.full_diag_started telemetry attributes
@@ -411,9 +529,12 @@ class WizardOrchestrator:
             # v0.30.30 (P2): use the async-native runner so
             # operator-initiated CancelledError propagates into the
             # bash subprocess via SIGTERM → grace → SIGKILL escalation.
+            # v0.30.31 (P3): pass SOVYX_DIAG_PROMPTS_FILE so bash emits
+            # structured prompts the tail loop forwards to the WS.
             diag_result = await run_full_diag_async(
                 extra_args=("--non-interactive",),
                 trigger="wizard",
+                env_overrides={"SOVYX_DIAG_PROMPTS_FILE": str(prompts_file)},
             )
         except DiagPrerequisiteError as exc:
             return self._emit_fallback(
@@ -429,11 +550,37 @@ class WizardOrchestrator:
                 reason="diag_run_failed",
                 summary=str(exc),
             )
+        finally:
+            tail_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await tail_task
+
+        # Pick up any state mutations the tail loop made (extras updates).
+        state = prompt_state_holder["state"]
 
         if self._is_cancelled(job_id):
             return self._emit_cancelled(state, tracker)
 
         # Stage 3: SLOW_PATH_CALIBRATE -- triage + measurements + engine.
+        # Drop the now-stale current_prompt from extras as we leave the
+        # SLOW_PATH_DIAG stage; the dashboard reads its absence as
+        # "prompt cleared" and the CapturePrompt component unmounts.
+        cleared_extras = dict(state.extras)
+        cleared_extras.pop("current_prompt", None)
+        state = WizardJobState(
+            job_id=state.job_id,
+            mind_id=state.mind_id,
+            status=state.status,
+            progress=state.progress,
+            current_stage_message=state.current_stage_message,
+            created_at_utc=state.created_at_utc,
+            updated_at_utc=state.updated_at_utc,
+            profile_path=state.profile_path,
+            triage_winner_hid=state.triage_winner_hid,
+            error_summary=state.error_summary,
+            fallback_reason=state.fallback_reason,
+            extras=cleared_extras,
+        )
         state = self._transition(
             state,
             status=WizardStatus.SLOW_PATH_CALIBRATE,

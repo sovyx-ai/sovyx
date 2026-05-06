@@ -126,6 +126,7 @@ run_layer_H() {
              "http://127.0.0.1:7777/api/voice/status"
 
     # ── Rodada 1: pipeline produtivo corrente ───────────────────────────
+    prompt_emit_structured "speak" "Sovyx, me ouça agora: um, dois, três, quatro, cinco."
     prompt_user "Frase-canário com pipeline produtivo. Vou marcar T_start → fale 'Sovyx, me ouça agora: um, dois, três, quatro, cinco.' → aguarde 8s → T_end." 60 || true
 
     _mark_timestamp "T_speak_start_round1" "$marks"
@@ -202,6 +203,7 @@ run_layer_H() {
                  -H "Content-Type: application/json" -d '{}'
         sleep 10
 
+        prompt_emit_structured "speak" "Sovyx, me ouça agora: um, dois, três, quatro, cinco."
         prompt_user "Rodada 2: fale a mesma frase novamente. Aguardo 10s." 60 || true
 
         _mark_timestamp "T_speak_start_round2" "$marks"

@@ -221,6 +221,7 @@ run_layer_C() {
 
     # Instrução ao usuário.
     local phrase='Sovyx, me ouça agora: um, dois, três, quatro, cinco.'
+    prompt_emit_structured "speak" "$phrase" 4
     if ! prompt_user "Próximas capturas (5x): vou pedir que você fale '$phrase' por 4 segundos. Pressione ENTER quando pronto." 60; then
         log_warn "C captures: user did not confirm; proceeding blindly"
     fi

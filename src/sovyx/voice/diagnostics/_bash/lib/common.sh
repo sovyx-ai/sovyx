@@ -749,6 +749,52 @@ prompt_user() {
     return 0
 }
 
+# prompt_emit_structured <type> <phrase> [seconds] — emite o prompt
+# atual como JSONL para uma file side-channel observada pelo orquestrador
+# Python. NO-OP quando $SOVYX_DIAG_PROMPTS_FILE não está setada (operadores
+# CLI rodando sovyx doctor voice --full-diag diretamente).
+#
+# Contrato P3 (mission MISSION-voice-calibration-extreme-audit-2026-05-06.md
+# §7): bash escreve uma linha JSON por prompt; orchestrator faz tail do
+# file a cada 500 ms e empurra cada linha pra state.extras.current_prompt
+# pra que o frontend renderize <CapturePrompt> em tempo real.
+#
+# Args:
+#   type     — closed enum {speak, silence}
+#   phrase   — texto a falar (NULL quando type=silence)
+#   seconds  — duração de silêncio (NULL quando type=speak)
+#
+# Shell-injection nota: usa bash heredoc + assume que phrase tem only
+# os caracteres bounded-set escolhidos pelo diag (NÃO operator-set).
+# JSON-escaping mínimo: backslashes + double-quotes via expansão padrão
+# de bash (sed inline). Para expansão futura considerar python3 -c json
+# se phrase virar operator-set.
+prompt_emit_structured() {
+    local type="$1" phrase="$2" seconds="${3:-}"
+    if [[ -z "${SOVYX_DIAG_PROMPTS_FILE:-}" ]]; then
+        return 0
+    fi
+    # Escape backslash + double-quote (mínimo necessário para JSON).
+    local phrase_escaped
+    phrase_escaped="${phrase//\\/\\\\}"
+    phrase_escaped="${phrase_escaped//\"/\\\"}"
+    local seconds_field
+    if [[ -z "$seconds" ]]; then
+        seconds_field="null"
+    else
+        seconds_field="$seconds"
+    fi
+    local utc_now mono_now
+    utc_now=$(now_utc_ns) || return 0
+    mono_now=$(now_monotonic_ns) || mono_now="null"
+    local json
+    json=$(printf '{"type":"%s","phrase":"%s","seconds":%s,"emitted_at_utc":"%s","emitted_at_mono_ns":%s}' \
+        "$type" "$phrase_escaped" "$seconds_field" "$utc_now" "$mono_now")
+    # Atomic single-line append; bash open(O_APPEND) is atomic for writes
+    # smaller than PIPE_BUF (~4 KB on Linux), which our payload always is.
+    echo "$json" >> "$SOVYX_DIAG_PROMPTS_FILE" 2>/dev/null || true
+}
+
 # prompt_yn <msg> → 0 = sim, 1 = não. Respeita --yes (retorna 0 sempre).
 prompt_yn() {
     local msg="$1"
