@@ -52,11 +52,17 @@ from sovyx.observability.health import (
 )
 from sovyx.voice.calibration import (
     ApplyError,
+    ApplyResult,
     CalibrationApplier,
     CalibrationEngine,
     CalibrationProfile,
+    CalibrationProfileLoadError,
+    CalibrationProfileRollbackError,
     capture_fingerprint,
     capture_measurements,
+    load_calibration_profile,
+    profile_path,
+    rollback_calibration_profile,
 )
 from sovyx.voice.diagnostics import (
     DiagPrerequisiteError,
@@ -319,6 +325,23 @@ def doctor_voice(
         "fired + matched conditions + produced decisions). Use to "
         "audit calibration decisions before they apply.",
     ),
+    show: bool = typer.Option(
+        False,
+        "--show",
+        help="With --calibrate: render the LAST persisted calibration "
+        "profile for --mind-id without running a new diag/engine pass. "
+        "Read-only inspection; does not mutate state. Pairs with "
+        "--explain to render the original rule trace.",
+    ),
+    rollback: bool = typer.Option(
+        False,
+        "--rollback",
+        help="With --calibrate: restore the prior calibration profile "
+        "from the .bak slot, discarding the current profile. Single-step "
+        "rollback only; the .bak is consumed by the swap. Use to revert a "
+        "calibration whose verdict you disagree with; re-run --calibrate "
+        "afterward to regenerate.",
+    ),
 ) -> None:
     """Voice Capture Health Lifecycle diagnostics (ADR §4.8 + v1.3 §4.4).
 
@@ -361,6 +384,19 @@ def doctor_voice(
             "--calibrate runs --full-diag internally + adds the "
             "fingerprint + measurer + engine + applier pipeline."
         )
+    if (show or rollback) and not calibrate:
+        raise typer.BadParameter(
+            "--show and --rollback require --calibrate. They operate on "
+            "the per-mind <data_dir>/<mind_id>/calibration.json + .bak "
+            "files which only exist after at least one --calibrate run."
+        )
+    if show and rollback:
+        raise typer.BadParameter(
+            "--show and --rollback are mutually exclusive. --show is "
+            "read-only inspection; --rollback consumes the .bak slot. "
+            "Run --show first to confirm what you'd revert TO, then "
+            "--rollback in a separate invocation if that's what you want."
+        )
     exit_code = _run_voice_doctor(
         output_json=output_json,
         device=device,
@@ -373,6 +409,8 @@ def doctor_voice(
         calibrate=calibrate,
         mind_id=mind_id,
         explain=explain,
+        show=show,
+        rollback=rollback,
     )
     raise typer.Exit(exit_code)
 
@@ -390,8 +428,14 @@ def _run_voice_doctor(
     calibrate: bool = False,
     mind_id: str = "default",
     explain: bool = False,
+    show: bool = False,
+    rollback: bool = False,
 ) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
+    if calibrate and show:
+        return _run_voice_calibrate_show(mind_id=mind_id, explain=explain)
+    if calibrate and rollback:
+        return _run_voice_calibrate_rollback(mind_id=mind_id)
     if calibrate:
         return _run_voice_calibrate(
             mind_id=mind_id,
@@ -675,6 +719,69 @@ def _run_voice_calibrate(
 
     _render_calibration_verdict(profile, apply_result, explain=explain)
     return EXIT_DOCTOR_OK
+
+
+def _run_voice_calibrate_show(*, mind_id: str, explain: bool) -> int:
+    """Render the LAST persisted calibration profile (read-only).
+
+    Loads ``<data_dir>/<mind_id>/calibration.json`` via
+    :func:`load_calibration_profile` (LENIENT mode) and renders the
+    same verdict block ``--calibrate`` produces. No diag, no engine,
+    no mutation -- pure inspection.
+
+    Returns:
+        * EXIT_DOCTOR_OK on a clean render.
+        * EXIT_DOCTOR_GENERIC_FAILURE when the profile cannot be
+          loaded (missing, malformed, schema mismatch).
+    """
+    data_dir = Path.home() / ".sovyx"
+    target = profile_path(data_dir=data_dir, mind_id=mind_id)
+    console.print(f"\n[bold cyan]Voice calibration[/bold cyan] [dim](showing {target})[/dim]\n")
+    try:
+        profile = load_calibration_profile(data_dir=data_dir, mind_id=mind_id)
+    except CalibrationProfileLoadError as exc:
+        console.print(f"\n[red]Cannot load calibration profile:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    advised = tuple(str(d.value) for d in profile.decisions if d.operation == "advise")
+    inspect_result = ApplyResult(
+        profile_path=target,
+        applied_decisions=profile.applicable_decisions,
+        skipped_decisions=tuple(
+            d for d in profile.decisions if d not in profile.applicable_decisions
+        ),
+        advised_actions=advised,
+        dry_run=True,
+    )
+    _render_calibration_verdict(profile, inspect_result, explain=explain)
+    return EXIT_DOCTOR_OK
+
+
+def _run_voice_calibrate_rollback(*, mind_id: str) -> int:
+    """Restore the prior calibration profile from the .bak slot.
+
+    Single-step rollback (consumes the .bak). Surfaces the verdict
+    of the restored profile so the operator immediately sees what
+    landed back in place.
+
+    Returns:
+        * EXIT_DOCTOR_OK on a successful rollback + render.
+        * EXIT_DOCTOR_GENERIC_FAILURE when no .bak exists or the
+          .bak is malformed (rollback refuses to restore corrupt state).
+    """
+    data_dir = Path.home() / ".sovyx"
+    console.print(
+        f"\n[bold cyan]Voice calibration rollback[/bold cyan] [dim](mind_id={mind_id})[/dim]\n"
+    )
+    try:
+        restored = rollback_calibration_profile(data_dir=data_dir, mind_id=mind_id)
+    except CalibrationProfileRollbackError as exc:
+        console.print(f"\n[red]Rollback failed:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    console.print(f"[green]Restored prior profile to[/green] {restored}\n")
+    # Render the restored profile so the operator confirms what's now active.
+    return _run_voice_calibrate_show(mind_id=mind_id, explain=False)
 
 
 def _render_calibration_verdict(

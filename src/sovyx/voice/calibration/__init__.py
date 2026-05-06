@@ -67,8 +67,11 @@ from sovyx.voice.calibration._fingerprint import capture_fingerprint
 from sovyx.voice.calibration._measurer import capture_measurements
 from sovyx.voice.calibration._persistence import (
     CalibrationProfileLoadError,
+    CalibrationProfileRollbackError,
     load_calibration_profile,
+    profile_backup_path,
     profile_path,
+    rollback_calibration_profile,
     save_calibration_profile,
 )
 from sovyx.voice.calibration._provenance import ProvenanceRecorder
@@ -111,6 +114,7 @@ __all__ = [
     "CalibrationEngine",
     "CalibrationProfile",
     "CalibrationProfileLoadError",
+    "CalibrationProfileRollbackError",
     "CalibrationRule",
     "EngineMode",
     "HardwareFingerprint",
@@ -128,6 +132,8 @@ __all__ = [
     "capture_measurements",
     "iter_rules",
     "load_calibration_profile",
+    "profile_backup_path",
     "profile_path",
+    "rollback_calibration_profile",
     "save_calibration_profile",
 ]

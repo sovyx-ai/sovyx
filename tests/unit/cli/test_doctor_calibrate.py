@@ -431,3 +431,103 @@ class TestSuccessPath:
         assert "Rule trace" in result.output
         assert "matched:" in result.output
         assert "produced:" in result.output
+
+
+# ====================================================================
+# v0.30.19: --show + --rollback flags
+# ====================================================================
+
+
+class TestShowAndRollbackMutex:
+    """--show and --rollback both require --calibrate; cannot combine."""
+
+    def test_show_without_calibrate_rejected(self) -> None:
+        result = runner.invoke(app, ["doctor", "voice", "--show"])
+        assert result.exit_code != 0
+        assert "require --calibrate" in result.output or "--show" in result.output
+
+    def test_rollback_without_calibrate_rejected(self) -> None:
+        result = runner.invoke(app, ["doctor", "voice", "--rollback"])
+        assert result.exit_code != 0
+        assert "require --calibrate" in result.output or "--rollback" in result.output
+
+    def test_show_with_rollback_rejected(self) -> None:
+        result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--show", "--rollback"])
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+
+class TestShow:
+    """``--calibrate --show`` renders the LAST persisted profile, no diag run."""
+
+    def test_show_renders_existing_profile(self, tmp_path: Path) -> None:
+        from sovyx.voice.calibration import save_calibration_profile
+
+        # CLI resolves data_dir as Path.home() / ".sovyx", so we patch
+        # Path.home to a parent of an empty fake-home dir + save to
+        # the matching .sovyx subdir so the load path lines up.
+        fake_home = tmp_path / "home"
+        sovyx_data = fake_home / ".sovyx"
+        sovyx_data.mkdir(parents=True)
+
+        with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+            save_calibration_profile(_r10_profile(), data_dir=sovyx_data)
+            result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--show"])
+        assert result.exit_code == 0
+        assert "Calibration decisions" in result.output
+        # The advised action surfaces (operator copy-paste affordance).
+        assert "sovyx doctor voice --fix --yes" in result.output
+
+    def test_show_when_no_profile_returns_failure(self, tmp_path: Path) -> None:
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+            result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--show"])
+        assert result.exit_code != 0
+        assert "Cannot load calibration profile" in result.output
+
+
+class TestRollback:
+    """``--calibrate --rollback`` swaps .bak -> canonical."""
+
+    def test_rollback_swaps_bak_to_canonical(self, tmp_path: Path) -> None:
+        from dataclasses import replace
+
+        from sovyx.voice.calibration import (
+            profile_backup_path,
+            save_calibration_profile,
+        )
+
+        fake_home = tmp_path / "home"
+        sovyx_data = fake_home / ".sovyx"
+        sovyx_data.mkdir(parents=True)
+
+        # Two saves: first becomes the eventual .bak; second the
+        # current. After rollback, the first lands back as canonical.
+        first = _r10_profile()
+        second = replace(first, profile_id="22222222-2222-3333-4444-555555555555")
+
+        with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+            save_calibration_profile(first, data_dir=sovyx_data)
+            save_calibration_profile(second, data_dir=sovyx_data)
+            assert profile_backup_path(data_dir=sovyx_data, mind_id="default").is_file()
+
+            result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--rollback"])
+        assert result.exit_code == 0
+        assert "Restored prior profile" in result.output
+        # After rollback, the .bak slot is consumed.
+        assert not profile_backup_path(data_dir=sovyx_data, mind_id="default").is_file()
+
+    def test_rollback_when_no_backup_returns_failure(self, tmp_path: Path) -> None:
+        from sovyx.voice.calibration import save_calibration_profile
+
+        fake_home = tmp_path / "home"
+        sovyx_data = fake_home / ".sovyx"
+        sovyx_data.mkdir(parents=True)
+
+        # Only one save -> no .bak exists.
+        with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+            save_calibration_profile(_r10_profile(), data_dir=sovyx_data)
+            result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--rollback"])
+        assert result.exit_code != 0
+        assert "Rollback failed" in result.output

@@ -56,11 +56,22 @@ logger = get_logger(__name__)
 
 _PROFILE_FILENAME = "calibration.json"
 _TMP_SUFFIX = ".tmp"
+_BAK_SUFFIX = ".bak"
 
 
 def _short_hash(value: str) -> str:
     """16-hex-char SHA256 prefix; matches engine.py + _applier.py."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+class CalibrationProfileRollbackError(Exception):
+    """Raised when ``rollback_calibration_profile`` cannot complete.
+
+    Causes:
+        * No backup file exists (nothing to roll back to).
+        * The backup file is malformed and cannot be loaded.
+        * Filesystem error during the atomic rename.
+    """
 
 
 class CalibrationProfileLoadError(Exception):
@@ -89,6 +100,18 @@ def profile_path(*, data_dir: Path, mind_id: str) -> Path:
     return data_dir / mind_id / _PROFILE_FILENAME
 
 
+def profile_backup_path(*, data_dir: Path, mind_id: str) -> Path:
+    """Return the rollback-target path for a mind's prior calibration profile.
+
+    Used by :func:`save_calibration_profile` to rotate the current
+    ``calibration.json`` to ``calibration.json.bak`` before overwriting,
+    and by :func:`rollback_calibration_profile` to restore it. Single-
+    step rollback only; v0.30.19 does NOT keep a multi-generation
+    history (operator can re-run ``--calibrate`` to regenerate).
+    """
+    return data_dir / mind_id / (_PROFILE_FILENAME + _BAK_SUFFIX)
+
+
 def save_calibration_profile(
     profile: CalibrationProfile,
     *,
@@ -113,6 +136,15 @@ def save_calibration_profile(
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target.with_suffix(target.suffix + _TMP_SUFFIX)
 
+    # Rotate the current profile into the .bak slot BEFORE the new
+    # write so a subsequent --rollback can restore it. Single-step
+    # rollback (v0.30.19): the previous .bak is overwritten, NOT
+    # archived multi-generation. Operators who need historical state
+    # can keep their own backups.
+    backup_target = profile_backup_path(data_dir=data_dir, mind_id=profile.mind_id)
+    if target.is_file():
+        os.replace(target, backup_target)
+
     serialized = _profile_to_dict(profile)
     payload = json.dumps(
         serialized,
@@ -129,6 +161,68 @@ def save_calibration_profile(
         profile_id_hash=_short_hash(profile.profile_id),
         path=str(target),
         signed=profile.signature is not None,
+        backup_present=backup_target.is_file(),
+    )
+    return target
+
+
+def rollback_calibration_profile(
+    *,
+    data_dir: Path,
+    mind_id: str,
+) -> Path:
+    """Restore the prior calibration profile from the .bak slot.
+
+    Atomically swaps ``calibration.json.bak`` -> ``calibration.json``
+    and removes the .bak. Single-step rollback only (v0.30.19): a
+    second consecutive ``--rollback`` raises
+    :class:`CalibrationProfileRollbackError` because the .bak is
+    consumed by the swap.
+
+    Args:
+        data_dir: Sovyx data directory.
+        mind_id: The mind whose profile to roll back.
+
+    Returns:
+        The absolute path the restored profile now lives at
+        (always ``<data_dir>/<mind_id>/calibration.json``).
+
+    Raises:
+        CalibrationProfileRollbackError: when no .bak exists, the
+            current profile cannot be removed, or the .bak cannot be
+            renamed into place.
+    """
+    target = profile_path(data_dir=data_dir, mind_id=mind_id)
+    backup = profile_backup_path(data_dir=data_dir, mind_id=mind_id)
+
+    if not backup.is_file():
+        raise CalibrationProfileRollbackError(
+            f"no calibration backup at {backup} -- nothing to roll back. "
+            f"Single-step rollback only; if you've already rolled back once, "
+            f"re-run `sovyx doctor voice --calibrate` to regenerate."
+        )
+
+    # Best-effort: if the rollback can't load the backup as a valid
+    # profile we surface the error early so the operator doesn't end
+    # up with an unloadable canonical file.
+    try:
+        raw = json.loads(backup.read_text(encoding="utf-8"))
+        _profile_from_dict(raw)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise CalibrationProfileRollbackError(
+            f"backup at {backup} is unreadable: {exc}. Refusing to roll back to a corrupt state."
+        ) from exc
+
+    # Atomic swap: write the backup over the canonical (which gets
+    # discarded -- single-step contract). os.replace is atomic on
+    # POSIX + Windows when source and target are on the same volume.
+    os.replace(backup, target)
+
+    logger.info(
+        "voice.calibration.applier.rolled_back",
+        mind_id_hash=_short_hash(mind_id),
+        path=str(target),
+        rollback_reason="operator_initiated",
     )
     return target
 
