@@ -473,3 +473,129 @@ class TestErrorClasses:
 
     def test_diag_run_error_is_runtimeerror(self) -> None:
         assert issubclass(DiagRunError, RuntimeError)
+
+
+# ====================================================================
+# v0.30.24: voice.diagnostics.full_diag_* telemetry events (§8.3)
+# ====================================================================
+
+
+class TestDiagnosticsTelemetry:
+    """voice.diagnostics.full_diag_started/completed/failed fire on each path."""
+
+    def _capture(self) -> tuple[list[tuple[str, dict[str, Any]]], object]:
+        events: list[tuple[str, dict[str, Any]]] = []
+
+        class _Cap:
+            def info(self, event: str, **kwargs: Any) -> None:
+                events.append((event, kwargs))
+
+            def warning(self, event: str, **kwargs: Any) -> None:
+                events.append((event, kwargs))
+
+        original = _runner.logger
+        _runner.logger = _Cap()  # type: ignore[assignment]
+        return events, original
+
+    def _restore(self, original: object) -> None:
+        _runner.logger = original  # type: ignore[assignment]
+
+    def test_classify_diag_mode_full(self) -> None:
+        assert _runner._classify_diag_mode(()) == "full"
+
+    def test_classify_diag_mode_skip_captures(self) -> None:
+        assert (
+            _runner._classify_diag_mode(("--skip-captures", "--non-interactive"))
+            == "skip_captures"
+        )
+
+    def test_classify_diag_mode_surgical(self) -> None:
+        assert (
+            _runner._classify_diag_mode(("--only", "A,C,D,E,J", "--skip-captures")) == "surgical"
+        )
+
+    def test_started_and_completed_fire_on_success(self, tmp_path: Path) -> None:
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        output_root = tmp_path / "home"
+        output_root.mkdir()
+        _make_result_tarball(output_root)
+
+        events, original = self._capture()
+        try:
+            with (
+                patch.object(_runner, "_check_prerequisites"),
+                patch.object(
+                    _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+                ),
+                patch.object(
+                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                ),
+            ):
+                run_full_diag(output_root=output_root)
+        finally:
+            self._restore(original)
+
+        names = [e[0] for e in events]
+        assert "voice.diagnostics.full_diag_started" in names
+        assert "voice.diagnostics.full_diag_completed" in names
+        completed = next(e for e in events if e[0] == "voice.diagnostics.full_diag_completed")
+        assert completed[1]["exit_code"] == 0
+        assert completed[1]["mode"] == "full"
+
+    def test_failed_fires_on_non_zero_exit(self, tmp_path: Path) -> None:
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 3\n")
+        output_root = tmp_path / "home"
+        output_root.mkdir()
+
+        events, original = self._capture()
+        try:
+            with (
+                patch.object(_runner, "_check_prerequisites"),
+                patch.object(
+                    _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+                ),
+                patch.object(
+                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=3)
+                ),
+                pytest.raises(DiagRunError),
+            ):
+                run_full_diag(output_root=output_root)
+        finally:
+            self._restore(original)
+
+        failed = next((e for e in events if e[0] == "voice.diagnostics.full_diag_failed"), None)
+        assert failed is not None
+        assert failed[1]["exit_code"] == 3
+        assert failed[1]["failure_reason"] == "selftest_failed"
+
+    def test_failed_fires_when_tarball_missing(self, tmp_path: Path) -> None:
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        output_root = tmp_path / "home"
+        output_root.mkdir()
+        # No tarball materialized in output_root.
+
+        events, original = self._capture()
+        try:
+            with (
+                patch.object(_runner, "_check_prerequisites"),
+                patch.object(
+                    _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+                ),
+                patch.object(
+                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                ),
+                pytest.raises(DiagRunError),
+            ):
+                run_full_diag(output_root=output_root)
+        finally:
+            self._restore(original)
+
+        failed = next((e for e in events if e[0] == "voice.diagnostics.full_diag_failed"), None)
+        assert failed is not None
+        assert failed[1]["failure_reason"] == "tarball_missing"

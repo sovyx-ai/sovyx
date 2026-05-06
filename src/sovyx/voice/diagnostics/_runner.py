@@ -45,6 +45,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from sovyx.observability.logging import get_logger
+
+logger = get_logger(__name__)
+
 _DIAG_SCRIPT_NAME = "sovyx-voice-diag.sh"
 _RESULT_DIR_GLOB = "sovyx-diag-*"
 _RESULT_TARBALL_GLOB = "sovyx-voice-diag_*.tar.gz"
@@ -107,6 +111,22 @@ class DiagRunError(RuntimeError):
 # ====================================================================
 
 
+def _classify_diag_mode(extra_args: tuple[str, ...]) -> str:
+    """Closed-enum classification of the diag run mode for telemetry.
+
+    Returns ``"full"`` (default), ``"skip_captures"`` (when --skip-captures
+    is among extra_args), or ``"surgical"`` (when --only is present).
+    Bounded cardinality so the
+    ``voice.diagnostics.full_diag_started{mode=...}`` label stays
+    OTel-friendly.
+    """
+    if "--only" in extra_args:
+        return "surgical"
+    if "--skip-captures" in extra_args:
+        return "skip_captures"
+    return "full"
+
+
 def run_full_diag(
     *,
     extra_args: tuple[str, ...] = (),
@@ -142,6 +162,13 @@ def run_full_diag(
     """
     _check_prerequisites()
 
+    mode = _classify_diag_mode(extra_args)
+    logger.info(
+        "voice.diagnostics.full_diag_started",
+        mode=mode,
+        extra_arg_count=len(extra_args),
+    )
+
     extracted = _extract_bash_to_temp()
     try:
         script = extracted / _DIAG_SCRIPT_NAME
@@ -165,6 +192,15 @@ def run_full_diag(
         duration_s = time.monotonic() - start
 
         if completed.returncode != 0:
+            logger.warning(
+                "voice.diagnostics.full_diag_failed",
+                mode=mode,
+                exit_code=completed.returncode,
+                duration_s=round(duration_s, 3),
+                failure_reason=(
+                    "selftest_failed" if completed.returncode == 3 else "non_zero_exit"
+                ),
+            )
             raise DiagRunError(
                 f"diag exited with code {completed.returncode} "
                 f"(rc=3 typically means analyzer selftest failed; see stderr above)",
@@ -174,6 +210,13 @@ def run_full_diag(
 
         tarball = _find_latest_result_tarball(output_root)
         if tarball is None:
+            logger.warning(
+                "voice.diagnostics.full_diag_failed",
+                mode=mode,
+                exit_code=completed.returncode,
+                duration_s=round(duration_s, 3),
+                failure_reason="tarball_missing",
+            )
             raise DiagRunError(
                 "diag exited cleanly but no result tarball found under "
                 f"{output_root or Path.home()} matching {_RESULT_DIR_GLOB}/"
@@ -181,6 +224,14 @@ def run_full_diag(
                 exit_code=completed.returncode,
                 partial_output_dir=_find_latest_result_dir(output_root),
             )
+
+        logger.info(
+            "voice.diagnostics.full_diag_completed",
+            mode=mode,
+            duration_s=round(duration_s, 3),
+            exit_code=completed.returncode,
+            tarball_size_bytes=tarball.stat().st_size,
+        )
 
         return DiagRunResult(
             tarball_path=tarball,
