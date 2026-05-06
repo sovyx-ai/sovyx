@@ -14,10 +14,28 @@ the foundation for the calibration engine's targeted-measurement mode
 (L2.T2.3), which will pass ``--only A,C,D,E,J`` via ``extra_args``.
 
 Public surface:
-    * :func:`run_full_diag` -- orchestrate the run; returns DiagRunResult
+    * :func:`run_full_diag_async` -- async-native primary; cancellable
+      mid-run via ``asyncio.CancelledError`` propagation
+    * :func:`run_full_diag` -- thin sync wrapper around the async
+      primary (``asyncio.run``) for CLI callers
     * :class:`DiagRunResult` -- frozen dataclass with tarball + duration
     * :class:`DiagRunError` -- raised on selftest fail / non-zero exit
     * :class:`DiagPrerequisiteError` -- raised on non-Linux / missing bash
+
+Cancellation contract (P2 v0.30.30):
+
+    The async path uses :func:`asyncio.create_subprocess_exec` with
+    ``start_new_session=True`` so the bash diag becomes a process
+    group leader; when the awaiting task is cancelled, the runner
+    sends ``SIGTERM`` to the entire process group (all children:
+    arecord, pactl, pw-record, sox, etc.), waits up to 10s for the
+    bash trap-EXIT cleanup to run, then escalates to ``SIGKILL`` if
+    the group is still alive. Windows uses :func:`Process.terminate`
+    (per-process; group support deferred to a future minor).
+
+    The 10s grace period is critical: the bash ``_cleanup`` function
+    in ``common.sh`` restores Sovyx daemon state (un-disables the
+    voice pipeline). A naive SIGKILL leaves the daemon disabled.
 
 Failure-mode contract:
     * Non-Linux platform -> ``DiagPrerequisiteError``
@@ -36,8 +54,12 @@ output tarball under ``$HOME`` is preserved across calls.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import importlib.resources
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -54,6 +76,14 @@ _RESULT_DIR_GLOB = "sovyx-diag-*"
 _RESULT_TARBALL_GLOB = "sovyx-voice-diag_*.tar.gz"
 _BASH_VERSION_CMD = ("bash", "-c", "echo $BASH_VERSINFO")
 _BASH_VERSION_TIMEOUT_S = 5.0
+
+# P2 cancellation tuning constants. Kept module-level rather than in
+# EngineConfig.tuning because they're invariants of the bash trap
+# contract (anti-pattern #17 calls for tuning knobs only when the
+# operator might legitimately need to adjust them; this 10s grace
+# matches the bash trap's empirical worst-case ≈1-2s + safety margin).
+_CANCEL_GRACE_PERIOD_S = 10.0
+_CANCEL_SIGKILL_WAIT_S = 5.0
 
 
 # ====================================================================
@@ -135,44 +165,39 @@ def _classify_diag_mode(extra_args: tuple[str, ...]) -> str:
 _TRIGGER_VALUES: tuple[str, ...] = ("cli", "wizard")
 
 
-def run_full_diag(
+async def run_full_diag_async(
     *,
     extra_args: tuple[str, ...] = (),
     output_root: Path | None = None,
     trigger: str = "cli",
 ) -> DiagRunResult:
-    """Materialize the bundled bash diag, run it interactively, return the tarball path.
+    """Async-native version of :func:`run_full_diag`.
 
-    The function blocks until the diag exits (typically 8-12 minutes
-    for a default run with ``--yes``). The operator's stdin/stdout/stderr
-    are attached so the interactive capture prompts ("speak now") reach
-    the terminal and the operator's keyboard reaches the script.
+    Identical semantics + return shape, but the underlying subprocess
+    is spawned via :func:`asyncio.create_subprocess_exec` so the
+    awaiting task can be cancelled mid-run; on
+    :class:`asyncio.CancelledError` the runner signals the bash
+    process group with SIGTERM (POSIX) or terminates the process
+    (Windows), waits up to :data:`_CANCEL_GRACE_PERIOD_S` for the
+    bash trap-EXIT cleanup to run, then escalates to SIGKILL if the
+    group is still alive. The CancelledError is re-raised once the
+    subprocess has been terminated so callers see the cancellation
+    propagate cleanly.
 
     Args:
-        extra_args: Additional flags appended after ``--yes`` when
-            invoking the script. Used by the calibration engine
-            (L2.T2.3) to pass scope-narrowing flags such as
-            ``--only A,C,D,E,J``. Empty by default.
-        output_root: Override the directory under which the result
-            tarball is searched. Defaults to ``Path.home()``. Provided
-            for testability and for operators with non-default
-            ``$HOME`` setups.
-        trigger: Closed enum (``"cli"`` | ``"wizard"``) that propagates
-            into the ``voice.diagnostics.full_diag_started{trigger=...}``
-            telemetry field per spec §8.3. Defaults to ``"cli"`` so
-            direct CLI callers don't need to override; the wizard
-            orchestrator passes ``"wizard"``.
+        extra_args: Same as :func:`run_full_diag`.
+        output_root: Same as :func:`run_full_diag`.
+        trigger: Same as :func:`run_full_diag`.
 
     Returns:
-        A :class:`DiagRunResult` carrying the absolute path to the
-        result tarball, the wall-clock duration in seconds, and the
-        bash exit code (always ``0`` on a successful return).
+        :class:`DiagRunResult` on successful completion.
 
     Raises:
-        DiagPrerequisiteError: if the host is not Linux, ``bash`` is
-            missing, or ``bash`` is older than 4.0.
-        DiagRunError: if the diag exits with a non-zero code or exits
-            cleanly but produces no result tarball.
+        DiagPrerequisiteError: same pre-flight contract as the sync
+            entry point.
+        DiagRunError: same post-run contract.
+        asyncio.CancelledError: re-raised after best-effort process
+            termination if the awaiting task was cancelled.
     """
     _check_prerequisites()
 
@@ -203,29 +228,37 @@ def run_full_diag(
 
         cmd: list[str] = ["bash", str(script), "--yes", *extra_args]
         start = time.monotonic()
-        completed = subprocess.run(
-            cmd,
-            stdin=sys.stdin,
-            stdout=sys.stdout,
-            stderr=sys.stderr,
-            check=False,
-        )
+        # ``start_new_session=True`` makes bash the process group
+        # leader on POSIX; on Windows it's silently a no-op
+        # (asyncio.create_subprocess_exec doesn't expose creationflags).
+        # The kwarg works on both platforms even if the effect differs.
+        spawn_kwargs: dict[str, object] = {
+            "stdin": sys.stdin,
+            "stdout": sys.stdout,
+            "stderr": sys.stderr,
+        }
+        if sys.platform != "win32":
+            spawn_kwargs["start_new_session"] = True
+        proc = await asyncio.create_subprocess_exec(*cmd, **spawn_kwargs)  # type: ignore[arg-type]
+        try:
+            return_code = await proc.wait()
+        except asyncio.CancelledError:
+            await _cancel_process_tree(proc, grace_period_s=_CANCEL_GRACE_PERIOD_S)
+            raise
         duration_s = time.monotonic() - start
 
-        if completed.returncode != 0:
+        if return_code != 0:
             logger.warning(
                 "voice.diagnostics.full_diag_failed",
                 mode=mode,
-                exit_code=completed.returncode,
+                exit_code=return_code,
                 duration_s=round(duration_s, 3),
-                failure_reason=(
-                    "selftest_failed" if completed.returncode == 3 else "non_zero_exit"
-                ),
+                failure_reason=("selftest_failed" if return_code == 3 else "non_zero_exit"),
             )
             raise DiagRunError(
-                f"diag exited with code {completed.returncode} "
+                f"diag exited with code {return_code} "
                 f"(rc=3 typically means analyzer selftest failed; see stderr above)",
-                exit_code=completed.returncode,
+                exit_code=return_code,
                 partial_output_dir=_find_latest_result_dir(output_root),
             )
 
@@ -234,7 +267,7 @@ def run_full_diag(
             logger.warning(
                 "voice.diagnostics.full_diag_failed",
                 mode=mode,
-                exit_code=completed.returncode,
+                exit_code=return_code,
                 duration_s=round(duration_s, 3),
                 failure_reason="tarball_missing",
             )
@@ -242,7 +275,7 @@ def run_full_diag(
                 "diag exited cleanly but no result tarball found under "
                 f"{output_root or Path.home()} matching {_RESULT_DIR_GLOB}/"
                 f"{_RESULT_TARBALL_GLOB} — packaging step likely failed",
-                exit_code=completed.returncode,
+                exit_code=return_code,
                 partial_output_dir=_find_latest_result_dir(output_root),
             )
 
@@ -250,7 +283,7 @@ def run_full_diag(
             "voice.diagnostics.full_diag_completed",
             mode=mode,
             duration_s=round(duration_s, 3),
-            exit_code=completed.returncode,
+            exit_code=return_code,
             tarball_size_bytes=tarball.stat().st_size,
             # Spec §8.3 prescribes hypothesis_winner here. The runner
             # has zero knowledge of triage (which runs AFTER the diag
@@ -267,10 +300,144 @@ def run_full_diag(
         return DiagRunResult(
             tarball_path=tarball,
             duration_s=duration_s,
-            exit_code=completed.returncode,
+            exit_code=return_code,
         )
     finally:
         shutil.rmtree(extracted, ignore_errors=True)
+
+
+def run_full_diag(
+    *,
+    extra_args: tuple[str, ...] = (),
+    output_root: Path | None = None,
+    trigger: str = "cli",
+) -> DiagRunResult:
+    """Materialize the bundled bash diag, run it interactively, return the tarball path.
+
+    The function blocks until the diag exits (typically 8-12 minutes
+    for a default run with ``--yes``). The operator's stdin/stdout/stderr
+    are attached so the interactive capture prompts ("speak now") reach
+    the terminal and the operator's keyboard reaches the script.
+
+    Sync convenience wrapper around :func:`run_full_diag_async`; CLI
+    callers (``sovyx doctor voice --full-diag``) use this. Async
+    callers (the wizard orchestrator) call
+    :func:`run_full_diag_async` directly so cancellation propagates.
+
+    Args:
+        extra_args: Additional flags appended after ``--yes`` when
+            invoking the script. Used by the calibration engine
+            (L2.T2.3) to pass scope-narrowing flags such as
+            ``--only A,C,D,E,J``. Empty by default.
+        output_root: Override the directory under which the result
+            tarball is searched. Defaults to ``Path.home()``. Provided
+            for testability and for operators with non-default
+            ``$HOME`` setups.
+        trigger: Closed enum (``"cli"`` | ``"wizard"``) that propagates
+            into the ``voice.diagnostics.full_diag_started{trigger=...}``
+            telemetry field per spec §8.3. Defaults to ``"cli"`` so
+            direct CLI callers don't need to override; the wizard
+            orchestrator passes ``"wizard"``.
+
+    Returns:
+        A :class:`DiagRunResult` carrying the absolute path to the
+        result tarball, the wall-clock duration in seconds, and the
+        bash exit code (always ``0`` on a successful return).
+
+    Raises:
+        DiagPrerequisiteError: if the host is not Linux, ``bash`` is
+            missing, or ``bash`` is older than 4.0.
+        DiagRunError: if the diag exits with a non-zero code or exits
+            cleanly but produces no result tarball.
+    """
+    return asyncio.run(
+        run_full_diag_async(
+            extra_args=extra_args,
+            output_root=output_root,
+            trigger=trigger,
+        )
+    )
+
+
+# ====================================================================
+# Cancellation
+# ====================================================================
+
+
+async def _cancel_process_tree(
+    proc: asyncio.subprocess.Process,
+    *,
+    grace_period_s: float = _CANCEL_GRACE_PERIOD_S,
+) -> None:
+    """Best-effort: signal the subprocess (+ its group on POSIX) to exit.
+
+    POSIX path:
+        1. ``os.killpg(proc.pid, SIGTERM)`` signals the entire process
+           group spawned with ``start_new_session=True`` (bash + every
+           child it forked: arecord, pactl, etc.).
+        2. Wait ``grace_period_s`` for the bash trap-EXIT handler to
+           run (restores Sovyx daemon state).
+        3. If the process is still alive, ``os.killpg(proc.pid,
+           SIGKILL)`` and wait :data:`_CANCEL_SIGKILL_WAIT_S` for the
+           kernel to reap.
+
+    Windows path:
+        1. ``proc.terminate()`` (TerminateProcess) on the bash process.
+           Does NOT propagate to children — that's accepted v1
+           limitation; CTRL_BREAK_EVENT-style group support is deferred
+           to a future minor.
+        2. Same grace + escalation pattern via ``proc.kill()``.
+
+    Telemetry:
+        * ``voice.diagnostics.cancel_grace_expired`` fires when the
+          grace period elapses without exit (escalation triggered).
+        * ``voice.diagnostics.cancel_completed`` fires after the final
+          wait, with ``escalated_to_sigkill=True/False``.
+
+    All ``ProcessLookupError`` from already-exited processes are
+    suppressed; this method NEVER raises (callers re-raise the
+    original ``CancelledError`` after this returns).
+    """
+    started_mono = time.monotonic()
+    escalated_to_sigkill = False
+
+    # Initial signal: SIGTERM (POSIX) or terminate (Windows).
+    if sys.platform == "win32":
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.terminate()
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGTERM)
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace_period_s)
+    except TimeoutError:
+        # Grace period expired; escalate.
+        escalated_to_sigkill = True
+        logger.warning(
+            "voice.diagnostics.cancel_grace_expired",
+            grace_period_s=grace_period_s,
+        )
+        if sys.platform == "win32":
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+        else:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+
+        # Best-effort wait so the asyncio loop sees the child reaped
+        # before _cancel_process_tree returns. CPython issue #119710:
+        # without this, the asyncio.run() event-loop close path can
+        # itself hang on a zombie subprocess.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(proc.wait(), timeout=_CANCEL_SIGKILL_WAIT_S)
+
+    duration_s = round(time.monotonic() - started_mono, 3)
+    logger.info(
+        "voice.diagnostics.cancel_completed",
+        duration_s=duration_s,
+        escalated_to_sigkill=escalated_to_sigkill,
+    )
 
 
 # ====================================================================

@@ -41,6 +41,7 @@ from sovyx.voice.diagnostics._runner import (
     DiagRunError,
     DiagRunResult,
     run_full_diag,
+    run_full_diag_async,
 )
 from sovyx.voice.diagnostics.triage import (
     AlertsSummary,
@@ -63,5 +64,6 @@ __all__ = [
     "TriageResult",
     "render_markdown",
     "run_full_diag",
+    "run_full_diag_async",
     "triage_tarball",
 ]

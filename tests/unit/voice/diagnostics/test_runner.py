@@ -1,4 +1,4 @@
-"""Unit tests for sovyx.voice.diagnostics._runner.run_full_diag.
+"""Unit tests for sovyx.voice.diagnostics._runner.run_full_diag (sync + async).
 
 The bash diag toolkit is interactive (8-12 min, asks the operator to
 speak). These tests mock the subprocess + filesystem layers so they
@@ -9,15 +9,18 @@ Linux environment via ``sovyx doctor voice --full-diag``.
 Coverage:
 * prerequisite enforcement (Linux-only, bash 4+)
 * extraction of bash from ``importlib.resources`` to a temp dir
-* subprocess invocation contract (stdin/stdout/stderr passthrough,
-  ``--yes`` plus optional extra_args)
+* async subprocess invocation contract (cmd shape, ``--yes`` plus
+  optional ``extra_args``)
 * result tarball glob under ``output_root``
 * failure paths -- non-zero exit, missing tarball, missing bash
 * cleanup invariant -- temp script dir always removed
+* P2 cancellation: SIGTERM → grace → SIGKILL escalation; graceful
+  exit during grace; cancel telemetry events fire correctly
 """
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -32,20 +35,104 @@ from sovyx.voice.diagnostics import (
     DiagRunResult,
     _runner,
     run_full_diag,
+    run_full_diag_async,
 )
 
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 # Helpers
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 
 
 class _CompletedProcessStub:
-    """Minimal subprocess.CompletedProcess shim for mocking."""
+    """Minimal subprocess.CompletedProcess shim for the bash-version probe."""
 
     def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+class _FakeAsyncProcess:
+    """Async subprocess shim returned by mocked create_subprocess_exec.
+
+    Behaviour matrix used across tests:
+
+    * ``returncode`` not None at construction → ``wait()`` returns it
+      immediately (graceful happy path).
+    * ``ignore_sigterm=True`` → ``terminate()`` is a no-op; the test
+      asserts the runner escalates to ``kill()`` after the grace
+      period.
+    * ``hang_seconds`` → ``wait()`` sleeps that long before resolving;
+      enables tests that cancel mid-run.
+    """
+
+    def __init__(
+        self,
+        *,
+        pid: int = 12345,
+        returncode: int = 0,
+        ignore_sigterm: bool = False,
+        hang_seconds: float = 0.0,
+    ) -> None:
+        self.pid = pid
+        self._returncode = returncode
+        self.returncode: int | None = None  # populated on wait()
+        self._ignore_sigterm = ignore_sigterm
+        self._hang_seconds = hang_seconds
+        self._terminate_called = False
+        self._kill_called = False
+        self._terminated_event = asyncio.Event()
+
+    async def wait(self) -> int:
+        if self._hang_seconds > 0:
+            import contextlib
+
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._terminated_event.wait(), timeout=self._hang_seconds)
+        else:
+            # Yield once so awaiters that don't actually need to wait
+            # still see the event-loop tick.
+            await asyncio.sleep(0)
+        self.returncode = self._returncode
+        return self._returncode
+
+    def terminate(self) -> None:
+        self._terminate_called = True
+        if not self._ignore_sigterm:
+            self._terminated_event.set()
+
+    def kill(self) -> None:
+        self._kill_called = True
+        self._terminated_event.set()
+
+    @property
+    def terminate_called(self) -> bool:
+        return self._terminate_called
+
+    @property
+    def kill_called(self) -> bool:
+        return self._kill_called
+
+
+def _async_proc_factory(
+    *,
+    returncode: int = 0,
+    ignore_sigterm: bool = False,
+    hang_seconds: float = 0.0,
+    captured_cmd: list[list[str]] | None = None,
+) -> Any:
+    """Return a side_effect for asyncio.create_subprocess_exec."""
+
+    async def _factory(*args: Any, **_kwargs: Any) -> _FakeAsyncProcess:
+        if captured_cmd is not None:
+            captured_cmd.append(list(args))
+        return _FakeAsyncProcess(
+            returncode=returncode,
+            ignore_sigterm=ignore_sigterm,
+            hang_seconds=hang_seconds,
+        )
+
+    return _factory
 
 
 def _make_result_tarball(home: Path, *, mtime: float | None = None) -> Path:
@@ -70,9 +157,24 @@ def _stub_extract_to(target_with_script: Path) -> Any:
     return side_effect
 
 
-# ====================================================================
-# Prerequisite checks
-# ====================================================================
+def _build_extracted(tmp_path: Path) -> Path:
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    return extracted
+
+
+def _build_output_root(tmp_path: Path, *, with_tarball: bool = True) -> Path:
+    output_root = tmp_path / "home"
+    output_root.mkdir()
+    if with_tarball:
+        _make_result_tarball(output_root)
+    return output_root
+
+
+# ════════════════════════════════════════════════════════════════════
+# Prerequisite checks (sync entry point exercises these via asyncio.run)
+# ════════════════════════════════════════════════════════════════════
 
 
 class TestPrerequisiteChecks:
@@ -107,8 +209,6 @@ class TestPrerequisiteChecks:
             run_full_diag()
 
     def test_bash_version_unparseable_treated_as_below_4(self) -> None:
-        # _read_bash_major_version returns 0 on parse failure -> caller treats
-        # 0 as < 4 -> DiagPrerequisiteError. Verify the parse helper directly.
         with patch.object(
             _runner.subprocess,
             "run",
@@ -132,24 +232,17 @@ class TestPrerequisiteChecks:
             assert _runner._read_bash_major_version("/bin/bash") == 5
 
 
-# ====================================================================
-# Successful run path
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
+# Successful run path (sync wrapper around async-native runner)
+# ════════════════════════════════════════════════════════════════════
 
 
 class TestSuccessfulRun:
     """Full happy path: prereqs OK, extract OK, run exit 0, tarball found."""
 
     def test_returns_diag_run_result_with_tarball(self, tmp_path: Path) -> None:
-        # Materialize a fake "extracted" dir with the script.
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-
-        # Materialize a result tarball under output_root.
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        tarball = _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
         with (
             patch.object(_runner, "_check_prerequisites"),
@@ -157,67 +250,56 @@ class TestSuccessfulRun:
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
             patch.object(
-                _runner.subprocess,
-                "run",
-                return_value=_CompletedProcessStub(returncode=0),
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0),
             ),
         ):
             result = run_full_diag(output_root=output_root)
 
         assert isinstance(result, DiagRunResult)
-        assert result.tarball_path == tarball
         assert result.exit_code == 0
         assert result.duration_s >= 0.0
 
     def test_subprocess_invoked_with_yes_flag(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
-        captured_cmd: list[list[str]] = []
-
-        def capture_run(cmd: list[str], **_kwargs: Any) -> _CompletedProcessStub:
-            captured_cmd.append(cmd)
-            return _CompletedProcessStub(returncode=0)
-
+        captured: list[list[str]] = []
         with (
             patch.object(_runner, "_check_prerequisites"),
             patch.object(
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
-            patch.object(_runner.subprocess, "run", side_effect=capture_run),
+            patch.object(
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0, captured_cmd=captured),
+            ),
         ):
             run_full_diag(output_root=output_root)
 
-        assert len(captured_cmd) == 1
-        cmd = captured_cmd[0]
+        assert len(captured) == 1
+        cmd = captured[0]
         assert cmd[0] == "bash"
         assert cmd[1].endswith("sovyx-voice-diag.sh")
         assert cmd[2] == "--yes"
 
     def test_extra_args_appended_after_yes(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
         captured: list[list[str]] = []
-
-        def capture_run(cmd: list[str], **_kwargs: Any) -> _CompletedProcessStub:
-            captured.append(cmd)
-            return _CompletedProcessStub(returncode=0)
-
         with (
             patch.object(_runner, "_check_prerequisites"),
             patch.object(
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
-            patch.object(_runner.subprocess, "run", side_effect=capture_run),
+            patch.object(
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0, captured_cmd=captured),
+            ),
         ):
             run_full_diag(
                 extra_args=("--skip-captures", "--non-interactive"),
@@ -228,12 +310,8 @@ class TestSuccessfulRun:
         assert cmd[2:] == ["--yes", "--skip-captures", "--non-interactive"]
 
     def test_temp_dir_cleaned_up_after_success(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
         with (
             patch.object(_runner, "_check_prerequisites"),
@@ -241,9 +319,9 @@ class TestSuccessfulRun:
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
             patch.object(
-                _runner.subprocess,
-                "run",
-                return_value=_CompletedProcessStub(returncode=0),
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0),
             ),
         ):
             run_full_diag(output_root=output_root)
@@ -251,12 +329,10 @@ class TestSuccessfulRun:
         assert not extracted.exists(), "temp script dir should be removed in finally block"
 
     def test_picks_newest_tarball_among_multiple(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        extracted = _build_extracted(tmp_path)
         output_root = tmp_path / "home"
         output_root.mkdir()
-        # Two diag dirs; second has newer mtime.
+
         old_dir = output_root / "sovyx-diag-old"
         old_dir.mkdir()
         old_tarball = old_dir / "sovyx-voice-diag_old.tar.gz"
@@ -277,9 +353,9 @@ class TestSuccessfulRun:
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
             patch.object(
-                _runner.subprocess,
-                "run",
-                return_value=_CompletedProcessStub(returncode=0),
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0),
             ),
         ):
             result = run_full_diag(output_root=output_root)
@@ -287,20 +363,17 @@ class TestSuccessfulRun:
         assert result.tarball_path == new_tarball
 
 
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 # Failure paths
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 
 
 class TestFailureModes:
     """DiagRunError on non-zero exits and missing artefacts."""
 
     def test_non_zero_exit_raises_diagrunerror(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 3\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path, with_tarball=False)
 
         with (
             patch.object(_runner, "_check_prerequisites"),
@@ -308,9 +381,9 @@ class TestFailureModes:
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
             patch.object(
-                _runner.subprocess,
-                "run",
-                return_value=_CompletedProcessStub(returncode=3),
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=3),
             ),
             pytest.raises(DiagRunError) as exc_info,
         ):
@@ -320,11 +393,8 @@ class TestFailureModes:
         assert "selftest" in str(exc_info.value).lower()
 
     def test_temp_dir_cleaned_up_on_failure(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 1\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path, with_tarball=False)
 
         with (
             patch.object(_runner, "_check_prerequisites"),
@@ -332,9 +402,9 @@ class TestFailureModes:
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
             patch.object(
-                _runner.subprocess,
-                "run",
-                return_value=_CompletedProcessStub(returncode=1),
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=1),
             ),
             pytest.raises(DiagRunError),
         ):
@@ -360,11 +430,8 @@ class TestFailureModes:
         assert "package data layout regression" in str(exc_info.value)
 
     def test_clean_exit_with_no_tarball_raises_diagrunerror(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()  # empty -- no result tarball
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path, with_tarball=False)
 
         with (
             patch.object(_runner, "_check_prerequisites"),
@@ -372,18 +439,16 @@ class TestFailureModes:
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
             patch.object(
-                _runner.subprocess,
-                "run",
-                return_value=_CompletedProcessStub(returncode=0),
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0),
             ),
             pytest.raises(DiagRunError, match="no result tarball found"),
         ):
             run_full_diag(output_root=output_root)
 
     def test_failure_preserves_partial_output_dir(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 1\n")
+        extracted = _build_extracted(tmp_path)
         output_root = tmp_path / "home"
         output_root.mkdir()
         partial = output_root / "sovyx-diag-partial"
@@ -396,9 +461,9 @@ class TestFailureModes:
                 _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
             ),
             patch.object(
-                _runner.subprocess,
-                "run",
-                return_value=_CompletedProcessStub(returncode=1),
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=1),
             ),
             pytest.raises(DiagRunError) as exc_info,
         ):
@@ -407,9 +472,158 @@ class TestFailureModes:
         assert exc_info.value.partial_output_dir == partial
 
 
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
+# Cancellation (P2 v0.30.30) — _cancel_process_tree + run_full_diag_async
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestCancellation:
+    """asyncio.CancelledError mid-run triggers SIGTERM → grace → SIGKILL."""
+
+    @pytest.mark.asyncio()
+    async def test_cancel_during_wait_terminates_process(self, tmp_path: Path) -> None:
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
+
+        # Process that hangs for 30s; we'll cancel it after 50ms.
+        spawned: list[_FakeAsyncProcess] = []
+
+        async def _factory(*_args: Any, **_kwargs: Any) -> _FakeAsyncProcess:
+            proc = _FakeAsyncProcess(returncode=0, hang_seconds=30.0)
+            spawned.append(proc)
+            return proc
+
+        with (
+            patch.object(_runner, "_check_prerequisites"),
+            patch.object(
+                _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+            ),
+            patch.object(_runner.asyncio, "create_subprocess_exec", side_effect=_factory),
+            patch.object(_runner.sys, "platform", "win32"),  # Use Windows path: terminate()
+        ):
+            task = asyncio.create_task(run_full_diag_async(output_root=output_root))
+            # Yield long enough for the spawn to land + wait() to start.
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert len(spawned) == 1
+        assert spawned[0].terminate_called is True
+
+    @pytest.mark.asyncio()
+    async def test_sigkill_escalation_when_sigterm_ignored(self, tmp_path: Path) -> None:
+        # Process that ignores SIGTERM; runner must escalate to SIGKILL
+        # after grace expires. Use a tiny grace_period for fast testing.
+        spawned: list[_FakeAsyncProcess] = []
+
+        async def _factory(*_args: Any, **_kwargs: Any) -> _FakeAsyncProcess:
+            proc = _FakeAsyncProcess(returncode=0, hang_seconds=30.0, ignore_sigterm=True)
+            spawned.append(proc)
+            return proc
+
+        # Patch the grace period to 0.05s for fast test execution.
+        with (
+            patch.object(_runner, "_CANCEL_GRACE_PERIOD_S", 0.05),
+            patch.object(_runner, "_CANCEL_SIGKILL_WAIT_S", 0.5),
+            patch.object(_runner.asyncio, "create_subprocess_exec", side_effect=_factory),
+            patch.object(_runner.sys, "platform", "win32"),  # Windows path: kill()
+        ):
+            proc = await _runner.asyncio.create_subprocess_exec("dummy")
+            await _runner._cancel_process_tree(proc, grace_period_s=0.05)
+
+        assert spawned[0].terminate_called is True
+        assert spawned[0].kill_called is True
+
+    @pytest.mark.asyncio()
+    async def test_no_escalation_when_sigterm_succeeds(self, tmp_path: Path) -> None:
+        spawned: list[_FakeAsyncProcess] = []
+
+        async def _factory(*_args: Any, **_kwargs: Any) -> _FakeAsyncProcess:
+            proc = _FakeAsyncProcess(returncode=0, hang_seconds=10.0, ignore_sigterm=False)
+            spawned.append(proc)
+            return proc
+
+        with (
+            patch.object(_runner.asyncio, "create_subprocess_exec", side_effect=_factory),
+            patch.object(_runner.sys, "platform", "win32"),
+        ):
+            proc = await _runner.asyncio.create_subprocess_exec("dummy")
+            await _runner._cancel_process_tree(proc, grace_period_s=1.0)
+
+        assert spawned[0].terminate_called is True
+        assert spawned[0].kill_called is False
+
+    @pytest.mark.asyncio()
+    async def test_cancel_completed_telemetry_fires(self, tmp_path: Path) -> None:
+        events: list[tuple[str, dict[str, Any]]] = []
+
+        class _Cap:
+            def info(self, event: str, **kwargs: Any) -> None:
+                events.append((event, kwargs))
+
+            def warning(self, event: str, **kwargs: Any) -> None:
+                events.append((event, kwargs))
+
+        async def _factory(*_args: Any, **_kwargs: Any) -> _FakeAsyncProcess:
+            return _FakeAsyncProcess(returncode=0, hang_seconds=2.0, ignore_sigterm=False)
+
+        original = _runner.logger
+        try:
+            _runner.logger = _Cap()  # type: ignore[assignment]
+            with (
+                patch.object(_runner.asyncio, "create_subprocess_exec", side_effect=_factory),
+                patch.object(_runner.sys, "platform", "win32"),
+            ):
+                proc = await _runner.asyncio.create_subprocess_exec("dummy")
+                await _runner._cancel_process_tree(proc, grace_period_s=1.0)
+        finally:
+            _runner.logger = original  # type: ignore[assignment]
+
+        completed = next(e for e in events if e[0] == "voice.diagnostics.cancel_completed")
+        assert completed[1]["escalated_to_sigkill"] is False
+        assert "duration_s" in completed[1]
+
+    @pytest.mark.asyncio()
+    async def test_cancel_grace_expired_telemetry_fires_on_escalation(
+        self, tmp_path: Path
+    ) -> None:
+        events: list[tuple[str, dict[str, Any]]] = []
+
+        class _Cap:
+            def info(self, event: str, **kwargs: Any) -> None:
+                events.append((event, kwargs))
+
+            def warning(self, event: str, **kwargs: Any) -> None:
+                events.append((event, kwargs))
+
+        async def _factory(*_args: Any, **_kwargs: Any) -> _FakeAsyncProcess:
+            return _FakeAsyncProcess(returncode=0, hang_seconds=30.0, ignore_sigterm=True)
+
+        original = _runner.logger
+        try:
+            _runner.logger = _Cap()  # type: ignore[assignment]
+            with (
+                patch.object(_runner.asyncio, "create_subprocess_exec", side_effect=_factory),
+                patch.object(_runner.sys, "platform", "win32"),
+            ):
+                proc = await _runner.asyncio.create_subprocess_exec("dummy")
+                await _runner._cancel_process_tree(proc, grace_period_s=0.05)
+        finally:
+            _runner.logger = original  # type: ignore[assignment]
+
+        grace_expired = next(
+            (e for e in events if e[0] == "voice.diagnostics.cancel_grace_expired"),
+            None,
+        )
+        assert grace_expired is not None
+        completed = next(e for e in events if e[0] == "voice.diagnostics.cancel_completed")
+        assert completed[1]["escalated_to_sigkill"] is True
+
+
+# ════════════════════════════════════════════════════════════════════
 # Helpers (find_latest_*)
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 
 
 class TestResultLocators:
@@ -422,7 +636,6 @@ class TestResultLocators:
         assert _runner._find_latest_result_tarball(tmp_path) is None
 
     def test_find_latest_dir_skips_non_directories(self, tmp_path: Path) -> None:
-        # A file matching the glob shouldn't masquerade as a result dir.
         (tmp_path / "sovyx-diag-bogus.txt").write_text("not a dir")
         assert _runner._find_latest_result_dir(tmp_path) is None
 
@@ -431,9 +644,9 @@ class TestResultLocators:
         assert _runner._find_latest_result_tarball(tmp_path) is None
 
 
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 # Dataclass invariants
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 
 
 class TestDataclassInvariants:
@@ -449,14 +662,12 @@ class TestDataclassInvariants:
             result.exit_code = 1  # type: ignore[misc]
 
 
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 # DiagRunError + DiagPrerequisiteError
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 
 
 class TestErrorClasses:
-    """Custom exception types carry the contract attributes."""
-
     def test_diag_run_error_carries_exit_code_and_partial_dir(self) -> None:
         partial = Path("/tmp/sovyx-diag-x")
         err = DiagRunError("boom", exit_code=42, partial_output_dir=partial)
@@ -475,9 +686,9 @@ class TestErrorClasses:
         assert issubclass(DiagRunError, RuntimeError)
 
 
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 # v0.30.24: voice.diagnostics.full_diag_* telemetry events (§8.3)
-# ====================================================================
+# ════════════════════════════════════════════════════════════════════
 
 
 class TestDiagnosticsTelemetry:
@@ -515,12 +726,8 @@ class TestDiagnosticsTelemetry:
         )
 
     def test_started_and_completed_fire_on_success(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
         events, original = self._capture()
         try:
@@ -530,7 +737,9 @@ class TestDiagnosticsTelemetry:
                     _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
                 ),
                 patch.object(
-                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                    _runner.asyncio,
+                    "create_subprocess_exec",
+                    side_effect=_async_proc_factory(returncode=0),
                 ),
             ):
                 run_full_diag(output_root=output_root)
@@ -545,11 +754,8 @@ class TestDiagnosticsTelemetry:
         assert completed[1]["mode"] == "full"
 
     def test_failed_fires_on_non_zero_exit(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 3\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path, with_tarball=False)
 
         events, original = self._capture()
         try:
@@ -559,7 +765,9 @@ class TestDiagnosticsTelemetry:
                     _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
                 ),
                 patch.object(
-                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=3)
+                    _runner.asyncio,
+                    "create_subprocess_exec",
+                    side_effect=_async_proc_factory(returncode=3),
                 ),
                 pytest.raises(DiagRunError),
             ):
@@ -573,13 +781,8 @@ class TestDiagnosticsTelemetry:
         assert failed[1]["failure_reason"] == "selftest_failed"
 
     def test_started_event_carries_trigger_field(self, tmp_path: Path) -> None:
-        """v0.30.26 spec §8.3: trigger ∈ {cli, wizard} on full_diag_started."""
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
         events, original = self._capture()
         try:
@@ -589,10 +792,11 @@ class TestDiagnosticsTelemetry:
                     _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
                 ),
                 patch.object(
-                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                    _runner.asyncio,
+                    "create_subprocess_exec",
+                    side_effect=_async_proc_factory(returncode=0),
                 ),
             ):
-                # Default trigger is "cli"
                 run_full_diag(output_root=output_root)
         finally:
             self._restore(original)
@@ -601,12 +805,8 @@ class TestDiagnosticsTelemetry:
         assert started[1]["trigger"] == "cli"
 
     def test_started_event_honours_wizard_trigger(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
         events, original = self._capture()
         try:
@@ -616,7 +816,9 @@ class TestDiagnosticsTelemetry:
                     _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
                 ),
                 patch.object(
-                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                    _runner.asyncio,
+                    "create_subprocess_exec",
+                    side_effect=_async_proc_factory(returncode=0),
                 ),
             ):
                 run_full_diag(output_root=output_root, trigger="wizard")
@@ -627,12 +829,8 @@ class TestDiagnosticsTelemetry:
         assert started[1]["trigger"] == "wizard"
 
     def test_started_event_coerces_unknown_trigger_to_cli(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
         events, original = self._capture()
         try:
@@ -642,11 +840,11 @@ class TestDiagnosticsTelemetry:
                     _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
                 ),
                 patch.object(
-                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                    _runner.asyncio,
+                    "create_subprocess_exec",
+                    side_effect=_async_proc_factory(returncode=0),
                 ),
             ):
-                # Defensive: unknown trigger value is coerced to "cli"
-                # to keep OTel cardinality bounded.
                 run_full_diag(output_root=output_root, trigger="malicious")
         finally:
             self._restore(original)
@@ -655,13 +853,8 @@ class TestDiagnosticsTelemetry:
         assert started[1]["trigger"] == "cli"
 
     def test_completed_event_includes_hypothesis_winner_field(self, tmp_path: Path) -> None:
-        """v0.30.26 spec §8.3: hypothesis_winner present (empty at runner layer)."""
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        _make_result_tarball(output_root)
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
 
         events, original = self._capture()
         try:
@@ -671,7 +864,9 @@ class TestDiagnosticsTelemetry:
                     _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
                 ),
                 patch.object(
-                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                    _runner.asyncio,
+                    "create_subprocess_exec",
+                    side_effect=_async_proc_factory(returncode=0),
                 ),
             ):
                 run_full_diag(output_root=output_root)
@@ -679,18 +874,12 @@ class TestDiagnosticsTelemetry:
             self._restore(original)
 
         completed = next(e for e in events if e[0] == "voice.diagnostics.full_diag_completed")
-        # Field present with empty value -- the runner has no triage
-        # knowledge but the field exists for spec contract preservation.
         assert "hypothesis_winner" in completed[1]
         assert completed[1]["hypothesis_winner"] == ""
 
     def test_failed_fires_when_tarball_missing(self, tmp_path: Path) -> None:
-        extracted = tmp_path / "extracted"
-        extracted.mkdir()
-        (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        output_root = tmp_path / "home"
-        output_root.mkdir()
-        # No tarball materialized in output_root.
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path, with_tarball=False)
 
         events, original = self._capture()
         try:
@@ -700,7 +889,9 @@ class TestDiagnosticsTelemetry:
                     _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
                 ),
                 patch.object(
-                    _runner.subprocess, "run", return_value=_CompletedProcessStub(returncode=0)
+                    _runner.asyncio,
+                    "create_subprocess_exec",
+                    side_effect=_async_proc_factory(returncode=0),
                 ),
                 pytest.raises(DiagRunError),
             ):
