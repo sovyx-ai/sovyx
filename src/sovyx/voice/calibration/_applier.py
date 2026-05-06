@@ -923,7 +923,31 @@ def _restore_mind_yaml_voice_field(
     field_name: str,
     pre_value: Any,  # noqa: ANN401 -- mirrors _mutate_mind_yaml_voice_field's domain
 ) -> None:
-    """Restore one ``voice.<field>`` to its pre-apply value (best-effort)."""
+    """Restore one ``voice.<field>`` to its pre-apply value.
+
+    rc.3 (Agent 1 #6): pre-rc.3 this function silently ``return``-ed
+    on OSError / yaml.YAMLError, swallowing every revert failure
+    without telemetry. That meant a partial-rollback that left the
+    operator's mind.yaml in an inconsistent state was indistinguishable
+    from a successful revert in the logs — operators triaging "why is
+    my voice config still broken after auto-rollback?" had no forensic
+    evidence to work with.
+
+    rc.3 raises :class:`_MindYamlMutateError` on failure. The
+    registered ``_revert_mind_config_voice`` async handler propagates
+    it; the LIFO rollback walker at
+    :meth:`CalibrationApplier._lifo_rollback` catches via its generic
+    ``except Exception`` clause and emits
+    ``voice.calibration.applier.rollback_step_failed`` with the
+    exception_type field, then continues to the next token. So a
+    write failure during revert no longer kills the rest of the
+    rollback chain — best-effort semantics preserved — but the
+    failure now surfaces in telemetry.
+
+    The ``yaml_path.is_file()`` early-return is preserved: a missing
+    mind.yaml on revert means there's nothing to restore (the apply
+    must have failed BEFORE writing), which is a no-op success.
+    """
     import yaml  # noqa: PLC0415 -- local pyyaml import
 
     if not yaml_path.is_file():
@@ -931,8 +955,9 @@ def _restore_mind_yaml_voice_field(
     try:
         text = yaml_path.read_text(encoding="utf-8")
         data: dict[str, Any] = yaml.safe_load(text) or {}
-    except (OSError, yaml.YAMLError):
-        return
+    except (OSError, yaml.YAMLError) as exc:
+        msg = f"failed to read mind.yaml during revert at {yaml_path}: {exc}"
+        raise _MindYamlMutateError(msg) from exc
     voice_section = data.setdefault("voice", {})
     if pre_value is None:
         # Field didn't exist before; remove it on revert.
@@ -944,8 +969,9 @@ def _restore_mind_yaml_voice_field(
             yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
         )
-    except OSError:
-        return
+    except OSError as exc:
+        msg = f"failed to write mind.yaml during revert at {yaml_path}: {exc}"
+        raise _MindYamlMutateError(msg) from exc
 
 
 register_target_class_pair(

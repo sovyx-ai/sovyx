@@ -790,7 +790,13 @@ class WizardOrchestrator:
         # flag in extras so the dashboard's terminal banner renders
         # "auto-rollback fired; previous state restored" without
         # parsing free-form summary strings.
+        # rc.3 (Agent 3 #10): also strip current_prompt from the local
+        # extras dict so the rolled_back rebuild path doesn't reintroduce
+        # the transient slow_path_diag prompt that ``_transition`` just
+        # cleared. Without this the rolled_back branch would silently
+        # undo the new terminal-status strip in ``_transition``.
         extras = dict(state.extras)
+        extras.pop("current_prompt", None)
         if rolled_back:
             extras["rolled_back"] = True
         failed = self._transition(
@@ -854,7 +860,22 @@ class WizardOrchestrator:
         error_summary: str | None = None,
         fallback_reason: str | None = None,
     ) -> WizardJobState:
-        """Build a new frozen WizardJobState reflecting one transition."""
+        """Build a new frozen WizardJobState reflecting one transition.
+
+        rc.3 (Agent 3 #10): when the destination status is terminal we
+        strip ``extras["current_prompt"]`` so the dashboard's
+        ``<CapturePrompt>`` component unmounts on FAILED/CANCELLED/
+        FALLBACK exits. The slow-path tail loop populates the key only
+        during SLOW_PATH_DIAG; without this strip a mid-flight failure
+        (e.g. ``triage_tarball`` raising) leaves the last "say X" card
+        rendered on top of a TerminalView. Strip happens at the single
+        shared mutation point so every emitter (``_emit_failed`` /
+        ``_emit_cancelled`` / ``_emit_fallback`` / the ``run()``
+        top-level handlers) inherits the contract.
+        """
+        new_extras = dict(prev.extras)
+        if status.is_terminal:
+            new_extras.pop("current_prompt", None)
         return WizardJobState(
             job_id=prev.job_id,
             mind_id=prev.mind_id,
@@ -871,7 +892,7 @@ class WizardOrchestrator:
             fallback_reason=(
                 fallback_reason if fallback_reason is not None else prev.fallback_reason
             ),
-            extras=dict(prev.extras),
+            extras=new_extras,
         )
 
     @staticmethod

@@ -1003,6 +1003,15 @@ _cleanup() {
         fi
     fi
 
+    # rc.3 (Agent 2 #8): clean up the per-pid prompts-err capture file
+    # left over from prompt_emit_structured. The inline path (line ~817)
+    # rms the file immediately after each call but if the bash process
+    # was SIGTERM'd / SIGINT'd between the echo and the rm, the file
+    # leaks. The trap-EXIT path here mops it up. SIGKILL inherently
+    # leaks one such file per process death (no userspace handler can
+    # run); the file is ≤4 KB and the leak rate is bounded by max PID.
+    rm -f "/tmp/.sovyx_prompts_err.$$" 2>/dev/null || true
+
     log_info "cleanup done (exit code: $exit_code)"
     exit "$exit_code"
 }
