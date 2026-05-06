@@ -50,6 +50,14 @@ from sovyx.observability.health import (
     HealthRegistry,
     create_offline_registry,
 )
+from sovyx.voice.calibration import (
+    ApplyError,
+    CalibrationApplier,
+    CalibrationEngine,
+    CalibrationProfile,
+    capture_fingerprint,
+    capture_measurements,
+)
 from sovyx.voice.diagnostics import (
     DiagPrerequisiteError,
     DiagRunError,
@@ -287,6 +295,30 @@ def doctor_voice(
         "mic at probe time). REQUIRED when stdin is not a TTY (CI, "
         "systemd, cron). Reduces forensic coverage; prefer interactive.",
     ),
+    calibrate: bool = typer.Option(
+        False,
+        "--calibrate",
+        help="Run the calibration engine (Layer 2 of the voice "
+        "self-calibrating mission). Captures hardware fingerprint + "
+        "mixer state + (optionally) full diag artifacts, evaluates "
+        "all rules, and persists a signed CalibrationProfile to "
+        "<data_dir>/<mind_id>/calibration.json. Linux-only. Mutually "
+        "exclusive with --fix and --full-diag.",
+    ),
+    mind_id: str = typer.Option(
+        "default",
+        "--mind-id",
+        help="With --calibrate: the mind whose calibration to compute "
+        "(default: 'default'). The persisted profile lands at "
+        "<data_dir>/<mind_id>/calibration.json.",
+    ),
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help="With --calibrate: render the rule trace (which rules "
+        "fired + matched conditions + produced decisions). Use to "
+        "audit calibration decisions before they apply.",
+    ),
 ) -> None:
     """Voice Capture Health Lifecycle diagnostics (ADR §4.8 + v1.3 §4.4).
 
@@ -316,6 +348,19 @@ def doctor_voice(
             "Run --full-diag first to observe, then --fix to remediate "
             "based on the verdict."
         )
+    if calibrate and fix:
+        raise typer.BadParameter(
+            "--calibrate and --fix are mutually exclusive. "
+            "--calibrate observes + decides; --fix mutates. "
+            "Run --calibrate first to produce a profile, then --fix "
+            "to apply the operator-level remediations it advises."
+        )
+    if calibrate and full_diag:
+        raise typer.BadParameter(
+            "--calibrate and --full-diag are mutually exclusive. "
+            "--calibrate runs --full-diag internally + adds the "
+            "fingerprint + measurer + engine + applier pipeline."
+        )
     exit_code = _run_voice_doctor(
         output_json=output_json,
         device=device,
@@ -325,6 +370,9 @@ def doctor_voice(
         card_index=card_index,
         full_diag=full_diag,
         non_interactive=non_interactive,
+        calibrate=calibrate,
+        mind_id=mind_id,
+        explain=explain,
     )
     raise typer.Exit(exit_code)
 
@@ -339,8 +387,18 @@ def _run_voice_doctor(
     card_index: int | None = None,
     full_diag: bool = False,
     non_interactive: bool = False,
+    calibrate: bool = False,
+    mind_id: str = "default",
+    explain: bool = False,
 ) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
+    if calibrate:
+        return _run_voice_calibrate(
+            mind_id=mind_id,
+            non_interactive=non_interactive,
+            dry_run=dry_run,
+            explain=explain,
+        )
     if full_diag:
         return _run_voice_full_diag(non_interactive=non_interactive)
 
@@ -502,6 +560,188 @@ def _render_full_diag_verdict(result: TriageResult) -> None:
         f"[bold]python -m sovyx.voice.diagnostics.triage {result.tarball_root}[/bold] "
         f"--extract-dir[/dim]"
     )
+
+
+def _run_voice_calibrate(
+    *,
+    mind_id: str,
+    non_interactive: bool,
+    dry_run: bool,
+    explain: bool,
+) -> int:
+    """Execute the calibration engine end-to-end + persist the profile.
+
+    Pipeline:
+        1. Capture HardwareFingerprint (real local probes).
+        2. Run the bundled forensic diag (8-12 min, interactive).
+        3. Triage the resulting tarball in-process.
+        4. Capture MeasurementSnapshot from mixer state + diag artifacts
+           + triage cross-correlation.
+        5. Run the CalibrationEngine (R10 + future rules).
+        6. Apply (CalibrationApplier) unless --dry-run.
+        7. Render verdict + advised_actions + (with --explain) rule trace.
+
+    Returns the doctor-voice exit code:
+        * EXIT_DOCTOR_OK on a clean run.
+        * EXIT_DOCTOR_UNSUPPORTED on non-Linux / missing bash.
+        * EXIT_DOCTOR_USER_ABORTED on a non-TTY shell without
+          ``--non-interactive``.
+        * EXIT_DOCTOR_GENERIC_FAILURE on any pipeline step failure.
+    """
+    if not sys.stdin.isatty() and not non_interactive:
+        console.print(
+            "\n[red]--calibrate runs --full-diag internally and requires an "
+            "interactive TTY for the speech-prompt windows.[/red]\n"
+            "Pass [bold]--non-interactive[/bold] to bypass (reduces forensic "
+            "coverage), or run from a terminal where stdin is a TTY."
+        )
+        return EXIT_DOCTOR_USER_ABORTED
+
+    console.print(
+        "\n[bold cyan]Voice calibration[/bold cyan] "
+        "[dim](capturing fingerprint + running diag + triaging + applying)[/dim]\n"
+    )
+
+    # Step 1: fingerprint.
+    console.print("[dim](1/6) Capturing hardware fingerprint...[/dim]")
+    fingerprint = capture_fingerprint()
+    console.print(
+        f"[dim]    audio_stack={fingerprint.audio_stack!r} "
+        f"system={fingerprint.system_vendor!r} {fingerprint.system_product!r}[/dim]"
+    )
+
+    # Step 2: full diag.
+    console.print("\n[dim](2/6) Running full diag (8-12 min, interactive)...[/dim]")
+    extra_args: tuple[str, ...] = ()
+    if non_interactive:
+        extra_args = ("--non-interactive",)
+    try:
+        diag_result = run_full_diag(extra_args=extra_args)
+    except DiagPrerequisiteError as exc:
+        console.print(f"\n[red]Voice diag prerequisites not met:[/red] {exc}")
+        return EXIT_DOCTOR_UNSUPPORTED
+    except DiagRunError as exc:
+        console.print(f"\n[red]Voice diag failed:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    # Step 3: triage.
+    console.print(
+        f"\n[dim](3/6) Triaging tarball in-process[/dim] "
+        f"[dim]({diag_result.tarball_path.name})[/dim]"
+    )
+    try:
+        triage = triage_tarball(diag_result.tarball_path)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"\n[red]Triage failed:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    # Step 4: measurements.
+    console.print("\n[dim](4/6) Capturing measurements (mixer state + diag artifacts)...[/dim]")
+    measurements = capture_measurements(
+        diag_tarball_root=triage.tarball_root,
+        triage_result=triage,
+        duration_s=diag_result.duration_s,
+    )
+    console.print(
+        f"[dim]    mixer_regime={measurements.mixer_attenuation_regime!r} "
+        f"capture_pct={measurements.mixer_capture_pct} "
+        f"boost_pct={measurements.mixer_boost_pct}[/dim]"
+    )
+
+    # Step 5: engine.
+    console.print("\n[dim](5/6) Evaluating calibration engine...[/dim]")
+    engine = CalibrationEngine()
+    profile = engine.evaluate(
+        mind_id=mind_id,
+        fingerprint=fingerprint,
+        measurements=measurements,
+        triage_result=triage,
+    )
+    console.print(
+        f"[dim]    {len(profile.decisions)} decision(s) emitted by "
+        f"{len(profile.provenance)} rule(s)[/dim]"
+    )
+
+    # Step 6: apply (or dry-run).
+    step_label = "Dry-run (no persistence)" if dry_run else "Applying + persisting"
+    console.print(f"\n[dim](6/6) {step_label}...[/dim]")
+    data_dir = Path.home() / ".sovyx"
+    applier = CalibrationApplier(data_dir=data_dir)
+    try:
+        apply_result = applier.apply(profile, dry_run=dry_run)
+    except ApplyError as exc:
+        console.print(f"\n[red]Calibration apply failed:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    _render_calibration_verdict(profile, apply_result, explain=explain)
+    return EXIT_DOCTOR_OK
+
+
+def _render_calibration_verdict(
+    profile: CalibrationProfile,
+    apply_result: object,  # ApplyResult; structural-typed to avoid TYPE_CHECKING dance
+    *,
+    explain: bool,
+) -> None:
+    """Render the calibration outcome to the operator: rule trace + advised actions."""
+    # rich-rendered table of decisions.
+    decisions_table = Table(
+        title="Calibration decisions",
+        title_style="bold",
+        show_lines=False,
+    )
+    decisions_table.add_column("Rule", style="cyan", no_wrap=True)
+    decisions_table.add_column("Op", no_wrap=True)
+    decisions_table.add_column("Target")
+    decisions_table.add_column("Confidence", justify="right")
+
+    for d in profile.decisions:
+        if d.confidence.value == "high":
+            conf_marker = "[green]high[/green]"
+        elif d.confidence.value == "medium":
+            conf_marker = "[yellow]medium[/yellow]"
+        elif d.confidence.value == "experimental":
+            conf_marker = "[dim]experimental[/dim]"
+        else:
+            conf_marker = "low"
+        decisions_table.add_row(d.rule_id, d.operation, d.target, conf_marker)
+
+    if profile.decisions:
+        console.print(decisions_table)
+    else:
+        console.print("\n[green]No calibration decisions needed.[/green]")
+
+    # Advised actions: the operator-actionable next steps.
+    advised = getattr(apply_result, "advised_actions", ())
+    if advised:
+        console.print("\n[bold green]Recommended actions:[/bold green]")
+        for action in advised:
+            print(f"  {action}")  # raw print so paths/commands stay contiguous
+
+    # Explain mode: render the rule trace.
+    if explain and profile.provenance:
+        console.print("\n[bold]Rule trace ([dim]--explain[/dim]):[/bold]")
+        for trace in profile.provenance:
+            console.print(
+                f"  [cyan]{trace.rule_id}[/cyan] "
+                f"@v{trace.rule_version} "
+                f"([{trace.confidence.value}]) "
+                f"fired_at={trace.fired_at_utc}"
+            )
+            for cond in trace.matched_conditions:
+                console.print(f"    matched: {cond}")
+            for dec in trace.produced_decisions:
+                console.print(f"    produced: {dec}")
+
+    # Profile path footer.
+    profile_path_attr = getattr(apply_result, "profile_path", None)
+    if profile_path_attr is not None:
+        dry_run_attr = getattr(apply_result, "dry_run", False)
+        if dry_run_attr:
+            console.print("\n[dim]Profile would be persisted to:[/dim]")
+        else:
+            console.print("\n[dim]Profile persisted to:[/dim]")
+        print(f"  {profile_path_attr}")  # raw print to preserve path
 
 
 def _run_voice_preflight() -> PreflightReport:
