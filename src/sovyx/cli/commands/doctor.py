@@ -342,6 +342,18 @@ def doctor_voice(
         "calibration whose verdict you disagree with; re-run --calibrate "
         "afterward to regenerate.",
     ),
+    surgical: bool = typer.Option(
+        False,
+        "--surgical",
+        help="With --calibrate or --full-diag: cut the bash diag "
+        "runtime from ~10min to ~30s by passing `--only A,C,D,E,J` "
+        "to the diag toolkit (hardware probe + ALSA + PipeWire + "
+        "PortAudio + latency budget only). Trade-off: skips the "
+        "speech-capture windows + Temporal Guardian + operator "
+        "prompts, so the triage's W*/K* hypothesis branches won't "
+        "fire. Use for fast revalidation when you trust the prior "
+        "diagnostic; full diag remains the default.",
+    ),
 ) -> None:
     """Voice Capture Health Lifecycle diagnostics (ADR §4.8 + v1.3 §4.4).
 
@@ -411,6 +423,7 @@ def doctor_voice(
         explain=explain,
         show=show,
         rollback=rollback,
+        surgical=surgical,
     )
     raise typer.Exit(exit_code)
 
@@ -430,6 +443,7 @@ def _run_voice_doctor(
     explain: bool = False,
     show: bool = False,
     rollback: bool = False,
+    surgical: bool = False,
 ) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
     if calibrate and show:
@@ -442,9 +456,10 @@ def _run_voice_doctor(
             non_interactive=non_interactive,
             dry_run=dry_run,
             explain=explain,
+            surgical=surgical,
         )
     if full_diag:
-        return _run_voice_full_diag(non_interactive=non_interactive)
+        return _run_voice_full_diag(non_interactive=non_interactive, surgical=surgical)
 
     report = _run_voice_preflight()
     _render_voice_report(report, output_json=output_json, device=device)
@@ -481,7 +496,37 @@ def _run_voice_doctor(
     )
 
 
-def _run_voice_full_diag(*, non_interactive: bool) -> int:
+_SURGICAL_ONLY_LAYERS = "A,C,D,E,J"
+
+
+def _surgical_extra_args(*, non_interactive: bool, surgical: bool) -> tuple[str, ...]:
+    """Build the bash diag extra_args tuple for the CLI.
+
+    Combines `--non-interactive` (when stdin is non-TTY or operator
+    opts in) with `--only A,C,D,E,J --skip-captures --skip-guardian
+    --skip-operator-prompts` when `surgical=True`. The surgical layers
+    cover hardware probe + ALSA + PipeWire + PortAudio + latency
+    budget; the skip flags cut speech captures + the Temporal Guardian
+    background follower + interactive prompts so the run lands at
+    ~30s instead of the default 8-12 min.
+    """
+    args: list[str] = []
+    if non_interactive:
+        args.append("--non-interactive")
+    if surgical:
+        args.extend(
+            [
+                "--only",
+                _SURGICAL_ONLY_LAYERS,
+                "--skip-captures",
+                "--skip-guardian",
+                "--skip-operator-prompts",
+            ]
+        )
+    return tuple(args)
+
+
+def _run_voice_full_diag(*, non_interactive: bool, surgical: bool = False) -> int:
     """Execute the bundled forensic diag toolkit + in-process triage.
 
     Wires :func:`sovyx.voice.diagnostics.run_full_diag` (extract bash
@@ -512,12 +557,10 @@ def _run_voice_full_diag(*, non_interactive: bool) -> int:
         "[dim](8-12 min, interactive — speak when prompted)[/dim]\n"
     )
 
-    extra_args: tuple[str, ...] = ()
-    if non_interactive:
-        extra_args = ("--non-interactive",)
+    extra_args = _surgical_extra_args(non_interactive=non_interactive, surgical=surgical)
 
     try:
-        diag_result = run_full_diag(extra_args=extra_args)
+        diag_result = run_full_diag(extra_args=extra_args, trigger="cli")
     except DiagPrerequisiteError as exc:
         console.print(f"\n[red]Voice diag prerequisites not met:[/red] {exc}")
         console.print(
@@ -612,6 +655,7 @@ def _run_voice_calibrate(
     non_interactive: bool,
     dry_run: bool,
     explain: bool,
+    surgical: bool = False,
 ) -> int:
     """Execute the calibration engine end-to-end + persist the profile.
 
@@ -654,13 +698,14 @@ def _run_voice_calibrate(
         f"system={fingerprint.system_vendor!r} {fingerprint.system_product!r}[/dim]"
     )
 
-    # Step 2: full diag.
-    console.print("\n[dim](2/6) Running full diag (8-12 min, interactive)...[/dim]")
-    extra_args: tuple[str, ...] = ()
-    if non_interactive:
-        extra_args = ("--non-interactive",)
+    # Step 2: full diag (or surgical ~30s if opted-in).
+    if surgical:
+        console.print("\n[dim](2/6) Running surgical diag (~30s, --only A,C,D,E,J)...[/dim]")
+    else:
+        console.print("\n[dim](2/6) Running full diag (8-12 min, interactive)...[/dim]")
+    extra_args = _surgical_extra_args(non_interactive=non_interactive, surgical=surgical)
     try:
-        diag_result = run_full_diag(extra_args=extra_args)
+        diag_result = run_full_diag(extra_args=extra_args, trigger="cli")
     except DiagPrerequisiteError as exc:
         console.print(f"\n[red]Voice diag prerequisites not met:[/red] {exc}")
         return EXIT_DOCTOR_UNSUPPORTED

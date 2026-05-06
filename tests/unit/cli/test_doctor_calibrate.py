@@ -531,3 +531,99 @@ class TestRollback:
             result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--rollback"])
         assert result.exit_code != 0
         assert "Rollback failed" in result.output
+
+
+# ====================================================================
+# v0.30.26: --surgical wires the bash --only A,C,D,E,J flag
+# ====================================================================
+
+
+class TestSurgicalFlag:
+    """``--calibrate --surgical`` passes --only + skip flags to run_full_diag."""
+
+    def test_surgical_extra_args_helper(self) -> None:
+        """The CLI's _surgical_extra_args() builds the right flag list."""
+        from sovyx.cli.commands.doctor import _surgical_extra_args
+
+        # surgical=False + non_interactive=False -> empty
+        assert _surgical_extra_args(non_interactive=False, surgical=False) == ()
+        # surgical=False + non_interactive=True -> just --non-interactive
+        assert _surgical_extra_args(non_interactive=True, surgical=False) == ("--non-interactive",)
+        # surgical=True + non_interactive=False -> --only + skips
+        result = _surgical_extra_args(non_interactive=False, surgical=True)
+        assert "--only" in result
+        assert "A,C,D,E,J" in result
+        assert "--skip-captures" in result
+        assert "--skip-guardian" in result
+        assert "--skip-operator-prompts" in result
+        assert "--non-interactive" not in result
+        # both true -> non-interactive + --only + skips
+        result_both = _surgical_extra_args(non_interactive=True, surgical=True)
+        assert "--non-interactive" in result_both
+        assert "--only" in result_both
+
+    def test_surgical_flag_visible_in_help(self) -> None:
+        """The --surgical flag is documented in --help output."""
+        result = runner.invoke(app, ["doctor", "voice", "--help"])
+        assert result.exit_code == 0
+        assert "--surgical" in result.output
+        assert "A,C,D,E,J" in result.output
+
+    def test_surgical_flag_threads_through_run_full_diag(self) -> None:
+        """--calibrate --surgical passes --only to run_full_diag."""
+        from sovyx.voice.diagnostics import DiagRunResult
+
+        diag_result = DiagRunResult(
+            tarball_path=Path("/tmp/diag.tar.gz"),
+            duration_s=30.0,
+            exit_code=0,
+        )
+
+        captured: dict[str, object] = {}
+
+        def capture_run_full_diag(**kwargs: object) -> DiagRunResult:
+            captured["kwargs"] = kwargs
+            return diag_result
+
+        with (
+            patch(
+                "sovyx.cli.commands.doctor.capture_fingerprint",
+                return_value=_fingerprint(),
+            ),
+            patch(
+                "sovyx.cli.commands.doctor.run_full_diag",
+                side_effect=capture_run_full_diag,
+            ),
+            patch(
+                "sovyx.cli.commands.doctor.triage_tarball",
+                return_value=_triage(),
+            ),
+            patch(
+                "sovyx.cli.commands.doctor.capture_measurements",
+                return_value=_measurements(),
+            ),
+            patch(
+                "sovyx.cli.commands.doctor.CalibrationEngine.evaluate",
+                return_value=_r10_profile(),
+            ),
+            patch(
+                "sovyx.cli.commands.doctor.CalibrationApplier.apply",
+                return_value=_apply_result_advise(),
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "doctor",
+                    "voice",
+                    "--calibrate",
+                    "--non-interactive",
+                    "--surgical",
+                ],
+            )
+        assert result.exit_code == 0
+        extra_args = captured["kwargs"]["extra_args"]
+        assert "--only" in extra_args
+        assert "A,C,D,E,J" in extra_args
+        # CLI explicitly passes trigger="cli"
+        assert captured["kwargs"]["trigger"] == "cli"
