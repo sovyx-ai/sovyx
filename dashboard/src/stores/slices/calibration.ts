@@ -29,6 +29,8 @@ import type { StateCreator } from "zustand";
 
 import { ApiError, BASE_URL, api } from "@/lib/api";
 import type {
+  CalibrationFeatureFlagResponse,
+  CalibrationFeatureFlagUpdateRequest,
   CancelJobResponse,
   PreviewFingerprintResponse,
   StartCalibrationRequest,
@@ -37,6 +39,7 @@ import type {
 } from "@/types/api";
 import { isWizardCalibrationTerminal } from "@/types/api";
 import {
+  CalibrationFeatureFlagResponseSchema,
   CancelJobResponseSchema,
   PreviewFingerprintResponseSchema,
   StartCalibrationResponseSchema,
@@ -60,6 +63,15 @@ export interface CalibrationSlice {
   calibrationError: string | null;
   /** Active WebSocket. Null when no subscription is open. */
   calibrationWs: WebSocket | null;
+  /**
+   * The calibration wizard mount flag, sourced from the backend's
+   * ``GET /api/voice/calibration/feature-flag`` (which reflects
+   * ``EngineConfig.voice.calibration_wizard_enabled`` on the running
+   * daemon). Null while the slice is unloaded; populate via
+   * ``loadCalibrationFeatureFlag`` on app boot. The frontend treats
+   * null as "do not mount" (conservative gate).
+   */
+  calibrationFeatureFlag: CalibrationFeatureFlagResponse | null;
 
   // ── Actions ──
   /**
@@ -101,6 +113,24 @@ export interface CalibrationSlice {
 
   /** Null the error field. */
   clearCalibrationError: () => void;
+
+  /**
+   * Fetch the current calibration wizard mount flag from the backend.
+   * Idempotent; safe to call on every app boot. Populates
+   * ``calibrationFeatureFlag``; on failure, leaves the field null
+   * (conservative gate; frontend treats null as "do not mount").
+   */
+  loadCalibrationFeatureFlag: () => Promise<CalibrationFeatureFlagResponse | null>;
+
+  /**
+   * Flip the calibration wizard mount flag in-memory on the running
+   * daemon. Persists only for the daemon's lifetime; permanent
+   * changes require editing env / system.yaml + restart. Returns
+   * the new state on success or null on failure.
+   */
+  setCalibrationFeatureFlag: (
+    enabled: boolean,
+  ) => Promise<CalibrationFeatureFlagResponse | null>;
 }
 
 export const createCalibrationSlice: StateCreator<
@@ -115,6 +145,7 @@ export const createCalibrationSlice: StateCreator<
   calibrationLoading: false,
   calibrationError: null,
   calibrationWs: null,
+  calibrationFeatureFlag: null,
 
   // ── fetchCalibrationPreview ──
   fetchCalibrationPreview: async () => {
@@ -264,6 +295,48 @@ export const createCalibrationSlice: StateCreator<
 
   clearCalibrationError: () => {
     set({ calibrationError: null });
+  },
+
+  // ── loadCalibrationFeatureFlag ──
+  loadCalibrationFeatureFlag: async () => {
+    try {
+      const data = await api.get<CalibrationFeatureFlagResponse>(
+        "/api/voice/calibration/feature-flag",
+        { schema: CalibrationFeatureFlagResponseSchema },
+      );
+      set({ calibrationFeatureFlag: data });
+      return data;
+    } catch (err) {
+      // Conservative: on failure leave the flag null (= do not mount).
+      // Don't surface as a calibrationError -- this fetch runs on
+      // every app boot and a transient backend hiccup shouldn't
+      // surface a banner; the operator just sees the wizard not
+      // mount, falls through to the existing setup flow.
+      // We DO log to the console for triage observability.
+      // eslint-disable-next-line no-console
+      console.warn("[calibration] feature-flag load failed:", err);
+      set({ calibrationFeatureFlag: null });
+      return null;
+    }
+  },
+
+  // ── setCalibrationFeatureFlag ──
+  setCalibrationFeatureFlag: async (enabled: boolean) => {
+    set({ calibrationLoading: true, calibrationError: null });
+    try {
+      const body: CalibrationFeatureFlagUpdateRequest = { enabled };
+      const data = await api.post<CalibrationFeatureFlagResponse>(
+        "/api/voice/calibration/feature-flag",
+        body,
+        { schema: CalibrationFeatureFlagResponseSchema },
+      );
+      set({ calibrationFeatureFlag: data, calibrationLoading: false });
+      return data;
+    } catch (err) {
+      const message = _extractApiError(err, "Failed to update feature flag");
+      set({ calibrationLoading: false, calibrationError: message });
+      return null;
+    }
   },
 });
 

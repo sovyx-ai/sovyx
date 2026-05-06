@@ -1999,6 +1999,26 @@ export interface PreviewFingerprintResponse {
 }
 
 /**
+ * Response shape for ``GET / POST /api/voice/calibration/feature-flag``.
+ *
+ * Mirrors :class:`EngineConfig.voice.calibration_wizard_enabled` on the
+ * running daemon. ``runtime_override_active`` is true when the
+ * operator (or another caller) has flipped the value in-memory via
+ * ``POST /feature-flag`` since boot.
+ */
+export interface CalibrationFeatureFlagResponse {
+  enabled: boolean;
+  runtime_override_active: boolean;
+}
+
+/**
+ * Body for ``POST /api/voice/calibration/feature-flag``.
+ */
+export interface CalibrationFeatureFlagUpdateRequest {
+  enabled: boolean;
+}
+
+/**
  * Returns true when the wizard status accepts no further transitions
  * (the WS server has closed after sending this snapshot).
  */

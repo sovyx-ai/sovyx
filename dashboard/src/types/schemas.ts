@@ -1541,3 +1541,12 @@ export const PreviewFingerprintResponseSchema = z.object({
   system_product: z.string(),
   recommendation: z.enum(["slow_path", "fast_path"]),
 });
+
+export const CalibrationFeatureFlagResponseSchema = z.object({
+  enabled: z.boolean(),
+  runtime_override_active: z.boolean(),
+});
+
+export const CalibrationFeatureFlagUpdateRequestSchema = z.object({
+  enabled: z.boolean(),
+});

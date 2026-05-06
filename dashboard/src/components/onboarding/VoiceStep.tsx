@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MicIcon,
@@ -8,7 +8,7 @@ import {
   CheckIcon,
   PackageIcon,
 } from "lucide-react";
-import { CALIBRATION_WIZARD_ENABLED } from "@/lib/feature-flags";
+import { useDashboardStore } from "@/stores/dashboard";
 import { api, ApiError } from "@/lib/api";
 import { VoiceCalibrationStep } from "@/components/onboarding/VoiceCalibrationStep";
 import { Button } from "@/components/ui/button";
@@ -52,6 +52,25 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
   // shared with voice.tsx (Mission v0.30.4 §wizard.* keys).
   const { t } = useTranslation("onboarding");
   const { t: tVoice } = useTranslation("voice");
+  // v0.30.22 T3.10: replace the hardcoded CALIBRATION_WIZARD_ENABLED
+  // const with a runtime fetch of GET /api/voice/calibration/feature-flag.
+  // The flag's source-of-truth is now EngineConfig.voice.calibration_wizard_enabled
+  // on the running daemon; operators flip it via env / system.yaml or
+  // the Settings -> Voice -> Advanced toggle. The Zustand slice handles
+  // the load + caches the result; we read it here.
+  const calibrationFeatureFlag = useDashboardStore(
+    (s) => s.calibrationFeatureFlag,
+  );
+  const loadCalibrationFeatureFlag = useDashboardStore(
+    (s) => s.loadCalibrationFeatureFlag,
+  );
+  useEffect(() => {
+    // Idempotent + cheap; safe to call on every mount. The slice
+    // populates calibrationFeatureFlag on success or leaves it null
+    // on failure (conservative gate -- null means "do not mount").
+    void loadCalibrationFeatureFlag();
+  }, [loadCalibrationFeatureFlag]);
+  const calibrationWizardEnabled = calibrationFeatureFlag?.enabled ?? false;
   const [detected, setDetected] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -184,13 +203,14 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
         initialLanguage={language}
       />
 
-      {/* L3 voice calibration wizard step — gated on
-          CALIBRATION_WIZARD_ENABLED (default false until v0.31.0).
+      {/* L3 voice calibration wizard step — gated on the
+          runtime EngineConfig.voice.calibration_wizard_enabled flag
+          (sourced via GET /api/voice/calibration/feature-flag).
           When enabled, replaces the legacy VoiceSetupWizard inline
           mount below. Operator falls back to the legacy wizard via
           the FALLBACK terminal state (rendered with a "Use simple
           setup" button by VoiceCalibrationStep). */}
-      {CALIBRATION_WIZARD_ENABLED && !enabled && !missingDeps && (
+      {calibrationWizardEnabled && !enabled && !missingDeps && (
         <VoiceCalibrationStep
           mindId="default"
           onCompleted={onConfigured}
