@@ -6,7 +6,79 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.4 below)
+(none — every shipped delta is in v0.31.0-rc.5 below)
+
+## [0.31.0-rc.5] — 2026-05-06
+
+Paranoid pre-GA closure round 3 on top of v0.31.0-rc.4. Four parallel
+QA agents re-validated rc.4 (zero src/ touches, test/CI hardening
+only); this RC closes the 2 FAIL items + 4 priority UNCERTAIN items
+without paliativos per ``feedback_enterprise_only``. rc.5 is a strict
+test/CI/docs superset of rc.4 with **zero production code changes**.
+
+### Fixed
+
+- **8 misclassified `@pytest.mark.integration` markers (Agent 2 A.4).**
+  rc.4 closed E.3 by removing the marker from `TestConcurrentStartRaceQaFix5`
+  on the rationale that httpx + ASGITransport in-process tests don't
+  fit the marker's documented criteria ("real ML, SQLite heavy IO,
+  cross-component wiring"). The same logic applies to 8 OTHER classes
+  in the same file: `TestPublicSurface`, `TestRuleRegistry`,
+  `TestEngineConfigFlag`, `TestDashboardEndpointWiring`, `TestCLISurface`,
+  `TestStartEndpointBehavior`, `TestCancelEndpointBehavior`,
+  `TestWebSocketAuthBehavior`. Pre-rc.5 these 20 audit tests were
+  silently skipped from default CI; a regression to public surface,
+  rule registry, route registration, CLI flags, or auth would have
+  shipped green. Marker removed; tests now run on every push.
+  `TestCorpusSynth` keeps the marker (genuine cross-component:
+  end-to-end `triage_tarball` invocation across 8 scenarios).
+- **Race tests leaked `_START_LOCKS` instance (Agent 2 A.2).** Pre-rc.5
+  `TestConcurrentStartRaceQaFix5` reassigned `vc_route._START_LOCKS`
+  to a fresh `LRULockDict(maxsize=256)` but never restored the
+  original in `finally`. Functionally safe (locks self-prune by key)
+  but contradicted the test docstring's "no state leaks into the next
+  test" promise. Both tests now capture `_original_start_locks` before
+  reassignment + restore in `finally`.
+
+### Added
+
+- **Strengthened Promise 11 `--explain` assertion (Agent 3 #1).** Pre-rc.5
+  `test_evaluate_rules_with_explain_flag_invokes_explain_renderer`
+  asserted `"R10" in clean` — but `rule_id` always renders in the
+  decisions table at `doctor.py:979`, regardless of `--explain`. A
+  regression that wired `explain=True` to a no-op would have landed
+  green. Now asserts `"Rule trace" in clean` AND `"matched:" in clean`
+  — both fire only inside the explain-only block at `doctor.py:994-1003`.
+- **Multi-token revert continuation e2e test (Agent 3 #2).** New
+  `test_lifo_walker_continues_past_middle_revert_failure` drives 3
+  decisions where decision[1]'s revert raises RuntimeError — asserts
+  the LIFO walker continues to revert[0] anyway (production code at
+  `_applier.py:563-606` is correct; this test pins the contract).
+- **Privacy gate widened to engine/measurer/fingerprint/runner (Agent 3 #3).**
+  Pre-rc.5 the privacy CI gate covered `_wizard_orchestrator`,
+  `_wizard_progress`, `_persistence`, `_kb_cache`, `_applier` but NOT
+  the 4 modules in `voice.calibration.engine`, `voice.calibration._measurer`,
+  `voice.calibration._fingerprint`, `voice.diagnostics._runner`. All
+  4 were CLEAN by inspection but UNGATED. New test classes
+  `TestEngineEmissionPrivacy`, `TestMeasurerEmissionPrivacy`,
+  `TestFingerprintEmissionPrivacy`, `TestRunnerEmissionPrivacy` walk
+  each module's logger through the privacy heuristic with synthetic
+  emission scenarios; the runner test covers both success
+  (`full_diag_started/completed`) and failure (`full_diag_failed`)
+  paths.
+- **CLAUDE.md anti-pattern #38 (Agent 2 F.4).** Documents the
+  lazy-import patch-target lesson from rc.4's `--evaluate-rules`
+  tests + the cross-platform `create=True` injection pattern from
+  rc.4's POSIX cancellation tests. Extends anti-pattern #20 (test
+  patches must follow module splits) to lazy-import boundaries.
+
+### Mission
+
+Paranoid pre-GA closure round 3; rc.4 archive footer remains accurate.
+rc.5 is a strict superset of rc.4 — zero contract changes, zero src/
+touches, only test/CI/docs hardening. Operator validation gate steps
+unchanged from rc.4; v0.31.0 GA promotion proceeds once the operator
+confirms rc.5 on the canonical Sony VAIO host.
 
 ## [0.31.0-rc.4] — 2026-05-06
 
