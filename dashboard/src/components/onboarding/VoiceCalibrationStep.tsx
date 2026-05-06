@@ -169,6 +169,7 @@ export function VoiceCalibrationStep({
         <IdleView
           preview={calibrationPreview}
           onStart={handleStart}
+          onUseSimpleSetup={onFallback}
           loading={calibrationLoading}
           t={t}
         />
@@ -213,11 +214,18 @@ export function VoiceCalibrationStep({
 interface IdleViewProps {
   preview: ReturnType<typeof useDashboardStore.getState>["calibrationPreview"];
   onStart: () => void;
+  onUseSimpleSetup: () => void;
   loading: boolean;
   t: ReturnType<typeof useTranslation>["t"];
 }
 
-function IdleView({ preview, onStart, loading, t }: IdleViewProps) {
+function IdleView({
+  preview,
+  onStart,
+  onUseSimpleSetup,
+  loading,
+  t,
+}: IdleViewProps) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">{t("calibration.subtitle")}</p>
@@ -233,14 +241,28 @@ function IdleView({ preview, onStart, loading, t }: IdleViewProps) {
           </p>
         </div>
       )}
-      <Button onClick={onStart} disabled={loading} size="lg">
-        {loading ? (
-          <LoaderIcon className="mr-2 size-4 animate-spin" />
-        ) : (
-          <MicIcon className="mr-2 size-4" />
-        )}
-        {t("calibration.button.start")}
-      </Button>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Button onClick={onStart} disabled={loading} size="lg">
+          {loading ? (
+            <LoaderIcon className="mr-2 size-4 animate-spin" />
+          ) : (
+            <MicIcon className="mr-2 size-4" />
+          )}
+          {t("calibration.button.start")}
+        </Button>
+        {/* Operator opt-out before triggering the 8-12 min pipeline.
+            Keeps the simple setup path one click away for users who
+            don't need (or don't want to wait for) the full
+            forensic-driven calibration. */}
+        <Button
+          onClick={onUseSimpleSetup}
+          variant="ghost"
+          size="sm"
+          disabled={loading}
+        >
+          {t("calibration.button.use_simple_setup")}
+        </Button>
+      </div>
       <p className="text-xs text-muted-foreground">
         {t("calibration.estimated_duration")}
       </p>
