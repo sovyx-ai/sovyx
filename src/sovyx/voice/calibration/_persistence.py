@@ -32,6 +32,7 @@ History: introduced in v0.30.15 as T2.7 of mission
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from enum import StrEnum
@@ -55,6 +56,11 @@ logger = get_logger(__name__)
 
 _PROFILE_FILENAME = "calibration.json"
 _TMP_SUFFIX = ".tmp"
+
+
+def _short_hash(value: str) -> str:
+    """16-hex-char SHA256 prefix; matches engine.py + _applier.py."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 class CalibrationProfileLoadError(Exception):
@@ -119,8 +125,8 @@ def save_calibration_profile(
 
     logger.info(
         "voice.calibration.profile.persisted",
-        mind_id=profile.mind_id,
-        profile_id=profile.profile_id,
+        mind_id_hash=_short_hash(profile.mind_id),
+        profile_id_hash=_short_hash(profile.profile_id),
         path=str(target),
         signed=profile.signature is not None,
     )
@@ -206,19 +212,38 @@ def load_calibration_profile(
     # against a public key is not yet wired (signing capability ships
     # in a follow-up pre-tag commit) -- for now we only check
     # presence/absence and surface the verdict via telemetry.
+    profile_hash = _short_hash(profile.profile_id)
+    mind_hash = _short_hash(mind_id)
     if profile.signature is None:
         if mode is _LoadMode.STRICT:
             raise CalibrationProfileLoadError(
                 f"calibration profile at {path} is unsigned; STRICT mode requires "
                 f"a signature. Regenerate via `sovyx doctor voice --calibrate`."
             )
+        signature_status = "missing"
         logger.warning(
             "voice.calibration.profile.signature_missing",
-            mind_id=mind_id,
-            profile_id=profile.profile_id,
+            mind_id_hash=mind_hash,
+            profile_id_hash=profile_hash,
             mode=mode.value,
             path=str(path),
         )
+    else:
+        # v0.30.19: signature presence reported as "accepted" until the
+        # public-key verification path lands. When verification ships,
+        # the rejected branch will set signature_status="invalid" + emit
+        # voice.calibration.profile.signature_invalid (already named in
+        # the module docstring per the spec contract).
+        signature_status = "accepted"
+
+    logger.info(
+        "voice.calibration.profile.loaded",
+        mind_id_hash=mind_hash,
+        profile_id_hash=profile_hash,
+        signature_status=signature_status,
+        mode=mode.value,
+        schema_version=profile.schema_version,
+    )
 
     return profile
 

@@ -32,6 +32,7 @@ History: introduced in v0.30.15 as T2.8 of mission
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -50,6 +51,11 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
+
+
+def _short_hash(value: str) -> str:
+    """16-hex-char SHA256 prefix; matches engine.py for cross-event correlation."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,19 +156,44 @@ class CalibrationApplier:
         skipped = tuple(d for d in profile.decisions if d not in applicable)
         advised_actions = tuple(str(d.value) for d in profile.decisions if d.operation == "advise")
 
+        profile_hash = _short_hash(profile.profile_id)
+        mind_hash = _short_hash(profile.mind_id)
+        logger.info(
+            "voice.calibration.applier.apply_started",
+            profile_id_hash=profile_hash,
+            mind_id_hash=mind_hash,
+            decisions_total=len(profile.decisions),
+            applicable_count=len(applicable),
+            skipped_count=len(skipped),
+            advised_count=len(advised_actions),
+            dry_run=dry_run,
+        )
+
         # SET-decision dispatch: in v0.30.15 the only rule (R10) emits
         # advise, so this loop iterates over an empty tuple. Future
         # rules emit SET; the applier raises ApplyError to surface
-        # the wire-up gap until per-target dispatch lands in v0.30.16.
-        for decision in applicable:
-            self._apply_set_decision(decision, mind_id=profile.mind_id, dry_run=dry_run)
+        # the wire-up gap until per-target dispatch lands in v0.30.20.
+        try:
+            for decision in applicable:
+                self._apply_set_decision(decision, mind_id=profile.mind_id, dry_run=dry_run)
+        except ApplyError as exc:
+            logger.warning(
+                "voice.calibration.applier.apply_failed",
+                profile_id_hash=profile_hash,
+                mind_id_hash=mind_hash,
+                target=exc.decision.target,
+                target_class=exc.decision.target_class,
+                operation=exc.decision.operation,
+                failure_reason="set_dispatch_unsupported",
+            )
+            raise
 
         if dry_run:
             target_path = profile_path(data_dir=self._data_dir, mind_id=profile.mind_id)
             logger.info(
                 "voice.calibration.applier.dry_run",
-                mind_id=profile.mind_id,
-                profile_id=profile.profile_id,
+                profile_id_hash=profile_hash,
+                mind_id_hash=mind_hash,
                 applicable_count=len(applicable),
                 skipped_count=len(skipped),
             )
@@ -170,8 +201,8 @@ class CalibrationApplier:
             target_path = save_calibration_profile(profile, data_dir=self._data_dir)
             logger.info(
                 "voice.calibration.applier.apply_succeeded",
-                mind_id=profile.mind_id,
-                profile_id=profile.profile_id,
+                profile_id_hash=profile_hash,
+                mind_id_hash=mind_hash,
                 applicable_count=len(applicable),
                 skipped_count=len(skipped),
                 advised_count=len(advised_actions),

@@ -281,3 +281,65 @@ class TestApplyResultInvariants:
         )
         with pytest.raises(FrozenInstanceError):
             result.dry_run = True  # type: ignore[misc]
+
+
+# ====================================================================
+# Telemetry events (T2.10) -- applier.apply_started / apply_failed
+# ====================================================================
+
+
+class TestApplierTelemetry:
+    """voice.calibration.applier.* events fire with hashed identifiers."""
+
+    def _capture_logger(self) -> tuple[list[tuple[str, dict[str, object]]], object]:
+        from sovyx.voice.calibration import _applier as applier_module
+
+        events: list[tuple[str, dict[str, object]]] = []
+
+        class _Capturing:
+            def info(self, event: str, **kwargs: object) -> None:
+                events.append((event, kwargs))
+
+            def warning(self, event: str, **kwargs: object) -> None:
+                events.append((event, kwargs))
+
+        original = applier_module.logger
+        applier_module.logger = _Capturing()  # type: ignore[assignment]
+        return events, original
+
+    def _restore(self, original: object) -> None:
+        from sovyx.voice.calibration import _applier as applier_module
+
+        applier_module.logger = original  # type: ignore[assignment]
+
+    def test_apply_started_emitted_with_hashes(self, tmp_path: Path) -> None:
+        events, original = self._capture_logger()
+        try:
+            applier = CalibrationApplier(data_dir=tmp_path)
+            profile = _profile(decisions=(_advise(),))
+            applier.apply(profile)
+        finally:
+            self._restore(original)
+
+        started = next(e for e in events if e[0] == "voice.calibration.applier.apply_started")
+        assert "profile_id_hash" in started[1]
+        assert "mind_id_hash" in started[1]
+        # Hashed -> not the raw mind_id "default"
+        assert started[1]["mind_id_hash"] != "default"
+        assert isinstance(started[1]["profile_id_hash"], str)
+        assert len(started[1]["profile_id_hash"]) == 16
+
+    def test_apply_failed_emitted_when_set_dispatch_unsupported(self, tmp_path: Path) -> None:
+        events, original = self._capture_logger()
+        try:
+            applier = CalibrationApplier(data_dir=tmp_path)
+            profile = _profile(decisions=(_set(),))
+            with pytest.raises(ApplyError):
+                applier.apply(profile)
+        finally:
+            self._restore(original)
+
+        failed = next(e for e in events if e[0] == "voice.calibration.applier.apply_failed")
+        assert failed[1]["target"] == "mind.voice.voice_input_device_name"
+        assert failed[1]["operation"] == "set"
+        assert failed[1]["failure_reason"] == "set_dispatch_unsupported"

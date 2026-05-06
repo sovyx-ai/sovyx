@@ -303,3 +303,69 @@ class TestSignatureMode:
             data_dir=tmp_path, mind_id="default", mode=_LoadMode.STRICT
         )
         assert loaded.signature == "abcdef" * 16
+
+
+# ====================================================================
+# Telemetry events (T2.10) -- profile.loaded / profile.persisted
+# ====================================================================
+
+
+class TestPersistenceTelemetry:
+    """voice.calibration.profile.* events fire with hashed identifiers."""
+
+    def _capture_logger(self) -> tuple[list[tuple[str, dict[str, object]]], object]:
+        from sovyx.voice.calibration import _persistence as persistence_module
+
+        events: list[tuple[str, dict[str, object]]] = []
+
+        class _Capturing:
+            def info(self, event: str, **kwargs: object) -> None:
+                events.append((event, kwargs))
+
+            def warning(self, event: str, **kwargs: object) -> None:
+                events.append((event, kwargs))
+
+        original = persistence_module.logger
+        persistence_module.logger = _Capturing()  # type: ignore[assignment]
+        return events, original
+
+    def _restore(self, original: object) -> None:
+        from sovyx.voice.calibration import _persistence as persistence_module
+
+        persistence_module.logger = original  # type: ignore[assignment]
+
+    def test_persisted_event_uses_hashes(self, tmp_path: Path) -> None:
+        events, original = self._capture_logger()
+        try:
+            save_calibration_profile(_profile(signature=None), data_dir=tmp_path)
+        finally:
+            self._restore(original)
+
+        persisted = next(e for e in events if e[0] == "voice.calibration.profile.persisted")
+        # Hashed identifiers, not raw mind_id / profile_id
+        assert "mind_id_hash" in persisted[1]
+        assert "profile_id_hash" in persisted[1]
+        assert persisted[1]["mind_id_hash"] != "default"
+
+    def test_loaded_event_signature_status_accepted(self, tmp_path: Path) -> None:
+        save_calibration_profile(_profile(signature="abcdef" * 16), data_dir=tmp_path)
+        events, original = self._capture_logger()
+        try:
+            load_calibration_profile(data_dir=tmp_path, mind_id="default")
+        finally:
+            self._restore(original)
+
+        loaded = next(e for e in events if e[0] == "voice.calibration.profile.loaded")
+        assert loaded[1]["signature_status"] == "accepted"
+        assert loaded[1]["mode"] == "lenient"
+
+    def test_loaded_event_signature_status_missing(self, tmp_path: Path) -> None:
+        save_calibration_profile(_profile(signature=None), data_dir=tmp_path)
+        events, original = self._capture_logger()
+        try:
+            load_calibration_profile(data_dir=tmp_path, mind_id="default")
+        finally:
+            self._restore(original)
+
+        loaded = next(e for e in events if e[0] == "voice.calibration.profile.loaded")
+        assert loaded[1]["signature_status"] == "missing"

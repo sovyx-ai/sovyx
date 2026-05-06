@@ -32,6 +32,8 @@ History: introduced in v0.30.15 as T2.4 of mission
 
 from __future__ import annotations
 
+import hashlib
+import time
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -39,6 +41,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING
 
+from sovyx.observability.logging import get_logger
 from sovyx.voice.calibration._provenance import ProvenanceRecorder
 from sovyx.voice.calibration.rules import RULE_SET_VERSION, iter_rules
 from sovyx.voice.calibration.rules._base import (
@@ -55,7 +58,24 @@ from sovyx.voice.calibration.schema import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sovyx.voice.diagnostics import TriageResult
+
+logger = get_logger(__name__)
+
+
+def _short_hash(value: str) -> str:
+    """Return the 16-hex-char SHA256 prefix of ``value``.
+
+    Used for telemetry labels (mind_id_hash, profile_id_hash) so we
+    can correlate events across the engine + applier + persistence
+    pipeline WITHOUT shipping the raw mind_id (which is operator-set
+    and may be PII per anti-pattern #1 of the privacy contract).
+    Bounded cardinality: 16 hex chars = 64 bits = ample for
+    deduplication, low enough to keep telemetry index size manageable.
+    """
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _read_engine_version() -> str:
@@ -152,6 +172,8 @@ class CalibrationEngine:
         triage_result: TriageResult | None = None,
         profile_id: str | None = None,
         generated_at_utc: str | None = None,
+        mode: EngineMode = EngineMode.APPLY,
+        now_factory: Callable[[], str] | None = None,
     ) -> CalibrationProfile:
         """Run all applicable rules and return a frozen CalibrationProfile.
 
@@ -169,6 +191,21 @@ class CalibrationEngine:
             profile_id: Override for the generated UUID4 (testability).
             generated_at_utc: Override for the generation timestamp
                 (testability).
+            mode: Engine execution mode -- propagated only to the
+                ``voice.calibration.engine.run_started{mode=...}``
+                telemetry label. The engine itself produces the same
+                profile regardless of mode (mode-specific behavior
+                lives on the applier + the renderer); this field
+                exists so an operator filtering telemetry can
+                distinguish DRY_RUN observation runs from APPLY runs
+                from EXPLAIN inspections.
+            now_factory: Optional clock injection. When provided, the
+                callable is invoked once for ``generated_at_utc``
+                (when not pinned) AND once per rule firing for the
+                provenance trace's ``fired_at_utc``. Enables strict
+                byte-determinism in tests by pinning the clock.
+                Production callers omit this and get natural per-rule
+                timestamps (forensic ordering preserved).
 
         Returns:
             A frozen :class:`CalibrationProfile` containing every
@@ -177,14 +214,24 @@ class CalibrationEngine:
             ``provenance`` tuple records the matched conditions for
             each rule firing.
         """
+        mind_hash = _short_hash(mind_id)
+        run_started_mono = time.monotonic()
+        logger.info(
+            "voice.calibration.engine.run_started",
+            mode=mode.value,
+            mind_id_hash=mind_hash,
+            rule_set_version=self._rule_set_version,
+            engine_version=self._engine_version,
+        )
+
         recorder = ProvenanceRecorder()
         decisions: list[CalibrationDecision] = []
-        # Track ``(target, target_class)`` pairs of "set" decisions so
-        # we can detect conflict on lower-priority rules. ``advise``
-        # and ``preserve`` operations are not subject to conflict
-        # resolution (multiple advisories for the same target are
-        # recorded independently for explainability).
-        set_targets_seen: set[tuple[str, str]] = set()
+        # Track ``(target, target_class)`` -> winning rule_id so that
+        # conflict telemetry can name BOTH the prior writer and the
+        # losing rule. ``advise`` and ``preserve`` operations are not
+        # subject to conflict resolution (multiple advisories for the
+        # same target are recorded independently for explainability).
+        set_target_owners: dict[tuple[str, str], str] = {}
 
         for rule in self._rules:
             ctx = RuleContext(
@@ -205,13 +252,18 @@ class CalibrationEngine:
             for d in evaluation.decisions:
                 if d.operation == "set":
                     key = (d.target, d.target_class)
-                    if key in set_targets_seen:
+                    if key in set_target_owners:
                         # Conflict -- a higher-priority rule already
-                        # wrote this target. Skip this decision.
-                        # Telemetry emission lands in T2.10
-                        # (``voice.calibration.engine.rule_conflict``).
+                        # wrote this target. Skip this decision and
+                        # surface the collision via structured event.
+                        logger.info(
+                            "voice.calibration.engine.rule_conflict",
+                            rule_winner_id=set_target_owners[key],
+                            rule_loser_id=rule.rule_id,
+                            target_field=f"{d.target_class}.{d.target}",
+                        )
                         continue
-                    set_targets_seen.add(key)
+                    set_target_owners[key] = rule.rule_id
                 kept.append(d)
 
             if not kept:
@@ -228,9 +280,17 @@ class CalibrationEngine:
                 matched_conditions=evaluation.matched_conditions,
                 produced_decisions=tuple(_decision_summary(d) for d in kept),
                 confidence=confidence,
+                fired_at_utc=now_factory() if now_factory is not None else None,
+            )
+            logger.info(
+                "voice.calibration.engine.rule_fired",
+                rule_id=rule.rule_id,
+                rule_version=rule.rule_version,
+                confidence=confidence.value,
+                decisions_count=len(kept),
             )
 
-        return CalibrationProfile(
+        profile = CalibrationProfile(
             schema_version=CALIBRATION_PROFILE_SCHEMA_VERSION,
             profile_id=profile_id if profile_id is not None else str(uuid.uuid4()),
             mind_id=mind_id,
@@ -243,10 +303,25 @@ class CalibrationEngine:
             generated_at_utc=(
                 generated_at_utc
                 if generated_at_utc is not None
-                else datetime.now(tz=UTC).isoformat(timespec="microseconds")
+                else (
+                    now_factory()
+                    if now_factory is not None
+                    else datetime.now(tz=UTC).isoformat(timespec="microseconds")
+                )
             ),
             signature=None,  # Signed at persistence boundary (T2.7).
         )
+        logger.info(
+            "voice.calibration.engine.run_completed",
+            mode=mode.value,
+            mind_id_hash=mind_hash,
+            profile_id_hash=_short_hash(profile.profile_id),
+            duration_ms=int((time.monotonic() - run_started_mono) * 1000),
+            decisions_count=len(profile.decisions),
+            rules_fired=len(profile.provenance),
+            rules_total=len(self._rules),
+        )
+        return profile
 
 
 def _aggregate_confidence(

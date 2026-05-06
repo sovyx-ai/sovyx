@@ -252,12 +252,16 @@ class TestDeterminism:
             decisions=(_set_decision(target="t", value="v"),),
         )
         engine = CalibrationEngine(rules=(rule,), engine_version="0.30.15", rule_set_version=1)
+        # Pin the clock via now_factory so provenance.fired_at_utc is
+        # deterministic. Production callers omit it and get natural
+        # per-rule timestamps (forensic ordering preserved).
         kwargs = dict(
             mind_id="default",
             fingerprint=_fingerprint(),
             measurements=_measurements_healthy(),
             profile_id="11111111-2222-3333-4444-555555555555",
             generated_at_utc="2026-05-05T18:02:00Z",
+            now_factory=lambda: "2026-05-05T18:02:00.000000+00:00",
         )
         a = engine.evaluate(**kwargs)
         b = engine.evaluate(**kwargs)
@@ -374,3 +378,98 @@ class TestRuleDiscovery:
         engine = CalibrationEngine(engine_version="0.30.15", rule_set_version=1)
         rule_ids = {r.rule_id for r in engine.rules}
         assert "R10_mic_attenuated" in rule_ids
+
+
+# ====================================================================
+# Telemetry events (T2.10) -- engine.run_started / rule_fired /
+# rule_conflict / run_completed
+# ====================================================================
+
+
+class TestEngineTelemetry:
+    """voice.calibration.engine.* events fire with bounded-cardinality fields."""
+
+    def _capture_events(
+        self, monkeypatch_target: object, attr: str
+    ) -> tuple[list[tuple[str, dict[str, object]]], object]:
+        events: list[tuple[str, dict[str, object]]] = []
+
+        class _CapturingLogger:
+            def info(self, event: str, **kwargs: object) -> None:
+                events.append((event, kwargs))
+
+            def warning(self, event: str, **kwargs: object) -> None:
+                events.append((event, kwargs))
+
+        capturing = _CapturingLogger()
+        original = getattr(monkeypatch_target, attr)
+        setattr(monkeypatch_target, attr, capturing)
+        return events, original
+
+    def test_run_started_and_completed_emit_with_hashes(self) -> None:
+        from sovyx.voice.calibration import engine as engine_module
+
+        events, original = self._capture_events(engine_module, "logger")
+        try:
+            rule = _FixedDecisionRule(
+                rule_id="R_test",
+                priority=50,
+                decisions=(_set_decision(target="t", value="v"),),
+            )
+            engine = CalibrationEngine(rules=(rule,), engine_version="0.30.19", rule_set_version=1)
+            engine.evaluate(
+                mind_id="default",
+                fingerprint=_fingerprint(),
+                measurements=_measurements_healthy(),
+            )
+        finally:
+            engine_module.logger = original
+
+        names = [e[0] for e in events]
+        assert "voice.calibration.engine.run_started" in names
+        assert "voice.calibration.engine.rule_fired" in names
+        assert "voice.calibration.engine.run_completed" in names
+
+        started = next(e for e in events if e[0] == "voice.calibration.engine.run_started")
+        # mind_id_hash is a 16-char hex (sha256 prefix), not the raw mind_id
+        assert "mind_id_hash" in started[1]
+        assert isinstance(started[1]["mind_id_hash"], str)
+        assert len(started[1]["mind_id_hash"]) == 16
+        assert started[1]["mind_id_hash"] != "default"
+
+        completed = next(e for e in events if e[0] == "voice.calibration.engine.run_completed")
+        assert completed[1]["decisions_count"] == 1
+        assert completed[1]["rules_fired"] == 1
+        assert completed[1]["rules_total"] == 1
+
+    def test_rule_conflict_event_names_winner_and_loser(self) -> None:
+        from sovyx.voice.calibration import engine as engine_module
+
+        events, original = self._capture_events(engine_module, "logger")
+        try:
+            high = _FixedDecisionRule(
+                rule_id="R_HIGH",
+                priority=80,
+                decisions=(_set_decision(target="x", value="high", rule_id="R_HIGH"),),
+            )
+            low = _FixedDecisionRule(
+                rule_id="R_LOW",
+                priority=20,
+                decisions=(_set_decision(target="x", value="low", rule_id="R_LOW"),),
+            )
+            engine = CalibrationEngine(
+                rules=(high, low), engine_version="0.30.19", rule_set_version=1
+            )
+            engine.evaluate(
+                mind_id="default",
+                fingerprint=_fingerprint(),
+                measurements=_measurements_healthy(),
+            )
+        finally:
+            engine_module.logger = original
+
+        conflicts = [e for e in events if e[0] == "voice.calibration.engine.rule_conflict"]
+        assert len(conflicts) == 1
+        assert conflicts[0][1]["rule_winner_id"] == "R_HIGH"
+        assert conflicts[0][1]["rule_loser_id"] == "R_LOW"
+        assert conflicts[0][1]["target_field"] == "MindConfig.voice.x"
