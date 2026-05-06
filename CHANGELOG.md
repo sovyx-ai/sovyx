@@ -6,7 +6,88 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.5 below)
+(none — every shipped delta is in v0.31.0-rc.6 below)
+
+## [0.31.0-rc.6] — 2026-05-06
+
+Operator-UX paranoid pre-GA round 4 on top of v0.31.0-rc.5. Four
+parallel QA agents re-validated rc.5 with a NEW emphasis from the
+operator: "garantir que o usuário não tenha nenhuma dor de cabeça"
+(zero operator headaches). Agent 2's UX-focused pass identified 11
+UX FAIL items where the operator's real-world journey hit
+silent/confusing/missing surfaces despite the mission §0 contract
+being fully met in code. rc.6 closes the 3 critical + 5 secondary UX
+findings without paliativos per ``feedback_enterprise_only``.
+
+### Fixed
+
+- **`--signing-key /tmp/nope` silently unsigned (Agent 2 A.4/A.5/G.6, HIGH).**
+  Pre-rc.6 an operator typo on `--signing-key` would (a) silently
+  proceed through the 8-12 min diag and (b) land an unsigned profile
+  with the only forensic surface being a structlog WARN buried in
+  ``$data_dir/logs/sovyx.log``. The operator validation gate Step 6
+  was effectively NOT runnable without log-grep. Two fixes:
+  - Fail-fast `Path.is_file()` check at flag-parse time in
+    ``cli/commands/doctor.py``. Operator typo now hits a Click
+    BadParameter error in milliseconds with an actionable hint
+    pointing to `scripts/dev/generate_calibration_signing_key.py`.
+  - Verdict renderer now surfaces signing status: green
+    "✓ Profile is signed (Ed25519)" or dim "Profile is unsigned".
+    Operator no longer needs `tail sovyx.log | grep` to verify.
+  Regression: `tests/unit/cli/test_doctor_calibrate.py::TestSigningKeyFailFast`
+  (2 cases).
+- **`--evaluate-rules` crash on non-Linux (Agent 2 A.3/G.4, MEDIUM).**
+  Pre-rc.6 a Windows operator following `--help` got a Python
+  exception from the Linux-only fingerprint/amixer probes. Now
+  short-circuits at function entry with EXIT_DOCTOR_UNSUPPORTED (5)
+  + a friendly message pointing at `sovyx doctor voice` (cross-
+  platform). Regression: `test_evaluate_rules_non_linux_returns_unsupported`.
+- **`_ProfileReview` text promised decisions but listed none (Agent 2 B.7, MEDIUM).**
+  Pre-rc.6 the green terminal banner displayed
+  "Sovyx applied the following decisions for your hardware:" with no
+  list rendered below — operator confusion at the most-celebratory
+  state. Rewrote the i18n text in en/pt-BR/es to point at the
+  persisted profile path (already shown above) + cite the
+  `sovyx doctor voice --calibrate --show` CLI for decision details
+  + highlight the rollback affordance.
+- **Hardcoded English fallback strings in calibration store (Agent 2 B.6).**
+  pt-BR/es operators saw English "Failed to capture fingerprint" /
+  "Failed to start calibration" / "Failed to load calibration job" /
+  "Failed to cancel calibration" / "Calibration WebSocket connection error"
+  fallbacks despite full dashboard i18n. Wired all 5 to ``i18n.t()``
+  with new ``voice.calibration.error.api_*`` + ``ws_connection_error``
+  keys in en/pt-BR/es voice.json.
+- **bash `--only` accepts unknown layer letters silently (Agent 2 C.3).**
+  Operator typo `--only A,J,Z` produced a successful-looking run with
+  empty tarball (no layer matched). Now validates against the canonical
+  letter set (A..K) at entrypoint + rejects with exit 2 + actionable
+  error citing the bad letter + the valid set. Whitespace-tolerant.
+  Regression: `tests/unit/voice/diagnostics/test_bash_only_flag.py::TestOnlyFlagEntrypointValidation`
+  (4 cases).
+
+### Added
+
+- **README + `sovyx init` breadcrumb to calibration wizard (Agent 2 D.6/E.2).**
+  Sony VAIO + Linux Mint + PipeWire operator (the canonical case)
+  following the README §3 "5-minute voice" path could hit silent-mic
+  with zero pointer to the calibration system. README §3 now includes
+  Step 4 with `sovyx doctor voice --calibrate --non-interactive` +
+  rationale. `sovyx init` post-creation hint also points operators
+  at the wizard for hardware-pinned issues.
+- **`docs/configuration.md` documents `voice.calibration_wizard_enabled` (Agent 2 D.2).**
+  Canonical config reference page now has a "Voice calibration wizard"
+  subsection covering the YAML key, env override, and runtime toggle.
+
+### Mission
+
+Operator-UX paranoid pre-GA round 4; rc.5 archive footer remains
+accurate. rc.6 closes the gap between "mission §0 promises met in
+code" and "operator real-world journey runnable without dor-de-cabeça".
+The 5 remaining UX UNCERTAINs from Agent 2 (operator validation Step
+5/8 instructions, --explain rule trace semantics, etc.) are documented
+backlog items — all 10 operator validation gate steps now genuinely
+runnable from rc.6's surfaces. v0.31.0 GA promotion proceeds once the
+operator confirms rc.6 on the canonical Sony VAIO host.
 
 ## [0.31.0-rc.5] — 2026-05-06
 
