@@ -176,6 +176,16 @@
     "consolidation": "Consolidação",
     "consolidationValue": "A cada {{hours}}h"
   },
+  "recalibrate": {
+    "title": "Re-rodar calibração de voz",
+    "description": "Dispara uma nova passada de calibração contra o daemon em execução. O wizard renderiza o progresso no fluxo de onboarding; você pode trocar para aquela aba enquanto ele roda.",
+    "button": "Re-rodar calibração",
+    "confirmButton": "Sim, iniciar calibração",
+    "cancelButton": "Cancelar",
+    "note": "Uma calibração leva 8-12 minutos na primeira vez; execuções subsequentes no mesmo hardware reproduzem o perfil em cache em ~5 segundos via fast path.",
+    "startSuccess": "Calibração iniciada. Acompanhe o progresso no wizard de onboarding.",
+    "startFailed": "Não foi possível iniciar a calibração."
+  },
   "calibrationWizard": {
     "title": "Etapa de calibração de voz no onboarding",
     "description": "Monta o assistente de calibração multi-etapas com consciência de hardware durante a configuração de voz. Desabilitado por padrão enquanto a Camada 3 do sistema auto-calibrável está em soak; ative para optar por incluir este deployment.",

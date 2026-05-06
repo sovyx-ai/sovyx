@@ -40,6 +40,7 @@ import { toast } from "sonner";
 import { ExportImportSection } from "@/components/settings/export-import";
 import { LanguageSelector } from "@/components/settings/LanguageSelector";
 import { CalibrationWizardCard } from "@/components/settings/calibration-wizard-card";
+import { RecalibrateButton } from "@/components/settings/recalibrate-button";
 import { VoiceClarityCard } from "@/components/settings/voice-clarity-card";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -822,6 +823,11 @@ export default function SettingsPage() {
         variant="section"
       >
         <CalibrationWizardCard />
+      </ErrorBoundary>
+
+      {/* ── Recalibrate trigger (§8.5 surface; renders only when wizard mount is enabled) ── */}
+      <ErrorBoundary name="section.settings.recalibrate" variant="section">
+        <RecalibrateButton />
       </ErrorBoundary>
 
       {/* ── Display & Language (Mission v0.30.3 §T3.3 / D5) ── */}
