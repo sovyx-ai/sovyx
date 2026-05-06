@@ -31,6 +31,10 @@ import {
 } from "./slices/onboarding";
 import { createStatsSlice, type StatsSlice } from "./slices/stats";
 import { createPluginsSlice, type PluginsSlice } from "./slices/plugins";
+import {
+  createCalibrationSlice,
+  type CalibrationSlice,
+} from "./slices/calibration";
 import { createTrainingSlice, type TrainingSlice } from "./slices/training";
 import {
   createVoiceHealthSlice,
@@ -54,6 +58,7 @@ export type DashboardState = ActivitySlice &
   OnboardingSlice &
   StatsSlice &
   PluginsSlice &
+  CalibrationSlice &
   TrainingSlice &
   VoiceHealthSlice &
   WakeWordSlice &
@@ -74,6 +79,7 @@ export const useDashboardStore = create<DashboardState>()(
       ...createOnboardingSlice(...a),
       ...createStatsSlice(...a),
       ...createPluginsSlice(...a),
+      ...createCalibrationSlice(...a),
       ...createTrainingSlice(...a),
       ...createVoiceHealthSlice(...a),
       ...createWakeWordSlice(...a),
