@@ -6,7 +6,89 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.2 below)
+(none — every shipped delta is in v0.31.0-rc.3 below)
+
+## [0.31.0-rc.3] — 2026-05-06
+
+Paranoid pre-GA audit pass on top of v0.31.0-rc.2. Four parallel
+QA agents re-validated rc.2 with deeper coverage; this RC closes
+2 real bugs + 1 contract gap + 1 missing test + 1 hygiene leak
+without paliativos per ``feedback_enterprise_only``. Mission §0
+verdict from Agent 4 was ``GO for v0.31.0 GA``; rc.3 lifts the
+remaining "real findings" before GA promotion.
+
+### Fixed
+
+- **`extras["current_prompt"]` leaks into terminal snapshots (Agent 3 #10).**
+  The slow-path tail loop populates ``extras["current_prompt"]``
+  during SLOW_PATH_DIAG; pre-rc.3 a mid-flight failure (e.g.
+  ``triage_tarball`` raising) exited via ``_emit_failed`` /
+  ``_emit_fallback`` / ``_emit_cancelled`` without clearing the
+  key, so the dashboard kept rendering a "say X" / "stay silent"
+  ``<CapturePrompt>`` card on top of a TerminalView. ``_transition``
+  now strips ``current_prompt`` whenever the destination
+  ``WizardStatus.is_terminal`` is true (single shared mutation
+  point — every emitter inherits the contract uniformly). Regression
+  in `tests/unit/voice/calibration/test_wizard_orchestrator.py::TestTerminalCurrentPromptStrip`
+  (6 cases covering FAILED / FAILED+rolled_back / CANCELLED /
+  FALLBACK / run() top-level handler / non-terminal preservation).
+- **`_revert_mind_config_voice` swallowed write failures silently (Agent 1 #6).**
+  Pre-rc.3 ``_restore_mind_yaml_voice_field`` ``return``-ed silently
+  on OSError / yaml.YAMLError during revert, so a partial-rollback
+  that left mind.yaml in an inconsistent state was indistinguishable
+  from a clean revert in the logs — operators triaging "auto-rollback
+  fired but my voice config is still broken" had no forensic evidence.
+  Helper now raises ``_MindYamlMutateError``; the LIFO rollback
+  walker catches via its generic ``except Exception`` clause and
+  emits ``voice.calibration.applier.rollback_step_failed`` with
+  ``exception_type="_MindYamlMutateError"``, then continues to the
+  next token (best-effort semantics preserved). Regression in
+  `tests/unit/voice/calibration/test_applier.py::TestRestoreMindYamlSurfacesErrors`
+  (4 cases) + `TestRollbackEmitsStepFailedOnRevertWriteError` (1
+  end-to-end case driving the canonical chain).
+
+### Added
+
+- **Privacy CI gate covers `_applier` emission sites (Agent 3 #1).**
+  Pre-rc.3 ``tests/integration/test_telemetry_privacy_audit.py``
+  patched the ``wo`` / ``wizard_progress`` / ``persistence`` /
+  ``kb_cache`` loggers but NOT ``_applier.logger``; the wizard
+  end-to-end tests mocked ``CalibrationApplier.apply`` so the 7
+  applier emission sites (``apply_started`` / ``apply_succeeded`` /
+  ``apply_failed`` / ``apply_failed_with_rollback`` /
+  ``rollback_step_failed`` / ``linux_mixer_applied`` /
+  ``mind_config_voice_applied`` and revert pairs) were never
+  walked through the privacy heuristic. A future regression
+  emitting raw ``mind_id`` instead of ``mind_id_hash`` on (e.g.)
+  ``apply_failed_with_rollback`` would have slipped past CI. New
+  ``TestApplierEmissionPrivacy`` class drives the real apply chain
+  through synthetic ``register_target_class_pair`` registrations
+  (4 scenarios: success / dry-run / sync-fail / rollback-chain).
+- **Concurrent-POST integration test for QA-FIX-5 race (Agent 2 #18).**
+  rc.2 added a per-mind ``LRULockDict``-backed asyncio.Lock around
+  ``start_calibration_job``'s ``(in-flight check + register)`` but
+  shipped without an integration test. New
+  ``TestConcurrentStartRaceQaFix5`` fires
+  ``asyncio.gather`` of two POSTs (same mind_id → exactly one 202
+  + one 409; distinct mind_ids → both 202).
+- **`_cleanup` removes per-pid prompts-err capture file (Agent 2 #8).**
+  rc.2's ``prompt_emit_structured`` writes stderr to
+  ``/tmp/.sovyx_prompts_err.$$``; the inline ``rm -f`` covers the
+  happy path but a SIGTERM/SIGINT/SIGHUP between the echo and the
+  rm leaks the file. Trap-EXIT ``_cleanup`` now mops it up. SIGKILL
+  inherently leaks one such file per process death (no userspace
+  handler can run); the file is ≤ 4 KB so the leak is bounded by
+  max PID. Regression in
+  `tests/unit/voice/diagnostics/test_bash_only_flag.py::TestPromptsErrFileCleanup`
+  (2 cases — grep-regression + functional cleanup verification).
+
+### Mission
+
+Paranoid pre-GA audit closure; rc.2 archive footer remains
+accurate. rc.3 is a strict superset of rc.2 — every fix landed
+without altering rc.2 contracts. Operator validation gate steps
+unchanged from rc.2; v0.31.0 GA promotion proceeds once the
+operator confirms rc.3 on the canonical Sony VAIO host.
 
 ## [0.31.0-rc.2] — 2026-05-06
 
