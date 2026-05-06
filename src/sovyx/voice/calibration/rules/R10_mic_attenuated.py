@@ -3,27 +3,33 @@
 Translates triage hypothesis H10 (`HypothesisId.H10_LINUX_MIXER_ATTENUATED`)
 into a deterministic calibration rule. When the canonical Sony VAIO
 case fires (`mixer_attenuation_regime == "attenuated"` + H10 winner
-confidence >= 0.7), the rule emits a HIGH-confidence ADVISE decision
-pointing the operator at ``sovyx doctor voice --fix --yes``, which
-already exists pre-v0.30.15 and lifts the attenuated controls via
-the proven mixer KB apply path (`_linux_mixer_apply.apply_mixer_preset`).
+confidence >= 0.7), the rule emits a HIGH-confidence SET decision
+targeting ``LinuxMixerApply`` with intent ``"boost_up"``, which the
+applier dispatches directly to :func:`apply_mixer_boost_up`. The
+operator no longer needs to run ``sovyx doctor voice --fix`` manually.
 
-Why ADVISE, not SET (in v0.30.15):
+History:
 
-The applier (T2.8) doesn't yet wire calibration into mixer
-remediation directly. R10 advising the operator to run ``--fix``
-is the conservative bridge that proves the engine end-to-end without
-introducing a new mutation path. After 7-day soak (v0.30.16-17),
-R10 is a candidate for promotion to a SET decision that calls the
-applier directly to skip the manual --fix step.
+* v0.30.15-v0.30.28: ADVISE-only — pointed operator at the manual
+  ``sovyx doctor voice --fix --yes`` command. The conservative
+  bridge that proved the engine end-to-end without introducing a
+  new mutation path.
+* v0.30.29 (P1): promoted to SET targeting ``LinuxMixerApply``.
+  ``rule_version`` bumped 1 → 2; ``RULE_SET_VERSION`` bumped 10 → 11.
+  Auto-rollback (LIFO) handles partial-apply recovery if any
+  subsequent SET decision in the same calibration run fails.
 
 Priority 95 (very high): R10 represents a known root cause + known
 remediation; it should fire before measurement-driven rules (R60+)
 that might otherwise burn cycles tuning VAD thresholds against an
 attenuated input.
 
-History: introduced in v0.30.15 as T2.5.R10 of mission
-``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 2.
+History (genealogy):
+
+* Introduced in v0.30.15 as T2.5.R10 of mission
+  ``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 2.
+* Promoted to SET in v0.30.29 as P1.T6 of mission
+  ``MISSION-voice-calibration-extreme-audit-2026-05-06.md`` §5.2.
 """
 
 from __future__ import annotations
@@ -41,11 +47,13 @@ from sovyx.voice.calibration.schema import (
 
 class _Rule:
     rule_id = "R10_mic_attenuated"
-    rule_version = 1
+    rule_version = 2  # P1: ADVISE -> SET promotion
     priority = 95
     description = (
         "Linux ALSA mixer attenuated -- capture+boost below Silero VAD "
-        "floor. Advises `sovyx doctor voice --fix --yes` to remediate."
+        "floor. Auto-applies the boost_up remediation via the "
+        "LinuxMixerApply handler (formerly advised the operator to run "
+        "`sovyx doctor voice --fix --yes` manually)."
     )
 
     def applies(self, ctx: RuleContext) -> bool:
@@ -87,17 +95,18 @@ class _Rule:
         )
         decisions = (
             CalibrationDecision(
-                target="advice.action",
-                target_class="TuningAdvice",
-                operation="advise",
-                value="sovyx doctor voice --fix --yes",
+                target="mixer.preset.applied",
+                target_class="LinuxMixerApply",
+                operation="set",
+                value="boost_up",
                 rationale=(
                     f"Mixer attenuation detected (capture={ctx.measurements.mixer_capture_pct}%, "
                     f"boost={ctx.measurements.mixer_boost_pct}%, internal_mic_boost="
                     f"{ctx.measurements.mixer_internal_mic_boost_pct}%) with H10 winner "
-                    f"confidence={winner_confidence:.2f}. The KB-driven mixer apply path "
-                    f"(`sovyx doctor voice --fix`) lifts the attenuated controls to safe "
-                    f"fractions and re-validates."
+                    f"confidence={winner_confidence:.2f}. The applier's LinuxMixerApply "
+                    f"handler invokes `apply_mixer_boost_up` to lift attenuated capture+boost "
+                    f"controls to safe midpoints (capture 0.75, boost 0.66 by default) and the "
+                    f"LIFO rollback path restores prior state on failure."
                 ),
                 rule_id=self.rule_id,
                 rule_version=self.rule_version,

@@ -219,16 +219,20 @@ class TestApplies:
 class TestEvaluate:
     """Decision shape + matched conditions."""
 
-    def test_emits_one_advise_decision(self) -> None:
+    def test_emits_one_set_decision(self) -> None:
+        # P1 (v0.30.29): R10 promoted from advise to SET targeting
+        # LinuxMixerApply with intent boost_up. The applier dispatches
+        # directly; operator no longer needs `sovyx doctor voice --fix`.
         evaluation = rule.evaluate(_ctx())
         assert len(evaluation.decisions) == 1
         d = evaluation.decisions[0]
         assert isinstance(d, CalibrationDecision)
-        assert d.operation == "advise"
-        assert d.target == "advice.action"
-        assert d.target_class == "TuningAdvice"
-        assert d.value == "sovyx doctor voice --fix --yes"
+        assert d.operation == "set"
+        assert d.target == "mixer.preset.applied"
+        assert d.target_class == "LinuxMixerApply"
+        assert d.value == "boost_up"
         assert d.rule_id == "R10_mic_attenuated"
+        assert d.rule_version == 2
         assert d.confidence == CalibrationConfidence.HIGH
 
     def test_rationale_includes_mixer_state(self) -> None:
@@ -263,8 +267,11 @@ class TestRuleMetadata:
         # docstring rationale must be updated too. Pin to enforce.
         assert rule.priority == 95
 
-    def test_rule_version_starts_at_1(self) -> None:
-        assert rule.rule_version == 1
+    def test_rule_version_p1_promotion(self) -> None:
+        # P1 (v0.30.29) promoted R10 from ADVISE to SET; rule_version
+        # bumped 1 -> 2 so the persistence layer can detect drift between
+        # profile-time and runtime rule sets.
+        assert rule.rule_version == 2
 
     def test_description_mentions_remediation(self) -> None:
         assert (

@@ -40,7 +40,7 @@ from sovyx.voice.calibration.rules._base import (
 # count or any rule's rule_version. Persisted in CalibrationProfile so
 # the loader (T2.7) can detect drift between profile-time and runtime
 # rule sets and warn / refuse to replay stale profiles.
-RULE_SET_VERSION = 10
+RULE_SET_VERSION = 11
 
 __all__ = [
     "RULE_SET_VERSION",
