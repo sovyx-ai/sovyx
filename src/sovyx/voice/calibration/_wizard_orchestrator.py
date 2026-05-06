@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -84,6 +85,29 @@ _PROGRESS_SLOW_PATH_APPLY = 0.92
 _PROGRESS_DONE = 1.0
 
 
+# v0.30.24 T3.8: closed-enum mapping from internal WizardStatus to the
+# spec §8.3 ``step_entered{step=...}`` label. Statuses not in the map
+# do not emit a step_entered event (e.g. PENDING, intermediate
+# fast_path_apply / slow_path_calibrate which are part of a parent
+# step that already fired).
+_STEP_BY_STATUS: dict[str, str] = {
+    "probing": "probe",
+    "fast_path_lookup": "fast_path",
+    "slow_path_diag": "slow_path",
+    "fallback": "fallback",
+}
+
+
+def _terminal_step_label(state: "WizardJobState") -> str:  # noqa: UP037 -- forward ref
+    """Map a terminal WizardJobState to the spec §8.3 ``cancelled{step}`` label.
+
+    Bounded set: probe | fast_path | slow_path | review | fallback |
+    unknown. Used by the cancelled-event emitter to surface WHERE the
+    cancel was honoured (not the terminal CANCELLED status itself).
+    """
+    return _STEP_BY_STATUS.get(state.status.value, "unknown")
+
+
 class WizardOrchestrator:
     """Run one calibration wizard job end-to-end.
 
@@ -96,10 +120,17 @@ class WizardOrchestrator:
             land at ``<data_dir>/voice_calibration/<job_id>/``.
     """
 
-    __slots__ = ("_data_dir",)
+    __slots__ = ("_data_dir", "_path_by_job", "_started_mono_by_job")
 
     def __init__(self, *, data_dir: Path) -> None:
         self._data_dir = data_dir
+        # v0.30.24 T3.8: per-job tracking for spec-aligned telemetry.
+        # The orchestrator is multi-job-safe (one async task per job),
+        # so distinct keys never collide. Cleanup happens in the
+        # terminal-emit helper to avoid leaking entries on long-lived
+        # daemon processes.
+        self._path_by_job: dict[str, str] = {}
+        self._started_mono_by_job: dict[str, float] = {}
 
     def job_dir(self, job_id: str) -> Path:
         """Return ``<data_dir>/voice_calibration/<job_id>/``."""
@@ -140,6 +171,9 @@ class WizardOrchestrator:
             updated_at_utc=now,
         )
         self._emit_state(state, tracker)
+        # v0.30.24 T3.8: stash job start time for the spec-aligned
+        # `completed` event's duration_s field.
+        self._started_mono_by_job[job_id] = time.monotonic()
         # Telemetry: job lifecycle start. Closed-enum cardinality: only
         # mind_id is high-cardinality and we hash it (mission spec D7
         # bounded telemetry). job_id == mind_id in v0.30.16+ so we
@@ -182,12 +216,23 @@ class WizardOrchestrator:
             return failed
 
     def _emit_terminal_telemetry(self, state: WizardJobState) -> None:
-        """Emit voice.calibration.wizard.terminal at the end of every job.
+        """Emit terminal telemetry for one job.
 
-        Closed-enum cardinality: status, fallback_reason, triage_winner_hid
-        are all from finite sets (12 statuses, ~5 fallback reasons, 10
-        hypotheses). job_id + mind_id are operator-specific but bounded
-        per-host. error_summary is NOT included to avoid unbounded
+        Two emission layers:
+
+        1. ``voice.calibration.wizard.terminal`` -- the legacy fine-
+           grained one-line summary. Operators with v0.30.18+ dashboards
+           keyed on this name keep working.
+        2. The spec §8.3 dispatch: one of
+           ``voice.calibration.wizard.completed`` /
+           ``voice.calibration.wizard.cancelled`` /
+           ``voice.calibration.wizard.fallback_triggered`` depending
+           on the terminal status. Field shapes mirror the spec
+           verbatim for cross-deployment OTel filtering.
+
+        Closed-enum cardinality preserved on every dispatch: status,
+        fallback_reason, triage_winner_hid, path are all from finite
+        sets. error_summary is NOT included to avoid unbounded
         cardinality from arbitrary error text.
         """
         logger.info(
@@ -197,6 +242,88 @@ class WizardOrchestrator:
             status=state.status.value,
             triage_winner_hid=state.triage_winner_hid or "",
             fallback_reason=state.fallback_reason or "",
+        )
+
+        # v0.30.24 T3.8: spec §8.3 dispatch.
+        path = self._path_by_job.pop(state.job_id, "unknown")
+        started_mono = self._started_mono_by_job.pop(state.job_id, None)
+        duration_s = (
+            round(time.monotonic() - started_mono, 3) if started_mono is not None else 0.0
+        )
+
+        if state.status is WizardStatus.DONE:
+            logger.info(
+                "voice.calibration.wizard.completed",
+                job_id=state.job_id,
+                mind_id=state.mind_id,
+                path=path,
+                duration_s=duration_s,
+                success=True,
+                triage_winner_hid=state.triage_winner_hid or "",
+            )
+        elif state.status is WizardStatus.CANCELLED:
+            logger.info(
+                "voice.calibration.wizard.cancelled",
+                job_id=state.job_id,
+                mind_id=state.mind_id,
+                path=path,
+                duration_s=duration_s,
+                # Step at which cancel was honoured -- the orchestrator
+                # checkpoints + transitions to CANCELLED with the
+                # current_stage_message preserving prior status info.
+                step=_terminal_step_label(state),
+            )
+        elif state.status is WizardStatus.FALLBACK:
+            logger.info(
+                "voice.calibration.wizard.fallback_triggered",
+                job_id=state.job_id,
+                mind_id=state.mind_id,
+                path=path,
+                duration_s=duration_s,
+                reason=state.fallback_reason or "unspecified",
+            )
+        elif state.status is WizardStatus.FAILED:
+            # Spec §8.3 doesn't list a "failed" event but the operator
+            # contract still benefits from the same shape -- treat
+            # FAILED like a `completed{success=False}` for symmetry.
+            logger.info(
+                "voice.calibration.wizard.completed",
+                job_id=state.job_id,
+                mind_id=state.mind_id,
+                path=path,
+                duration_s=duration_s,
+                success=False,
+                triage_winner_hid=state.triage_winner_hid or "",
+            )
+
+    def _emit_step_entered(self, state: WizardJobState, *, step: str) -> None:
+        """Emit ``voice.calibration.wizard.step_entered`` per spec §8.3.
+
+        Closed enum for ``step``: probe | fast_path | slow_path |
+        review | fallback. Fired at the FIRST transition into each
+        major step (not on intermediate sub-states like
+        FAST_PATH_VALIDATE which are part of the same step).
+        """
+        logger.info(
+            "voice.calibration.wizard.step_entered",
+            job_id=state.job_id,
+            mind_id=state.mind_id,
+            step=step,
+        )
+
+    def _emit_path_chosen(self, state: WizardJobState, *, path: str) -> None:
+        """Emit ``voice.calibration.wizard.path_chosen`` per spec §8.3.
+
+        Closed enum for ``path``: fast | slow | fallback. Fired
+        exactly once per job, immediately after the orchestrator
+        decides which branch to take (after fingerprint + KB lookup).
+        """
+        self._path_by_job[state.job_id] = path
+        logger.info(
+            "voice.calibration.wizard.path_chosen",
+            job_id=state.job_id,
+            mind_id=state.mind_id,
+            path=path,
         )
 
     def _emit_state(self, state: WizardJobState, tracker: WizardProgressTracker) -> None:
@@ -241,6 +368,7 @@ class WizardOrchestrator:
             message=_PROBING_MSG,
         )
         self._emit_state(state, tracker)
+        self._emit_step_entered(state, step="probe")
         fingerprint = await asyncio.to_thread(capture_fingerprint)
 
         if self._is_cancelled(job_id):
@@ -256,6 +384,7 @@ class WizardOrchestrator:
             fingerprint_hash=fingerprint.fingerprint_hash,
         )
         if cached_profile is not None:
+            self._emit_path_chosen(state, path="fast")
             return await self._run_fast_path(
                 job_id=job_id,
                 state=state,
@@ -265,6 +394,7 @@ class WizardOrchestrator:
             )
 
         # Stage 2: SLOW_PATH_DIAG -- run full diag (--non-interactive).
+        self._emit_path_chosen(state, path="slow")
         state = self._transition(
             state,
             status=WizardStatus.SLOW_PATH_DIAG,
@@ -272,6 +402,7 @@ class WizardOrchestrator:
             message=_SLOW_PATH_DIAG_MSG,
         )
         self._emit_state(state, tracker)
+        self._emit_step_entered(state, step="slow_path")
         try:
             diag_result = await asyncio.to_thread(
                 run_full_diag,
@@ -402,6 +533,7 @@ class WizardOrchestrator:
             message=_FAST_PATH_LOOKUP_MSG,
         )
         self._emit_state(state, tracker)
+        self._emit_step_entered(state, step="fast_path")
 
         if self._is_cancelled(job_id):
             return self._emit_cancelled(state, tracker)
@@ -495,6 +627,10 @@ class WizardOrchestrator:
         reason: str,
         summary: str,
     ) -> WizardJobState:
+        # v0.30.24 T3.8: spec §8.3 reclassifies the chosen path as
+        # "fallback" since the operator's UX surface flips to the
+        # legacy wizard. Override any prior path_chosen=fast/slow.
+        self._path_by_job[state.job_id] = "fallback"
         fallback = self._transition(
             state,
             status=WizardStatus.FALLBACK,
@@ -504,6 +640,7 @@ class WizardOrchestrator:
             error_summary=summary,
         )
         self._emit_state(fallback, tracker)
+        self._emit_step_entered(fallback, step="fallback")
         return fallback
 
     def _transition(

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -539,3 +540,126 @@ class TestOrchestratorFailures:
             result = await orch.run(job_id="testjob", mind_id="default")
         assert result.status == WizardStatus.FAILED
         assert "synth bug" in (result.error_summary or "")
+
+
+# ====================================================================
+# v0.30.24 T3.8: spec §8.3 wizard telemetry alignment
+# ====================================================================
+
+
+def _capture_wizard_logger() -> tuple[list[tuple[str, dict[str, Any]]], object]:
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    class _Cap:
+        def info(self, event: str, **kwargs: Any) -> None:
+            events.append((event, kwargs))
+
+        def warning(self, event: str, **kwargs: Any) -> None:
+            events.append((event, kwargs))
+
+        def exception(self, event: str, **kwargs: Any) -> None:
+            events.append((event, kwargs))
+
+    original = wo.logger
+    wo.logger = _Cap()  # type: ignore[assignment]
+    return events, original
+
+
+def _restore_wizard_logger(original: object) -> None:
+    wo.logger = original  # type: ignore[assignment]
+
+
+class TestSpecTelemetryAlignment:
+    """voice.calibration.wizard.{step_entered, path_chosen, completed, ...}."""
+
+    async def test_slow_path_emits_step_entered_and_path_chosen_and_completed(
+        self, tmp_path: Path
+    ) -> None:
+        events, original = _capture_wizard_logger()
+        try:
+            orch = WizardOrchestrator(data_dir=tmp_path)
+            with (
+                patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+                patch.object(wo, "run_full_diag", return_value=_diag_result()),
+                patch.object(wo, "triage_tarball", return_value=_triage()),
+                patch.object(wo, "capture_measurements", return_value=_measurements()),
+                patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
+                patch.object(
+                    wo.CalibrationApplier,
+                    "apply",
+                    return_value=_apply_result(Path("/tmp/x.json")),
+                ),
+            ):
+                await orch.run(job_id="testjob", mind_id="default")
+        finally:
+            _restore_wizard_logger(original)
+
+        names = [e[0] for e in events]
+        assert "voice.calibration.wizard.step_entered" in names
+        assert "voice.calibration.wizard.path_chosen" in names
+        assert "voice.calibration.wizard.completed" in names
+
+        # path_chosen lands once with path="slow" (cache miss path).
+        chosen = [e for e in events if e[0] == "voice.calibration.wizard.path_chosen"]
+        assert len(chosen) == 1
+        assert chosen[0][1]["path"] == "slow"
+
+        # completed has success=True + path=slow + duration_s present.
+        completed = next(e for e in events if e[0] == "voice.calibration.wizard.completed")
+        assert completed[1]["success"] is True
+        assert completed[1]["path"] == "slow"
+        assert "duration_s" in completed[1]
+
+        # step_entered fires for "probe" + "slow_path".
+        steps = {e[1]["step"] for e in events if e[0] == "voice.calibration.wizard.step_entered"}
+        assert "probe" in steps
+        assert "slow_path" in steps
+
+    async def test_fast_path_emits_path_chosen_fast_and_completed(self, tmp_path: Path) -> None:
+        from sovyx.voice.calibration._kb_cache import store_profile
+
+        # Pre-seed the local KB so the orchestrator hits the fast path.
+        store_profile(_r10_profile(), data_dir=tmp_path)
+
+        events, original = _capture_wizard_logger()
+        try:
+            orch = WizardOrchestrator(data_dir=tmp_path)
+            with (
+                patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+                patch.object(
+                    wo.CalibrationApplier,
+                    "apply",
+                    return_value=_apply_result(Path("/tmp/x.json")),
+                ),
+            ):
+                await orch.run(job_id="testjob", mind_id="default")
+        finally:
+            _restore_wizard_logger(original)
+
+        chosen = [e for e in events if e[0] == "voice.calibration.wizard.path_chosen"]
+        assert len(chosen) == 1
+        assert chosen[0][1]["path"] == "fast"
+
+        steps = {e[1]["step"] for e in events if e[0] == "voice.calibration.wizard.step_entered"}
+        assert "fast_path" in steps
+
+    async def test_fallback_emits_fallback_triggered(self, tmp_path: Path) -> None:
+        events, original = _capture_wizard_logger()
+        try:
+            orch = WizardOrchestrator(data_dir=tmp_path)
+            with (
+                patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+                patch.object(wo, "run_full_diag", side_effect=DiagPrerequisiteError("no bash")),
+            ):
+                await orch.run(job_id="testjob", mind_id="default")
+        finally:
+            _restore_wizard_logger(original)
+
+        triggered = next(
+            (e for e in events if e[0] == "voice.calibration.wizard.fallback_triggered"),
+            None,
+        )
+        assert triggered is not None
+        assert triggered[1]["reason"] == "diag_prerequisite_unmet"
+        # Path is reclassified to fallback even though slow was chosen first.
+        assert triggered[1]["path"] == "fallback"
