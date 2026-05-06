@@ -418,29 +418,27 @@ class _LoadMode(StrEnum):
     STRICT = "strict"
 
 
-def load_calibration_profile(
+def _read_and_migrate_profile_dict(
     *,
     data_dir: Path,
     mind_id: str,
-    mode: _LoadMode = _LoadMode.LENIENT,
-) -> CalibrationProfile:
-    """Load a persisted calibration profile.
+) -> tuple[dict[str, Any], Path]:
+    """Read JSON + migrate to current schema; return (raw_dict, path).
 
-    Args:
-        data_dir: Sovyx data directory.
-        mind_id: The mind whose profile to load.
-        mode: ``LENIENT`` (default in v0.30.15-16) accepts unsigned
-            profiles with a WARN; ``STRICT`` (default flip in
-            v0.30.17) raises on unsigned or invalid signatures.
-
-    Returns:
-        The frozen :class:`CalibrationProfile`.
-
-    Raises:
-        CalibrationProfileLoadError: file missing, malformed JSON,
-            unknown ``schema_version``, missing required fields, or
-            (in STRICT) missing/invalid signature.
+    Shared spine of :func:`load_calibration_profile` and
+    :func:`inspect_migrated_profile_dict`: both need the
+    file-existence check, JSON parse, and migration walk; only the
+    post-migration step (construct frozen profile + signature gate
+    vs. return the dict) differs.
     """
+    # Local import: _migrations imports from this module (the error
+    # type), so the cycle is broken by deferring the registry import
+    # to call time.
+    from sovyx.voice.calibration._migrations import (  # noqa: PLC0415
+        CalibrationProfileMigrationError,
+        migrate_to_current,
+    )
+
     path = profile_path(data_dir=data_dir, mind_id=mind_id)
     if not path.is_file():
         raise CalibrationProfileLoadError(
@@ -464,13 +462,78 @@ def load_calibration_profile(
             f"calibration profile at {path} has missing or non-int schema_version "
             f"(got {schema_version!r}); explicit migration required"
         )
-    if schema_version != CALIBRATION_PROFILE_SCHEMA_VERSION:
-        raise CalibrationProfileLoadError(
-            f"calibration profile at {path} has schema_version={schema_version} but "
-            f"this Sovyx supports schema_version={CALIBRATION_PROFILE_SCHEMA_VERSION}; "
-            f"upgrade Sovyx OR regenerate the profile via "
-            f"`sovyx doctor voice --calibrate`"
+    # P5 (v0.30.33): walk the migration chain when the profile's
+    # schema_version is older than the runtime's. The walker is a
+    # no-op when versions match. CalibrationProfileMigrationError
+    # subclasses CalibrationProfileLoadError, so existing operator
+    # surfaces (CLI exit codes, dashboard error rendering) treat it
+    # uniformly with other load failures.
+    try:
+        raw = migrate_to_current(
+            raw,
+            target_version=CALIBRATION_PROFILE_SCHEMA_VERSION,
+            path=path,
         )
+    except CalibrationProfileMigrationError as exc:
+        logger.error(
+            "voice.calibration.profile.migration_failed",
+            mind_id_hash=_short_hash(mind_id),
+            from_version=exc.source_version,
+            to_version=exc.target_version,
+            step=exc.step_failed or "unknown",
+        )
+        raise
+    return raw, path
+
+
+def inspect_migrated_profile_dict(
+    *,
+    data_dir: Path,
+    mind_id: str,
+) -> dict[str, Any]:
+    """Return the migrated raw dict WITHOUT constructing a profile.
+
+    Operator inspection mode (P5 v0.30.33+): triage "what does my
+    pre-migration profile look like after the v1→v2 reshape?" without
+    committing to the new shape or running the signature gate.
+
+    Skips ``_profile_from_dict`` + signature verification; the dict is
+    suitable for re-serialising into a JSON file the operator can
+    diff against the original on disk. The caller is responsible for
+    not mistaking the inspection result for a fully-validated profile.
+    """
+    raw, _path = _read_and_migrate_profile_dict(data_dir=data_dir, mind_id=mind_id)
+    return raw
+
+
+def load_calibration_profile(
+    *,
+    data_dir: Path,
+    mind_id: str,
+    mode: _LoadMode = _LoadMode.LENIENT,
+) -> CalibrationProfile:
+    """Load a persisted calibration profile.
+
+    Args:
+        data_dir: Sovyx data directory.
+        mind_id: The mind whose profile to load.
+        mode: ``LENIENT`` (default in v0.30.15-32) accepts unsigned
+            profiles with a WARN; ``STRICT`` raises on unsigned or
+            invalid signatures.
+
+    Returns:
+        The frozen :class:`CalibrationProfile`.
+
+    Raises:
+        CalibrationProfileLoadError: file missing, malformed JSON,
+            missing required fields, or (in STRICT) missing/invalid
+            signature.
+        CalibrationProfileMigrationError: profile claims a
+            schema_version the migration registry can't bridge to
+            the runtime's :data:`CALIBRATION_PROFILE_SCHEMA_VERSION`
+            (subclass of CalibrationProfileLoadError).
+    """
+    raw, path = _read_and_migrate_profile_dict(data_dir=data_dir, mind_id=mind_id)
 
     try:
         profile = _profile_from_dict(raw)

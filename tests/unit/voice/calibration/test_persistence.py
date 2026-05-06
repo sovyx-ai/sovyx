@@ -232,11 +232,15 @@ class TestSchemaVersionGate:
         with pytest.raises(CalibrationProfileLoadError, match="missing or non-int schema_version"):
             load_calibration_profile(data_dir=tmp_path, mind_id="default")
 
-    def test_unknown_schema_version_raises(self, tmp_path: Path) -> None:
+    def test_future_schema_version_raises(self, tmp_path: Path) -> None:
+        # P5 v0.30.33: v999 > runtime's v1 → migration walker rejects
+        # downgrade attempt with a typed CalibrationProfileMigrationError
+        # (subclass of CalibrationProfileLoadError; existing surfaces
+        # treat both uniformly).
         path = tmp_path / "default" / "calibration.json"
         path.parent.mkdir(parents=True)
         path.write_text('{"schema_version": 999}')
-        with pytest.raises(CalibrationProfileLoadError, match="schema_version=999"):
+        with pytest.raises(CalibrationProfileLoadError, match="downgrade not supported"):
             load_calibration_profile(data_dir=tmp_path, mind_id="default")
 
 
