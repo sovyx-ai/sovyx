@@ -6,7 +6,123 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.10 below)
+(none — every shipped delta is in v0.31.0-rc.11 below)
+
+## [0.31.0-rc.11] — 2026-05-06
+
+Final-audit pre-GA round on top of v0.31.0-rc.10. A 4-agent
+end-to-end audit (15 EIXOS spanning happy-path / cross-platform /
+error-paths / signing / telemetry / perf / a11y / docs / tests /
+quality-gates) found two operator-blocking gaps that survived
+rc.10's operator-UX paranoid round:
+
+1. **EIXO 2 — cross-platform gate missing.** The dashboard's
+   calibration wizard mounted on Windows / macOS regardless of the
+   underlying bash diag toolkit being Linux-only
+   (``voice/diagnostics/_runner.py:_check_prerequisites`` raises
+   ``DiagPrerequisiteError`` on non-Linux). Operators on those
+   platforms saw the wizard mount, clicked Start, and silently fell
+   through to a FALLBACK terminal — exactly the "dor de cabeça" the
+   rc.10 contract was supposed to eliminate.
+2. **EIXO 1 + EIXO 15 — doc/code drift.** ``getting-started.md``
+   said "the dashboard's onboarding flow surfaces it automatically",
+   ambiguous enough that operators expected zero-click auto-run when
+   the wizard actually requires a "Start calibration" click on the
+   onboarding Voice step. Separately, ``docs/configuration.md``
+   still documented ``calibration_wizard_enabled`` as default OFF,
+   stale since rc.10's flip to default ON.
+
+rc.11 closes both with enterprise-grade fixes (no doc-only
+band-aids on the cross-platform gap; no UI-only band-aids on the
+docs).
+
+### Fixed
+
+- **Fix #1 (CRITICAL — operator-blocking) — backend platform-aware
+  feature-flag gate.** ``GET /api/voice/calibration/feature-flag``
+  now returns a third field ``platform_supported: bool`` (computed
+  from ``sys.platform == "linux"``). Schema-additive + defaults to
+  True via the zod ``.optional().default(true)`` contract so
+  pre-rc.11 daemons continue to work. Frontend (``VoiceStep.tsx``)
+  now gates the calibration wizard mount on the conjunction
+  ``enabled AND platform_supported``; on non-Linux daemons the
+  legacy ``<HardwareDetection />`` flow runs as the cross-platform
+  fallback, with a small banner above it explaining the limitation
+  + pointing the operator at the simple device-test setup. The
+  banner is gated on ``enabled && !platform_supported`` so
+  operators who never asked for the wizard don't see a noisy
+  notice. Backend tests: 4 new cases in
+  ``test_voice_calibration_t3_2.py::TestFeatureFlagEndpoints``
+  (Linux-True / Windows-False / macOS-False / no-engine-config-also-
+  carries-field). Frontend tests: 4 new cases in
+  ``VoiceStep.test.tsx`` (mount-blocked-on-unsupported / banner-
+  rendered-when-enabled-but-unsupported / banner-absent-when-
+  supported / banner-absent-when-no-operator-intent / pre-rc.11-
+  back-compat-defaults-to-supported). i18n: new
+  ``calibration.platformUnsupported.{title,body}`` keys in en, pt-
+  BR, es. Anti-pattern reference: this is the same "boundary check
+  before downstream operation fails" pattern as anti-pattern #28
+  (cold probe must validate signal energy, not just callback count)
+  — surface the limitation upfront, not after the operator has
+  already invested intent.
+
+- **Fix #2 — getting-started.md voice section honest about the
+  click step + non-Linux UX.** The "Voice not working? Auto-fix it
+  (Linux)" section now explicitly says the dashboard "mounts the
+  calibration wizard automatically with a 'Start calibration'
+  button on the Voice step (one click, then it runs unattended)"
+  instead of the ambiguous "surfaces it automatically". A new
+  paragraph documents the cross-platform contract: on Win/macOS the
+  dashboard skips the wizard and shows the simple device-test setup
+  instead, so operators on those platforms still get a guided path
+  without surprise FALLBACK transitions.
+
+- **Fix #3 — configuration.md sync with rc.10 default + Fix #1
+  cross-platform contract.** The "Voice calibration wizard" section
+  now documents ``calibration_wizard_enabled: true`` as the default
+  (post-rc.10), the env override toggles to OFF (was misleadingly
+  documented as ON), and a new "Cross-platform behaviour"
+  subsection explains the ``platform_supported`` field, the
+  ``enabled AND platform_supported`` frontend gate, and the
+  Linux-only CLI semantics. Operators reading ``configuration.md``
+  before deploying v0.31.0 GA now see the actual runtime defaults +
+  understand why flipping ``calibration_wizard_enabled`` on a
+  Win/macOS daemon doesn't mount the wizard.
+
+### Quality gates
+
+- ``uv lock --check`` — clean (lockfile regenerated for the version
+  bump 0.31.0-rc.10 → 0.31.0-rc.11).
+- ``uv run ruff check src/ tests/`` — clean.
+- ``uv run ruff format --check src/ tests/`` — clean (1099 files).
+- ``uv run mypy src/`` — Success: no issues found in 512 source
+  files.
+- ``uv run bandit -r src/sovyx/ --configfile pyproject.toml`` —
+  zero LOW/MEDIUM/HIGH (unchanged from rc.10).
+- ``uv run python -m pytest tests/ --ignore=tests/smoke
+  --timeout=30`` — all green (rc.11 adds 4 new cases to
+  ``TestFeatureFlagEndpoints``; total count grows from 14507 →
+  14511).
+- ``cd dashboard && npx tsc -b tsconfig.app.json`` — clean.
+- ``cd dashboard && npx vitest run`` — 1219 passed (rc.11 adds 5
+  new cases to ``VoiceStep.test.tsx``).
+
+### Decision: rc.11, not GA
+
+The cross-platform gap was operator-blocking on every Win/macOS
+dashboard and would have shipped to GA without this round. Given
+the gap is large enough to require a behaviour change (new schema
+field + new frontend gate path), shipping it as rc.11 + waiting
+for one more operator-validation pass before tagging GA matches
+``feedback_staged_adoption`` (real changes go through one
+validation pass even when they look mechanical) and
+``feedback_validation_batching`` (operator validation milestones
+gate GA tags).
+
+After rc.11 stabilises and the operator validates on the canonical
+Sony VAIO + a Windows host (per the long-standing
+``project_voice_calibration_p7_shipped_v0_31_0_rc_1.md`` gate),
+v0.31.0 GA is unblocked.
 
 ## [0.31.0-rc.10] — 2026-05-06
 
