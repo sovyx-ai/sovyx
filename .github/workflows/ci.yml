@@ -126,6 +126,21 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: brew install portaudio
+      # macOS-default bash is Apple's GPL-2 fork pinned at 3.2 (1995-era
+      # syntax). The Sovyx voice-diag bash toolkit (``common.sh``)
+      # uses ``mapfile`` (bash 4+); ``_runner.py:_check_prerequisites``
+      # already raises ``DiagPrerequisiteError`` at runtime when
+      # ``bash --version`` reports < 4. Install Homebrew bash 5+ on
+      # macOS CI so the same guarantee holds in tests + the bash-
+      # specific test suite (``test_bash_only_flag.py``) actually
+      # runs and validates the contract on macOS instead of being
+      # skipped. ``brew install bash`` puts ``/opt/homebrew/bin/bash``
+      # on the PATH ahead of ``/bin/bash`` so ``shutil.which("bash")``
+      # in tests resolves to the new one.
+      - name: Install bash 4+ (macOS default is 3.2)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install bash
       - uses: ./.github/actions/setup-sovyx-python
         with:
           python-version: ${{ matrix.python-version }}

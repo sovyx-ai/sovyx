@@ -48,26 +48,21 @@ from sovyx.voice.diagnostics import (
     TriageResult,
 )
 
-# Rich renders Click error messages with ANSI escape codes on Linux/macOS
-# CI runners (TTY-detected) but not on the local Windows shell. The codes
-# split words like ``--show`` into ``-`` + ANSI + ``-show``, breaking
-# naive substring assertions. Strip them before content checks.
+# Rich colour + wrap normalisation lives in tests/conftest.py
+# (NO_COLOR=1 + COLUMNS=240 set at session start). CliRunner inherits
+# it; output is plain ASCII, no ANSI escapes, no 80-col wrap.
+# ``_strip_ansi`` is kept as a NO-OP shim for the few callers that
+# already accept defensive normalisation, so we don't churn 8+ test
+# bodies for zero behaviour change.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-# rc.16 — Rich also wraps long error-panel content at the terminal width
-# (default 80 cols on CI Linux). The wrap inserts box-drawing characters
-# (``│`` U+2502, ``╮`` U+256E, ``╯`` U+256F, etc.) that survive whitespace
-# stripping and split path filenames across lines (e.g.
-# ``no_such_key.p│em`` instead of ``no_such_key.pem``). Strip them too
-# so substring assertions on filenames work regardless of CI terminal
-# width. Local Windows runs don't reproduce because the Click CliRunner
-# uses a different default Console width on Windows.
-_BOX_DRAWING_RE = re.compile(r"[─-╿]")
 
 
 def _strip_ansi(text: str) -> str:
-    """Strip ANSI escape codes AND Rich box-drawing chars (rc.16)."""
-    return _BOX_DRAWING_RE.sub("", _ANSI_RE.sub("", text))
+    """Defensive ANSI strip; conftest sets NO_COLOR=1 so this is now
+    a no-op on any well-behaved CliRunner output. Kept so existing
+    callers don't need a churn-edit + so a future Rich variant that
+    ignores NO_COLOR won't silently break the assertions."""
+    return _ANSI_RE.sub("", text)
 
 
 runner = CliRunner()

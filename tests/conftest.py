@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 import tempfile
@@ -13,6 +14,34 @@ from hypothesis import HealthCheck, settings
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+# ── Click/Typer Rich-rendering normalization (CI cross-platform) ───────────
+# Rationale (replaces the rc.16 per-test ANSI/box-drawing strip
+# band-aids): every test that runs ``CliRunner().invoke(...)`` and asserts
+# on ``result.output`` is sensitive to Rich's TTY-detected colour codes
+# (``--full-diag`` rendered as ``-`` + ANSI + ``-full`` + ANSI + ``-diag``)
+# AND to Rich's terminal-width wrapping (long paths split by box-drawing
+# ``│`` U+2502 chars). On Linux/macOS CI runners those features are
+# active; on local Windows shells they aren't. The diff broke
+# ``test_calibrate_flag_help`` + ``test_signing_key_missing_path`` for
+# 5 RCs.
+#
+# rc.16 fixed it via post-strip in 2 individual tests — but per
+# ``feedback_enterprise_only`` that's symptom-fix, not cause-fix.
+# This session-level setdefault is the upstream fix: sourced ONCE,
+# every ``CliRunner.invoke`` call inherits it, future tests get the
+# discipline for free. ``setdefault`` so an individual test that
+# WANTS the colour/wrap behaviour (testing TTY rendering itself)
+# can override locally via ``CliRunner.invoke(..., env={...})``.
+#
+# * ``NO_COLOR=1`` — disables Rich/Click colour output (POSIX
+#   ``no-color`` standard, https://no-color.org).
+# * ``COLUMNS=240`` — wide terminal so Rich doesn't wrap error
+#   panels at 80 cols + insert box-drawing chars that split words
+#   like filenames across lines.
+os.environ.setdefault("NO_COLOR", "1")
+os.environ.setdefault("COLUMNS", "240")
 
 # ── Hypothesis global profile ──────────────────────────────────────────────
 # deadline=None prevents flaky failures when the host is under load

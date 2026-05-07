@@ -36,20 +36,7 @@ _BASH_BIN = shutil.which("bash")
 
 
 def _bash_major_version() -> int:
-    """Return the installed bash's major version, or 0 on failure / absence.
-
-    rc.16 (macOS CI gate): GitHub Actions ``macos-latest`` ships Apple's
-    bash 3.2 by default, but ``common.sh`` uses ``mapfile`` (bash 4+).
-    Sourcing ``common.sh`` on bash 3.2 emits a syntax error, leaving
-    ``_cleanup`` undefined — so ``test_cleanup_removes_prompts_err_file``
-    fails because ``(_cleanup)`` is "command not found" + the file
-    survives. The diag toolkit's own ``_check_prerequisites`` ALREADY
-    requires bash 4+ (``_runner.py:535``), so testing it on bash 3.2
-    tests something that cannot run in production anyway.
-
-    Mirrors the helper in :mod:`sovyx.voice.diagnostics._runner` so the
-    test gate matches the runtime gate exactly.
-    """
+    """Return the installed bash's major version, or 0 on failure / absence."""
     if _BASH_BIN is None:
         return 0
     try:
@@ -72,12 +59,23 @@ def _bash_major_version() -> int:
 
 _BASH_MAJOR = _bash_major_version()
 
+# Skip when bash is absent or too old. Bash 4+ is the runtime gate
+# (mirrors ``_runner.py:_check_prerequisites``) AND a hard requirement
+# for ``common.sh:688,697`` (``mapfile`` syntax).
+#
+# CI cross-platform: every runner — Linux, Windows-with-git-bash,
+# macOS-with-``brew install bash`` — ships bash 4+. The skip only fires
+# on the literal "macOS default install" scenario where the operator
+# never installed homebrew bash, which is also exactly where the
+# product won't run in production. The .github/workflows/*.yml jobs
+# install bash 4+ explicitly on macOS (``brew install bash``) so the
+# CI test ALWAYS runs + validates the contract on every platform.
 pytestmark = pytest.mark.skipif(
     _BASH_BIN is None or _BASH_MAJOR < 4,
     reason=(
-        "bash 4+ required (matches the runtime gate in "
-        "_runner.py:_check_prerequisites). macOS-latest ships bash 3.2 "
-        "by default, which can't parse mapfile in common.sh"
+        "bash 4+ required (matches runtime gate in "
+        "_runner.py:_check_prerequisites). CI runners install bash 4+ "
+        "via brew on macOS; this skip only fires on un-provisioned hosts."
     ),
 )
 

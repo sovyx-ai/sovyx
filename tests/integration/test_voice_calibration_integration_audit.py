@@ -232,22 +232,18 @@ class TestCLISurface:
     """Every documented --calibrate flag is parseable."""
 
     def test_calibrate_flag_help_lists_all_options(self) -> None:
-        import re
-
         from typer.testing import CliRunner
 
         from sovyx.cli.main import app
 
-        # rc.16: strip ANSI before substring asserts. CI Linux runners
-        # have TTY-detection that makes Rich emit colour codes inside
-        # flag names ("``--``" → "``-``+ANSI+``-``"), breaking the
-        # naïve substring check. Local Windows shells don't trigger
-        # the colour path so the test passed locally but failed on CI.
-        ansi_re = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+        # Rich colour + wrap normalisation lives in tests/conftest.py
+        # (NO_COLOR=1 + COLUMNS=240 set at session start). CliRunner
+        # inherits it; output is plain ASCII, no ANSI escapes, no
+        # 80-col wrap. Substring asserts work cross-platform without
+        # post-strip helpers.
         runner = CliRunner()
         result = runner.invoke(app, ["doctor", "voice", "--help"])
         assert result.exit_code == 0
-        plain_output = ansi_re.sub("", result.output)
         for flag in (
             "--full-diag",
             "--calibrate",
@@ -263,7 +259,7 @@ class TestCLISurface:
             "--signing-key",
             "--evaluate-rules",
         ):
-            assert flag in plain_output, f"--help is missing documented flag {flag!r}"
+            assert flag in result.output, f"--help is missing documented flag {flag!r}"
 
 
 # ════════════════════════════════════════════════════════════════════
