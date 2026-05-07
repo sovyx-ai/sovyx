@@ -6,7 +6,100 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.9 below)
+(none — every shipped delta is in v0.31.0-rc.10 below)
+
+## [0.31.0-rc.10] — 2026-05-06
+
+Operator-UX paranoid round on top of v0.31.0-rc.9. The rc.9 sweep
+closed 4 bug classes (signed claims, orphan i18n, stale docstrings,
+misattributed comments) but the 4-agent re-validation found that the
+SYSTEM still failed the operator-experience gate the operator
+mandated: "garante que o sistema esteja funcionando impecavelmente e
+o sistema seja inteligente o suficiente pra se auto ajustar/arrumar".
+Five operator-blocking gaps remained: a CRITICAL feature-flag default
+that left the auto-fix wizard hidden, a noisy "could not be signed"
+banner shown unconditionally on the default path, dashboard copy that
+punted operators to the CLI, raw HypothesisId tokens (`H10`, `H1`)
+shown to non-technical operators, and ~100 lines of dev/cryptographic
+reference dropped into `getting-started.md`. rc.10 closes all five
+under full Claude responsibility per the operator's autonomous-
+execution directive.
+
+### Fixed
+
+- **Fix #1 (CRITICAL — operator-blocking) — `calibration_wizard_enabled`
+  default flipped False → True.** `engine/config.py:2528` shipped at
+  False since v0.30.14 with a docstring promising "soak-window default
+  flip in v0.30.x" — the soak window has long passed (v0.31.0 GA-rc),
+  but the default never moved. Effect: every fresh-install dashboard
+  hid the auto-fix wizard from operators behind a config edit they
+  had no reason to know about. Now: dashboard mounts the calibration
+  wizard automatically on first boot, exactly as the rc.10 operator-
+  experience contract requires. Two `tests/dashboard/test_voice_
+  calibration_t3_2.py::TestFeatureFlagEndpoints` cases were updated
+  to match the new default + cover the realistic "operator opts out"
+  override path.
+
+- **Fix #2 — `ApplyResult.signed_intent` plumbed; unsigned banner is
+  silent on default path.** rc.6 audit had documented a renderer that
+  printed `[!] could not be signed` whenever `signed=False`, even when
+  the operator never asked for signing in the first place (no
+  `--signing-key` passed). rc.10 adds `signed_intent: bool | None` to
+  `ApplyResult` (set to `signing_key_path is not None` at apply time),
+  and `cli/commands/doctor.py:1083+` now renders three branches: green
+  ✓ when signed=True, yellow `[!]` warning ONLY when signed=False AND
+  signed_intent=True (operator asked + signing failed), and ABSENT
+  output otherwise. Default-path operators no longer see a warning
+  about a feature they didn't request.
+
+- **Fix #3 — Dashboard `decision_explanation` rewritten in plain
+  language; no longer punts to CLI.** All three locale files
+  (`en/voice.json`, `pt-BR/voice.json`, `es/voice.json`) had copy that
+  said "see `sovyx doctor voice --calibrate --explain`" — exactly the
+  CLI escape hatch operators were trying to avoid. Replaced with a
+  short pointer to **Settings → Voice** (the same UI the operator is
+  already in), so the dashboard remains the single front door.
+
+- **Fix #4 — Typer CLI `--help` text rewritten to operator-action
+  language.** `cli/commands/doctor.py` `--calibrate`, `--explain`,
+  `--show`, `--rollback`, `--surgical`, `--signing-key`, and
+  `--evaluate-rules` help strings + the top docstring all moved away
+  from technical jargon ("triage rule registry / Ed25519 / fallback
+  reasons") toward operator action ("Run an automatic 8–12 minute
+  hardware tune-up..."). Power-user / contributor reference still
+  lives at `docs/modules/voice-calibration.md`.
+
+- **Fix #5 — Friendly labels for `HypothesisId` (H1, H4, H5, H6, H9,
+  H10).** `dashboard/src/components/onboarding/voice-calibration/
+  _ProfileReview.tsx` was rendering the raw HID token (`H10`)
+  into the operator-facing winner banner. rc.10 adds a
+  `calibration.hypothesis.{H1..H10}` block to all three locales and
+  the component now interpolates `t('calibration.hypothesis.H10')`
+  with `defaultValue` fallback to the raw HID. Non-technical
+  operators see "Microphone volume was set too low at the system
+  level" instead of "H10". The `subcomponents.test.tsx` regression
+  test was migrated to assert on the friendly label.
+
+- **Fix #6 — `getting-started.md` voice section pruned to operator
+  pitch.** The rc.9 commit had backed in ~100 lines of dev/crypto
+  reference (CalibrationProfile schema, Ed25519 signing model, ASCII
+  flow diagrams, fallback reasons, signing-mode FAQ) onto
+  `docs/getting-started.md`. rc.10 strips that to a single operator-
+  pitch section ("Voice not working? Auto-fix it (Linux)" — 1 command
+  + recovery options + a one-liner pointing developers to the deep
+  reference at `docs/modules/voice-calibration.md`).
+
+### Quality gates
+
+- `uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30` —
+  14507 passed, 26 skipped, 68 deselected (2 t3_2 feature-flag cases
+  migrated to new default, 1 reference test added for explicit-False
+  override).
+- `npx vitest run` — all dashboard suites green (1214 passed after
+  migrating one HID-rendering assertion to the friendly-label
+  contract).
+- `uv run ruff check src/ tests/` — clean.
+- `uv lock --check` — clean.
 
 ## [0.31.0-rc.9] — 2026-05-06
 
