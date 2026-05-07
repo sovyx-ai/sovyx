@@ -16,12 +16,19 @@ This module:
    counterpart of mixer KB's YAML ``canonical_payload``. Identical
    contract: the verifier and the signer agree on the bytes-to-sign.
 
-Signing capability (key generation + ``sign_calibration_payload``)
-ships in T2.13's pre-tag-v0.30.15 hardening commit, NOT here. v0.30.15
-ships unsigned profiles by default in ``Mode.LENIENT`` so the
-persistence layer is exercised in production for one minor cycle
-before the STRICT default flip in v0.30.17 (per
-``feedback_staged_adoption``).
+Signing model (canonical narrative — single source of truth):
+
+* :data:`Mode.LENIENT` is the default loader mode in **v0.30.x and
+  v0.31.x**. Unsigned profiles are accepted with a structured WARN.
+* :data:`Mode.STRICT` is **opt-in** in v0.31.x via explicit
+  ``mode=Mode.STRICT`` argument to
+  :func:`sovyx.voice.calibration._persistence.load_calibration_profile`.
+* The **default flip** to STRICT is gated on **wizard-driven
+  Ed25519 signing-key generation** landing in the dashboard wizard
+  (planned v0.32.0+). Until then, only the dev-only
+  ``scripts/dev/generate_calibration_signing_key.py`` produces a
+  usable key — flipping STRICT default would break every existing
+  Sovyx install whose operator has not run that dev script.
 
 History: introduced in v0.30.15 as T2.7 of mission
 ``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 2.

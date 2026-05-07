@@ -14,9 +14,15 @@ identifies devices, the calibration fingerprint identifies hosts.
 Each ``_read_*`` helper is a pure function with bounded subprocess
 timeouts. On non-Linux hosts, Linux-specific fields fall back to
 sentinel values (``""``, ``0``, ``None``, ``()``); ``apo_active``/
-``apo_name`` and ``hal_interceptors`` ship empty for v0.30.15
-(Windows + macOS fingerprint extension lands when L3 wires the
-non-Linux setup wizard paths in v0.31.0).
+``apo_name`` and ``hal_interceptors`` ship empty by design.
+Non-Linux platforms are gated out of the calibration wizard at the
+dashboard layer (``platform_supported=False`` returned by
+:func:`sovyx.dashboard.routes.voice_calibration.get_calibration_feature_flag`),
+and the CLI ``--full-diag``/``--calibrate`` paths raise
+``DiagPrerequisiteError`` on non-Linux hosts. The unfilled
+non-Linux fields therefore never reach the rule engine; they exist
+only to keep the schema stable for forensic profiles imported
+across platforms.
 
 History: introduced in v0.30.15 as T2.2 of mission
 ``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 2.
@@ -103,8 +109,12 @@ def capture_fingerprint(*, captured_at_utc: str | None = None) -> HardwareFinger
         system_product=_read_system_product(),
         capture_card_count=_count_capture_cards(),
         capture_devices=_enumerate_capture_devices(),
-        # Win/macOS-specific interceptor fields ship empty in v0.30.15;
-        # L3 wires non-Linux setup paths in v0.31.0.
+        # Win/macOS-specific interceptor fields ship empty by design.
+        # Non-Linux platforms are gated out of the calibration wizard
+        # at the dashboard layer (platform_supported=False) and at the
+        # CLI layer (DiagPrerequisiteError); these fields exist only
+        # to keep the schema stable across cross-platform forensic
+        # imports.
         apo_active=False,
         apo_name=None,
         hal_interceptors=(),

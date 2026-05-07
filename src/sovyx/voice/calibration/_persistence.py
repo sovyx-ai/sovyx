@@ -6,25 +6,49 @@ rather than silently coercing or falling back, per anti-pattern #35
 (sentinel defaults must surface as errors). Migrations are explicit
 code changes, not runtime behaviour.
 
-Signing model (v0.30.15-17 staged adoption):
+Signing model (canonical narrative — single source of truth):
 
-* :data:`Mode.LENIENT` (default in v0.30.15-16): unsigned profiles
-  are accepted with a structured WARN
+* :data:`Mode.LENIENT` is the default loader mode in **v0.30.x and
+  v0.31.x**. Unsigned profiles are accepted with a structured WARN
   (``voice.calibration.profile.signature_missing``); profiles WITH a
   signature are verified, and rejection emits
-  ``voice.calibration.profile.signature_invalid`` but does not raise.
-* :data:`Mode.STRICT` (default flip in v0.30.17): unsigned profiles
-  raise :class:`CalibrationProfileLoadError`; verification failures
-  also raise. The flip lands after one minor cycle of
-  telemetry-validated lenient operation per the master mission's
-  staged-adoption discipline.
+  ``voice.calibration.profile.signature.invalid`` but does not raise.
+* :data:`Mode.STRICT` rejects unsigned profiles AND verification
+  failures. STRICT is **opt-in** as of v0.31.x via explicit
+  ``mode=Mode.STRICT`` argument to
+  :func:`load_calibration_profile`.
+* The **default flip** to STRICT is gated on **wizard-driven
+  Ed25519 signing-key generation**, planned for v0.32.0+. Until
+  that ships, flipping STRICT default would break every existing
+  Sovyx install (the only key-gen path today is
+  ``scripts/dev/generate_calibration_signing_key.py``, dev-only —
+  operators reading the public docs have no zero-friction path).
+* Operators who want STRICT operation today: pass
+  ``--signing-key <path>`` at calibrate time AND construct
+  :class:`CalibrationApplier` / call
+  :func:`load_calibration_profile` with ``mode=Mode.STRICT``
+  explicitly.
 
 Atomicity: ``save_calibration_profile`` writes to a sibling
 ``.calibration.json.tmp`` then ``os.replace`` to the final path so
-partial writes never corrupt the persisted state. The ``calibration.json``
-under ``<data_dir>/<mind_id>/`` is the canonical artifact; the
-:class:`CalibrationApplier` (T2.8) reads it on next mind start to
-replay applicable decisions.
+partial writes never corrupt the persisted state. The
+``calibration.json`` under ``<data_dir>/<mind_id>/`` is the canonical
+**audit artifact + KB cache feed** — it is consumed only by:
+
+* ``sovyx doctor voice --calibrate --show`` / ``--explain`` /
+  ``--inspect-migration`` operator inspection paths.
+* The wizard's FAST_PATH branch via :func:`sovyx.voice.calibration._kb_cache.lookup_profile`,
+  which replays a previously-stored profile within the wizard
+  without re-running the 8-12 min slow path.
+
+Cross-reboot persistence of actual mixer state is delegated to the
+bundled systemd unit
+(``packaging/systemd/sovyx-audio-mixer-persist.service`` + ALSA's
+``alsactl store``). The ``calibration.json`` is NOT auto-loaded at
+daemon startup — adding such a path would create a "two sources of
+truth" conflict with operator-side ``alsamixer`` adjustments. The
+ALSA / systemd boundary is the canonical state owner; the
+``calibration.json`` is the audit trail of how that state got there.
 
 History: introduced in v0.30.15 as T2.7 of mission
 ``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 2.
@@ -397,15 +421,15 @@ def save_calibration_profile(
     :func:`os.replace`s into the final path so partial writes never
     corrupt the persisted state.
 
-    Signing (P4 v0.30.32): when ``signing_key_path`` is provided AND the
-    file exists + parses as a valid Ed25519 PEM private key, this
-    function signs the canonical payload (sort_keys=True, separators=
-    (",",":")) and rewrites the in-memory ``signature`` field as a
-    base64 string before serialization. Failure to load the signing key
-    or sign the payload logs a structured WARN
+    Signing: when ``signing_key_path`` is provided AND the file
+    exists + parses as a valid Ed25519 PEM private key, this function
+    signs the canonical payload (sort_keys=True, separators=(",",":"))
+    and rewrites the in-memory ``signature`` field as a base64 string
+    before serialization. Failure to load the signing key or sign the
+    payload logs a structured WARN
     (``voice.calibration.profile.signing_failed``) but does NOT raise —
     the profile lands on disk unsigned, which the load path treats as
-    ``REJECTED_NO_SIGNATURE`` (LENIENT-accepted).
+    ``REJECTED_NO_SIGNATURE`` (LENIENT-accepted; STRICT-rejected).
 
     Args:
         profile: The profile to persist. Its ``mind_id`` field
@@ -775,13 +799,9 @@ def load_calibration_profile(
             f"calibration profile at {path} is malformed: {exc}"
         ) from exc
 
-    # Signature gate (P4 v0.30.32 — REAL verification).
-    #
-    # v0.30.15-31 ran a "is signature field present?" theater check;
-    # v0.30.32 wires :func:`_verify_calibration_signature` against the
-    # bundled Ed25519 trust store (``_trusted_keys/v1.pub``). The
-    # 5-way verdict drives ``signature_status`` + the matching
-    # structured event:
+    # Signature gate — REAL Ed25519 verification against the bundled
+    # ``_trusted_keys/v1.pub`` trust store. The 5-way verdict drives
+    # ``signature_status`` + the matching structured event:
     #
     # * ACCEPTED               -> "accepted"  (DEBUG log; no warning)
     # * REJECTED_NO_SIGNATURE  -> "missing"   (WARN; STRICT raises)
@@ -789,8 +809,10 @@ def load_calibration_profile(
     # * REJECTED_MALFORMED_*   -> "invalid"   (WARN; STRICT raises)
     # * REJECTED_NO_TRUSTED_KEY -> "invalid"  (WARN; STRICT raises)
     #
-    # STRICT default flip stays deferred to v0.31.0 per
-    # ``feedback_staged_adoption``.
+    # STRICT remains opt-in in v0.31.x; default flip to STRICT is
+    # gated on wizard-driven Ed25519 signing-key generation
+    # (planned v0.32.0+). See module-level docstring for the
+    # canonical narrative + rationale.
     profile_hash = _short_hash(profile.profile_id)
     mind_hash = _short_hash(mind_id)
     verdict = _verify_calibration_signature(profile)

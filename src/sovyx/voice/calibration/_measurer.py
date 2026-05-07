@@ -7,7 +7,7 @@ calibration rules consume the snapshot to gate decisions; R10 in
 particular needs ``mixer_attenuation_regime`` which is computed
 locally here from the mixer percentages.
 
-For v0.30.15 alpha, the measurer is a hybrid:
+The measurer is a hybrid:
 
 * **Real local capture**: ``amixer scontents`` parsed for the three
   controls R10 cares about (Capture, Mic Boost, Internal Mic Boost).
@@ -22,10 +22,15 @@ For v0.30.15 alpha, the measurer is a hybrid:
   refuse to fire on the triage gate, by design -- the operator
   should run --full-diag first to disambiguate).
 
-T2.3 of MISSION-voice-self-calibrating-system-2026-05-05.md (Layer 2
-v0.30.15 foundation). Future v0.30.16+: add latency + jitter +
-echo_correlation extraction once the diag emits them in
-SUMMARY.json structured form.
+T2.3 of MISSION-voice-self-calibrating-system-2026-05-05.md (Layer 2).
+Latency + jitter + echo_correlation extraction is reserved for the
+``noise_floor_dbfs_estimate`` / ``capture_callback_p99_ms`` /
+``capture_jitter_ms`` / ``portaudio_latency_advertised_ms`` /
+``echo_correlation_db`` fields; the bash diag's L4-J layer surfaces
+the values, but the local measurer leaves them at sentinel zeros so
+the calibration rules consume only the high-signal mixer-regime
+classification. Future minor cycles MAY wire the L4-J extraction if
+a rule needs it.
 """
 
 from __future__ import annotations
@@ -88,8 +93,11 @@ def capture_measurements(
     Returns:
         A frozen :class:`MeasurementSnapshot`. Fields the local
         capture path can't populate (latency, jitter, echo) ship as
-        sentinel zeros / ``None`` for v0.30.15; v0.30.16 adds the
-        structured-SUMMARY.json extraction once the diag emits them.
+        sentinel zeros / ``None`` — the calibration rules consume
+        only the high-signal mixer-regime classification, so the
+        sentinels are a deliberate API shape, not a missing
+        implementation. See module docstring for the L4-J extraction
+        roadmap.
     """
     mixer = _read_mixer_state()
     rms_per_capture, vad_max, vad_p99 = _extract_capture_metrics(diag_tarball_root)
@@ -110,8 +118,10 @@ def capture_measurements(
         rms_dbfs_per_capture=rms_per_capture,
         vad_speech_probability_max=vad_max,
         vad_speech_probability_p99=vad_p99,
-        # Noise floor + latency + jitter + echo extraction are deferred
-        # to v0.30.16; sentinels keep v0.30.15 measurer-shape stable.
+        # Noise floor + latency + jitter + echo extraction stay at
+        # sentinel zeros by design — the rule set's ``set`` decisions
+        # currently key on mixer-regime classification only. See module
+        # docstring for the reserved L4-J wire-up path.
         noise_floor_dbfs_estimate=0.0,
         capture_callback_p99_ms=0.0,
         capture_jitter_ms=0.0,

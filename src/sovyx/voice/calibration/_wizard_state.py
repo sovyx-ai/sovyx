@@ -17,17 +17,22 @@ further transitions.
 History: introduced in v0.30.16 as T3.1 of mission
 ``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 3.
 
-FAST_PATH branches (FAST_PATH_LOOKUP, FAST_PATH_APPLY) wired up in
-v0.30.18. ``FAST_PATH_VALIDATE`` remains a reserved enum member: the
-runtime never transitions through it (the orchestrator goes from
-FAST_PATH_APPLY directly to DONE for cached profiles). The original
-plan was a 5s mic-capture validation diag between APPLY and DONE,
-but P6 v0.30.34 elected to KEEP the enum + i18n keys + closed-set
-match without implementing transitions — adding the validation
-gate is an invasive change (new bash --only invocation, new state
-machine branch, new operator UX). Future minor cycles MAY wire a
-real transition; for now the enum exists so a future profile that
-records ``FAST_PATH_VALIDATE`` doesn't break downstream auditors.
+FAST_PATH branches (``FAST_PATH_LOOKUP``, ``FAST_PATH_APPLY``) are
+live: the orchestrator queries the local KB cache via
+:func:`sovyx.voice.calibration._kb_cache.lookup_profile` after
+PROBING, and on a cache hit replays the matched profile in ~5s
+instead of running the slow path.
+
+``FAST_PATH_VALIDATE`` is a **reserved enum member with no live
+transition**: the orchestrator goes from ``FAST_PATH_APPLY`` directly
+to ``DONE`` for cached profiles. The original plan was a 5s
+mic-capture validation diag between APPLY and DONE, but the
+validation gate would be an invasive addition (new bash ``--only``
+invocation, new state-machine branch, new operator UX). The enum
+member is kept in the closed set so a future profile that records
+``FAST_PATH_VALIDATE`` doesn't break downstream auditors that
+index on the WizardStatus closed enum. Future minor cycles MAY
+wire a real transition.
 """
 
 from __future__ import annotations
@@ -53,10 +58,10 @@ class WizardStatus(StrEnum):
     """Capturing hardware fingerprint via local probes (~1s)."""
 
     FAST_PATH_LOOKUP = "fast_path_lookup"
-    """[v0.30.17+] Looking up fingerprint hash in local + community KB."""
+    """Looking up fingerprint hash in local KB cache."""
 
     FAST_PATH_APPLY = "fast_path_apply"
-    """[v0.30.17+] Applying KB-matched profile (~5s)."""
+    """Applying KB-matched profile (~5s)."""
 
     FAST_PATH_VALIDATE = "fast_path_validate"
     """Reserved enum (v0.30.34): the orchestrator does NOT transition
@@ -86,10 +91,10 @@ class WizardStatus(StrEnum):
     ``<job_dir>/.cancel`` file) or dashboard cancel call."""
 
     FALLBACK = "fallback"
-    """Pipeline opted out (e.g. selftest aborted, hardware gap) and
-    the operator should fall back to the v0.30.x simple device-test
-    wizard. The frontend (v0.30.17+) renders this as a banner
-    explaining + offering the legacy path."""
+    """Pipeline opted out (e.g. selftest aborted, hardware gap, no
+    capture device detected) and the operator should fall back to the
+    simple device-test wizard. The frontend renders this as a banner
+    via ``_FallbackBanner.tsx`` explaining + offering the legacy path."""
 
     @property
     def is_terminal(self) -> bool:

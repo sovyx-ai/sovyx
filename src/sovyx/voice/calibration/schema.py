@@ -256,17 +256,27 @@ class CalibrationDecision:
 class CalibrationProfile:
     """Structured output of one calibration run -- signed, persisted per-mind.
 
-    Persisted to ``<data_dir>/<mind_id>/calibration.json`` by T2.7
-    with an Ed25519 signature over the canonical payload (signing key
-    re-exported from :mod:`sovyx.voice.health._mixer_kb._signing`).
-    The applier loads the most recent profile per-mind and replays
-    its applicable decisions on next mind start so calibration
-    survives daemon restarts.
+    Persisted to ``<data_dir>/<mind_id>/calibration.json`` with an
+    optional Ed25519 signature over the canonical payload (signing
+    primitives re-exported from
+    :mod:`sovyx.voice.health._mixer_kb._signing`).
 
-    The ``signature`` field is ``None`` when the loader is in LENIENT
-    mode (default v0.30.x) and the profile has not yet been signed;
-    in STRICT mode (default v0.31.x), unsigned profiles are rejected
-    by :func:`sovyx.voice.calibration._persistence.load_calibration_profile`.
+    Persistence semantics: the JSON is the **audit + KB-cache feed**
+    artifact. It is consumed only by the operator-facing inspection
+    paths (``sovyx doctor voice --calibrate --show / --explain /
+    --inspect-migration``) and the wizard's FAST_PATH replay
+    (``_kb_cache.lookup_profile``). Cross-reboot persistence of
+    mixer state is delegated to ``alsactl store`` via the bundled
+    systemd unit; the calibration.json is NOT auto-loaded at daemon
+    startup.
+
+    The ``signature`` field is ``None`` when the profile has not been
+    signed at write time. The default loader mode is LENIENT
+    (warns + accepts). STRICT (rejects unsigned) is OPT-IN as of
+    v0.31.x; the default flip is gated on operator-driven Ed25519
+    key generation landing in the wizard (planned v0.32.0+; see
+    :mod:`sovyx.voice.calibration._signing` module docstring for the
+    canonical narrative).
     """
 
     schema_version: int

@@ -17,18 +17,26 @@ Cancellation contract:
 * The orchestrator polls for ``<job_dir>/.cancel`` between every
   stage transition. When found, the next state is :data:`WizardStatus.CANCELLED`
   and the orchestrator exits cleanly.
-* Mid-stage cancellation (e.g. during the 8-12 min diag run) is
-  not yet supported in v0.30.16 -- the diag is a blocking subprocess
-  and we don't kill it. Operator who cancels mid-stage will see
-  CANCELLED only after the current stage completes. v0.30.17+ adds
-  subprocess cancellation via :func:`subprocess.Popen.terminate`.
+* **Mid-stage cancellation** (during the 8-12 min slow-path diag) is
+  supported via :class:`asyncio.CancelledError` propagation into the
+  bash subprocess group. The runner signals SIGTERM, waits up to
+  10s for the bash trap-EXIT cleanup, then escalates to SIGKILL.
+  Operator-initiated cancel via the dashboard's Cancel button reaches
+  CANCELLED state within seconds rather than waiting for the current
+  stage to complete.
 
-FAST_PATH branches (FAST_PATH_LOOKUP / APPLY / VALIDATE) are deferred
-to v0.30.17+ when the local KB lookup wires up. v0.30.16 always takes
-the SLOW_PATH for every job.
+FAST_PATH branches (FAST_PATH_LOOKUP / APPLY / VALIDATE) are wired
+up: the orchestrator queries the local KB cache via
+:func:`sovyx.voice.calibration._kb_cache.lookup_profile` after the
+PROBING stage; on a cache hit, the matched profile is replayed in
+~5s instead of running the 8-12 min slow path. Cache misses fall
+through to the SLOW_PATH.
 
 History: introduced in v0.30.16 as T3.1 of mission
 ``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 3.
+Mid-stage cancellation + FAST_PATH wire-up landed in subsequent
+v0.30.x patches; the docstring above describes the **current**
+behaviour as of v0.31.x.
 """
 
 from __future__ import annotations

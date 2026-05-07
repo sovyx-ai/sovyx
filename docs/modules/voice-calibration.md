@@ -22,18 +22,27 @@ This is Layer 2 of `MISSION-voice-self-calibrating-system-2026-05-05.md`. Layer 
 ## Operator-facing CLI
 
 ```text
-sovyx doctor voice --calibrate                   # Full pipeline + apply
-sovyx doctor voice --calibrate --dry-run         # Show plan, no persistence
-sovyx doctor voice --calibrate --explain         # Render rule trace alongside verdict
-sovyx doctor voice --calibrate --show            # Read-only inspect last profile
-sovyx doctor voice --calibrate --rollback        # Restore prior profile from .bak slot
-sovyx doctor voice --calibrate --mind-id <id>    # Calibrate a specific mind (default: 'default')
-sovyx doctor voice --calibrate --non-interactive # Skip the interactive speech-prompt windows
+sovyx doctor voice --calibrate                       # Full pipeline + apply
+sovyx doctor voice --calibrate --dry-run             # Show plan, no persistence
+sovyx doctor voice --calibrate --explain             # Render rule trace alongside verdict
+sovyx doctor voice --calibrate --show                # Read-only inspect last profile
+sovyx doctor voice --calibrate --rollback            # Restore prior profile (walks .bak.{1,2,3} chain)
+sovyx doctor voice --calibrate --evaluate-rules      # Preview which rules WOULD fire (no diag, no apply)
+sovyx doctor voice --calibrate --inspect-migration   # Print the migrated profile dict (post-schema-walk)
+sovyx doctor voice --calibrate --mind-id <id>        # Calibrate a specific mind (default: 'default')
+sovyx doctor voice --calibrate --non-interactive     # Skip the interactive speech-prompt windows
 ```
 
 The `--calibrate` flow runs `--full-diag` internally, so it is Linux-only and requires `bash >= 4`. Use `sovyx doctor voice --full-diag` first to audit the forensic verdict, then `--calibrate` once you trust the input.
 
-`--show` and `--rollback` both require `--calibrate`. `--show` does not mutate state; `--rollback` consumes the .bak slot (single-step only — re-run `--calibrate` to regenerate after a second consecutive rollback).
+`--show`, `--rollback`, `--evaluate-rules`, and `--inspect-migration` all require `--calibrate` and form a closed-enum mutex set (each is a distinct read-only inspection mode; pick one per invocation):
+
+| Flag | Mutates? | Purpose |
+|---|---|---|
+| `--show` | No | Render the LAST persisted profile (decisions + advised actions). |
+| `--rollback` | Yes — consumes one generation | Walk the `.bak.{1,2,3}` multi-generation chain; restore the most-recent prior profile. Up to 3 prior calibrations retained; `--calibrate` repopulates after exhaustion. |
+| `--evaluate-rules` | No | Capture fingerprint + run the engine in dry-eval mode; show which rules WOULD fire WITHOUT running the 8-12 min full diag or applying anything. |
+| `--inspect-migration` | No | Read the on-disk JSON, walk the schema-migration chain to the runtime's current `CALIBRATION_PROFILE_SCHEMA_VERSION`, emit the result to stdout (pipeable into `jq` or `diff`). Useful at schema-bump time to preview the post-migration shape before relying on auto-load. Skips the signature gate; the dict is NOT a fully-validated profile. |
 
 ## Pipeline (slow path)
 
@@ -99,14 +108,18 @@ Decisions are partitioned at apply time:
 
 Schema versioning is explicit: a profile written under `schema_version=1` only loads on a Sovyx that supports `schema_version=1`. Incompatible versions raise `CalibrationProfileLoadError`; operators regenerate via `--calibrate` rather than relying on silent migration.
 
-## Signing model (LENIENT → STRICT)
+## Signing model (LENIENT default; STRICT opt-in until v0.32.0+)
 
-| Mode | Default in | Behaviour on missing signature | Behaviour on invalid signature |
+| Mode | Status (v0.31.x) | Missing signature | Invalid signature |
 |---|---|---|---|
-| LENIENT | v0.30.15..v0.30.x (current) | warn + accept | warn + accept |
-| STRICT | v0.31.0+ (planned, per soak) | raise `CalibrationProfileLoadError` | raise |
+| LENIENT | **default** | warn + accept | warn + accept |
+| STRICT | opt-in (`mode=Mode.STRICT` argument) | raise `CalibrationProfileLoadError` | raise |
 
-The default flip is gated on at least one minor cycle of telemetry-validated lenient operation per the master mission's staged-adoption discipline. The flip is automatic across new Sovyx installs once shipped; existing operators with `signature: null` profiles must regenerate via `--calibrate` after upgrade.
+**Why STRICT is not yet the default:** STRICT-by-default would break every existing v0.30.x..v0.31.x Sovyx install — the only key-generation path today is `scripts/dev/generate_calibration_signing_key.py` (dev-only), so operators reading the public docs have no zero-friction way to produce a signing key. Flipping STRICT default before wizard-driven key generation lands would force every operator to drop into a contributor workflow.
+
+**STRICT default flip gate (v0.32.0+):** the dashboard wizard ships an operator-driven Ed25519 key-gen + persistence flow, after which fresh installs get STRICT default + signed profiles automatically. Existing installs continue under LENIENT until the operator opts in (env override + key gen) or regenerates via `--calibrate --signing-key <path>` post-upgrade. See `_signing.py` module docstring for the canonical narrative.
+
+**Operators wanting STRICT today:** generate a key via the dev script, pass `--signing-key <path>` at calibrate time, and load with `mode=Mode.STRICT` in any custom integration code. Production deployments wanting fleet-wide STRICT operation should wait for v0.32.0+ to avoid the operational pain of manual key distribution.
 
 ## Telemetry
 
@@ -163,11 +176,32 @@ To override, set `SOVYX_LOG__FILE_MAX_BYTES` / `SOVYX_LOG__FILE_BACKUP_COUNT` in
 
 ## Rules registry
 
-| Rule | Priority | Trigger | Confidence | Decision |
-|---|---|---|---|---|
-| `R10_mic_attenuated` | 95 | triage winner H10 + measurements regime == attenuated | HIGH | advise: `sovyx doctor voice --fix --yes` |
+As of v0.31.x, the calibration engine ships **10 rules** (R10..R95) covering Linux mic attenuation, Windows APO interference, Linux destructive-filter detection, macOS TCC denials, hardware-gap surfacing, VAD threshold tuning, exclusive capture mode, AEC engine selection, STT locality preference, and wake-word model recommendation.
 
-Additional rules (R20..R95) ship in v0.30.20+ per mission §5.8 staged adoption: one rule per commit, soaked between version bumps. Each rule is a pure `(fingerprint, measurements, triage_result, prior_decisions) -> RuleEvaluation` function — no side effects, no I/O, no cross-rule mutation.
+| Rule | Priority | Trigger | Confidence | Operation | Decision |
+|---|---|---|---|---|---|
+| `R10_mic_attenuated` | 95 | triage winner H10 + regime == attenuated | HIGH | **set** | LinuxMixerApply: `boost_up` (auto-applies) |
+| `R20_windows_apo_active` | — | fingerprint.apo_active + Windows | HIGH | advise | Run Voice Clarity APO autofix |
+| `R30_linux_destructive_filter` | — | pulse_modules_destructive non-empty | MEDIUM | advise | Disable RNNoise / module-echo-cancel |
+| `R40_macos_tcc_denied` | — | macOS TCC permission denied | HIGH | advise | Grant mic permission in System Preferences |
+| `R50_hardware_gap` | — | no triage winner + low VAD | LOW | advise | Hardware diagnostic walkthrough |
+| `R60_vad_threshold_tuning` | — | borderline VAD probability range | MEDIUM | advise | Adjust `voice.vad.speech_threshold` |
+| `R70_capture_mode_exclusive` | — | Windows + APO present | MEDIUM | advise | Enable WASAPI exclusive mode |
+| `R80_aec_engine` | — | echo_correlation_db elevated | MEDIUM | advise | Switch AEC engine to Speex |
+| `R90_stt_locality` | — | network-latency / privacy preference | LOW | advise | Switch STT to Moonshine local |
+| `R95_wake_word_model` | — | wake-word miss rate elevated | LOW | advise | Train custom wake-word model |
+
+**Operation column legend:** `set` decisions auto-apply via the `CalibrationApplier` (currently only `R10`). `advise` decisions surface as copy-paste shell commands for the operator to run; the applier records them but never mutates state.
+
+### Rule promotion roadmap
+
+The `set` ↔ `advise` distinction is **deliberate enterprise discipline**, not an oversight. Every rule ships in `advise` mode first; promotion to `set` is a code change soaked across one minor version cycle. The rationale:
+
+1. **Operator-in-the-loop for security-sensitive changes.** TCC permission grants (R40), Voice Clarity APO bypass (R20), and pulse-module disabling (R30) all touch operator-trust boundaries. Auto-applying them would surprise operators who run Sovyx alongside other voice software.
+2. **Soak data drives promotion.** A rule firing on 1000+ canonical hardware combinations tells us its precision before we promote it to mutating-by-default. Premature promotion risks fleet-wide false positives.
+3. **One rule per minor version maximum.** R10 was promoted in v0.30.28 (post-soak from v0.30.15); the next promotion lands no earlier than v0.32.0 with R20 (Windows APO autofix) once the dashboard wizard surface is mature.
+
+Each rule is a pure `(fingerprint, measurements, triage_result, prior_decisions) -> RuleEvaluation` function — no side effects, no I/O, no cross-rule mutation. Promotion to `set` is contained: only the rule's `evaluate()` body changes; the engine + applier registries are unchanged.
 
 ## Failure modes + recovery
 
