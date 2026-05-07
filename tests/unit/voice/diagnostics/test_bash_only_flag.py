@@ -34,9 +34,51 @@ _BASH_LIB = (
 
 _BASH_BIN = shutil.which("bash")
 
+
+def _bash_major_version() -> int:
+    """Return the installed bash's major version, or 0 on failure / absence.
+
+    rc.16 (macOS CI gate): GitHub Actions ``macos-latest`` ships Apple's
+    bash 3.2 by default, but ``common.sh`` uses ``mapfile`` (bash 4+).
+    Sourcing ``common.sh`` on bash 3.2 emits a syntax error, leaving
+    ``_cleanup`` undefined — so ``test_cleanup_removes_prompts_err_file``
+    fails because ``(_cleanup)`` is "command not found" + the file
+    survives. The diag toolkit's own ``_check_prerequisites`` ALREADY
+    requires bash 4+ (``_runner.py:535``), so testing it on bash 3.2
+    tests something that cannot run in production anyway.
+
+    Mirrors the helper in :mod:`sovyx.voice.diagnostics._runner` so the
+    test gate matches the runtime gate exactly.
+    """
+    if _BASH_BIN is None:
+        return 0
+    try:
+        completed = subprocess.run(  # noqa: S603 — controlled bash binary
+            [_BASH_BIN, "-c", "echo ${BASH_VERSINFO[0]}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    if completed.returncode != 0:
+        return 0
+    try:
+        return int(completed.stdout.strip())
+    except (ValueError, IndexError):
+        return 0
+
+
+_BASH_MAJOR = _bash_major_version()
+
 pytestmark = pytest.mark.skipif(
-    _BASH_BIN is None,
-    reason="bash not available on this host",
+    _BASH_BIN is None or _BASH_MAJOR < 4,
+    reason=(
+        "bash 4+ required (matches the runtime gate in "
+        "_runner.py:_check_prerequisites). macOS-latest ships bash 3.2 "
+        "by default, which can't parse mapfile in common.sh"
+    ),
 )
 
 
