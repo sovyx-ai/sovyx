@@ -646,3 +646,48 @@ class TestQuarantineEndpoint:
         body = resp.json()
         guids = [e["endpoint_guid"] for e in body["entries"]]
         assert "{SENTINEL}" in guids
+
+    def test_seconds_until_expiry_never_exceeds_quarantine_s_on_coarse_clock(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        """Regression: pre-v0.31.3 the route returned
+        ``seconds_until_expiry > quarantine_s`` when ``now == added_at``
+        on Windows (same ~15.6 ms monotonic tick) due to IEEE 754
+        precision residual in ``(added + quarantine_s) - now``. The
+        v0.31.3 fix clamps the upper bound to the literal
+        ``quarantine_s`` float. CLAUDE.md anti-pattern #22 documents the
+        Windows clock-resolution context.
+
+        Simulated by injecting a fake clock that returns the same value
+        for both ``add()`` and the route's ``time.monotonic()`` read, so
+        the float subtraction residual is the same path that surfaced
+        on Windows CI."""
+        from unittest.mock import patch
+
+        FROZEN = 1_234_567.890123  # arbitrary monotonic float
+        QUARANTINE_S = 60.0
+
+        # Use a fake clock that always returns FROZEN — both ``add`` and
+        # the route's ``_time.monotonic()`` read see identical values.
+        store = EndpointQuarantine(
+            quarantine_s=QUARANTINE_S,
+            maxsize=4,
+            clock=lambda: FROZEN,
+        )
+        store.add(endpoint_guid="{TICKLOCK}", host_api="WASAPI")
+        app.state.quarantine = store
+
+        with patch(
+            "sovyx.dashboard.routes.voice_health.time.monotonic",
+            return_value=FROZEN,
+        ):
+            resp = client.get("/api/voice/health/quarantine")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        entry = body["entries"][0]
+        # The contract: ``seconds_until_expiry ∈ [0, quarantine_s]``.
+        # Pre-fix: returned 60.00000000000003 (failed upper bound).
+        # Post-fix: returned exactly 60.0 (clamped to quarantine_s).
+        assert 0.0 <= entry["seconds_until_expiry"] <= QUARANTINE_S
+        assert entry["seconds_until_expiry"] == QUARANTINE_S

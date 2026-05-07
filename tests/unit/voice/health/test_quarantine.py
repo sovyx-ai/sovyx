@@ -763,3 +763,27 @@ class TestTuningFlagsExposed:
         assert store._pingpong_threshold == 3
         assert store._pingpong_window_s == 300.0
         assert store._rapid_requarantine_window_s == 60.0
+
+
+class TestQuarantineSPropertyExposed:
+    """v0.31.3: ``EndpointQuarantine.quarantine_s`` property exposes the
+    constructor's literal float so route handlers can clamp
+    ``seconds_until_expiry`` to its honest upper bound. The property is
+    read-only by contract — there is no setter; quarantine duration is
+    immutable per store instance."""
+
+    def test_quarantine_s_returns_constructor_value(self) -> None:
+        store = EndpointQuarantine(quarantine_s=42.5)
+        assert store.quarantine_s == 42.5  # noqa: PLR2004
+
+    def test_quarantine_s_default_singleton_60s(self) -> None:
+        """Tracks the production default sourced from
+        ``VoiceTuningConfig.kernel_invalidated_quarantine_s``."""
+        store = get_default_quarantine(quarantine_s=60.0)
+        assert store.quarantine_s == 60.0  # noqa: PLR2004
+
+    def test_quarantine_s_is_read_only(self) -> None:
+        """The property has no setter — assignment must raise."""
+        store = EndpointQuarantine(quarantine_s=60.0)
+        with pytest.raises(AttributeError):
+            store.quarantine_s = 30.0  # type: ignore[misc]

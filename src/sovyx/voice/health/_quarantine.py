@@ -171,6 +171,26 @@ class EndpointQuarantine:
         self._pingpong_window_s = pingpong_window_s
         self._rapid_requarantine_window_s = rapid_requarantine_window_s
 
+    # ── Read-only properties ────────────────────────────────────────────
+
+    @property
+    def quarantine_s(self) -> float:
+        """Quarantine duration this store was constructed with.
+
+        Read-only access to the literal float passed at construction
+        (sourced from :attr:`VoiceTuningConfig.kernel_invalidated_quarantine_s`).
+        Consumers that snapshot quarantine entries use this to clamp
+        ``seconds_until_expiry`` to its honest upper bound — ``(added +
+        quarantine_s) - now`` is subject to IEEE 754 precision residuals
+        when ``now == added`` (same monotonic tick on coarse-clock
+        platforms — Windows ticks at ~15.6 ms, see CLAUDE.md
+        anti-pattern #22). The literal ``quarantine_s`` float is exact;
+        clamping with ``min(quarantine_s, computed)`` guarantees the
+        snapshot honors its documented contract (seconds_until_expiry
+        ∈ [0, quarantine_s]).
+        """
+        return self._quarantine_s
+
     # ── Mutations ───────────────────────────────────────────────────────
 
     def add(

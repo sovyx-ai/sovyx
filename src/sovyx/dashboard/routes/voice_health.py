@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -285,7 +286,23 @@ class QuarantineEntryModel(BaseModel):
     reason: str
 
     @classmethod
-    def from_domain(cls, entry: QuarantineEntry, *, now_monotonic: float) -> QuarantineEntryModel:
+    def from_domain(
+        cls,
+        entry: QuarantineEntry,
+        *,
+        now_monotonic: float,
+        quarantine_s: float,
+    ) -> QuarantineEntryModel:
+        # ``seconds_until_expiry`` is clamped to ``[0, quarantine_s]``.
+        # The lower clamp prevents negative leftover-time once an entry
+        # is past expiry. The UPPER clamp honors the documented contract
+        # against IEEE 754 precision residuals: ``(added + quarantine_s)
+        # - now_monotonic`` returns ``quarantine_s + tiny_epsilon`` on
+        # Windows when ``now == added`` (same ~15.6 ms monotonic tick;
+        # CLAUDE.md anti-pattern #22). The literal ``quarantine_s``
+        # float is exact, so ``min(quarantine_s, ...)`` guarantees the
+        # snapshot's invariant ``seconds_until_expiry ∈ [0, quarantine_s]``.
+        raw = entry.expires_at_monotonic - now_monotonic
         return cls(
             endpoint_guid=entry.endpoint_guid,
             device_friendly_name=entry.device_friendly_name,
@@ -293,7 +310,7 @@ class QuarantineEntryModel(BaseModel):
             host_api=entry.host_api,
             added_at_monotonic=entry.added_at_monotonic,
             expires_at_monotonic=entry.expires_at_monotonic,
-            seconds_until_expiry=max(0.0, entry.expires_at_monotonic - now_monotonic),
+            seconds_until_expiry=min(quarantine_s, max(0.0, raw)),
             reason=entry.reason,
         )
 
@@ -534,13 +551,18 @@ async def get_voice_health_quarantine(request: Request) -> QuarantineSnapshotRes
     * see which endpoints have been auto-failed-over,
     * decide whether to suggest a USB replug or a reboot.
     """
-    import time as _time
-
     quarantine = _resolve_quarantine(request)
-    now = _time.monotonic()
+    now = time.monotonic()
     snapshot = quarantine.snapshot()
     return QuarantineSnapshotResponse(
-        entries=[QuarantineEntryModel.from_domain(e, now_monotonic=now) for e in snapshot],
+        entries=[
+            QuarantineEntryModel.from_domain(
+                e,
+                now_monotonic=now,
+                quarantine_s=quarantine.quarantine_s,
+            )
+            for e in snapshot
+        ],
         count=len(snapshot),
     )
 
