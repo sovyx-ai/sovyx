@@ -41,6 +41,7 @@ import { ExportImportSection } from "@/components/settings/export-import";
 import { LanguageSelector } from "@/components/settings/LanguageSelector";
 import { CalibrationWizardCard } from "@/components/settings/calibration-wizard-card";
 import { RecalibrateButton } from "@/components/settings/recalibrate-button";
+import { RollbackButton } from "@/components/settings/rollback-button";
 import { VoiceClarityCard } from "@/components/settings/voice-clarity-card";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -828,6 +829,11 @@ export default function SettingsPage() {
       {/* ── Recalibrate trigger (§8.5 surface; renders only when wizard mount is enabled) ── */}
       <ErrorBoundary name="section.settings.recalibrate" variant="section">
         <RecalibrateButton />
+      </ErrorBoundary>
+
+      {/* ── Rollback trigger (rc.12; closes rc.11 final-audit P3 operator-debt) ── */}
+      <ErrorBoundary name="section.settings.rollback" variant="section">
+        <RollbackButton />
       </ErrorBoundary>
 
       {/* ── Display & Language (Mission v0.30.3 §T3.3 / D5) ── */}

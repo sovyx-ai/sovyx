@@ -524,6 +524,7 @@
       "api_start_failed": "Failed to start calibration",
       "api_load_failed": "Failed to load calibration job",
       "api_cancel_failed": "Failed to cancel calibration",
+      "api_rollback_failed": "Failed to roll back calibration",
       "ws_connection_error": "Calibration WebSocket connection error"
     }
   }

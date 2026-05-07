@@ -188,6 +188,20 @@
     "startSuccess": "Calibration started. Watch progress in the onboarding wizard.",
     "startFailed": "Could not start calibration."
   },
+  "rollback": {
+    "title": "Restore previous calibration",
+    "description": "Revert to the calibration that was active before your most-recent run. Sovyx keeps up to 3 prior profiles so you can roll back through bad runs without losing your original good state.",
+    "button": "Roll back one step",
+    "confirmButton": "Yes, restore previous",
+    "cancelButton": "Cancel",
+    "loadingNote": "Checking how many rollback steps are available…",
+    "countNote_one": "{{count}} prior calibration available to restore.",
+    "countNote_other": "{{count}} prior calibrations available to restore.",
+    "countNote_zero": "No prior calibrations to restore. Run a calibration first.",
+    "emptyChainTooltip": "No prior calibrations to restore. Run a calibration first.",
+    "success": "Restored. {{remaining}} prior calibration(s) still available to roll back to.",
+    "failed": "Could not roll back the calibration. The backup may be corrupt — see the daemon log."
+  },
   "calibrationWizard": {
     "title": "Voice calibration onboarding step",
     "description": "Mounts the multi-stage hardware-aware calibration wizard during voice setup. Default-disabled while Layer 3 of the self-calibrating system soaks; flip to ON to opt this deployment in.",

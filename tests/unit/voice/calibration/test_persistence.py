@@ -402,3 +402,208 @@ class TestPersistenceTelemetry:
         assert isinstance(rolled[1]["profile_id_hash"], str)
         assert len(rolled[1]["profile_id_hash"]) == 16
         assert rolled[1]["rollback_reason"] == "operator_initiated"
+
+
+# ====================================================================
+# rc.12 — multi-generation backup chain
+# ====================================================================
+
+
+class TestMultiGenerationBackup:
+    """rc.12 (operator-debt P1 from rc.11 final-audit): the pre-rc.12
+    single-slot ``.bak`` model lost the original good state when the
+    operator calibrated twice with bad results in a row. rc.12 keeps
+    a 3-generation rotating chain so up to 3 prior states are
+    recoverable."""
+
+    def test_save_rotates_into_bak_1(self, tmp_path: Path) -> None:
+        """First non-trivial save: current → .bak.1, no prior chain."""
+        from dataclasses import replace
+
+        from sovyx.voice.calibration._persistence import (
+            _MAX_BACKUP_GENERATIONS,
+            list_calibration_backups,
+            profile_backup_path,
+        )
+
+        first = _profile(signature=None)
+        second = replace(first, profile_id="22222222-2222-3333-4444-555555555555")
+        save_calibration_profile(first, data_dir=tmp_path)
+        save_calibration_profile(second, data_dir=tmp_path)
+
+        bak1 = profile_backup_path(data_dir=tmp_path, mind_id="default", generation=1)
+        bak2 = profile_backup_path(data_dir=tmp_path, mind_id="default", generation=2)
+        assert bak1.is_file()
+        assert not bak2.is_file()
+        backups = list_calibration_backups(data_dir=tmp_path, mind_id="default")
+        assert len(backups) == 1
+        assert backups[0][0] == 1
+        # Sanity: generation N path layout is correct.
+        assert _MAX_BACKUP_GENERATIONS == 3
+
+    def test_three_saves_fill_chain(self, tmp_path: Path) -> None:
+        """3 saves after the initial one populate .bak.1 / .bak.2 / .bak.3."""
+        from dataclasses import replace
+
+        from sovyx.voice.calibration._persistence import (
+            list_calibration_backups,
+            profile_backup_path,
+        )
+
+        first = _profile(signature=None)
+        save_calibration_profile(first, data_dir=tmp_path)
+        for i in range(3):
+            next_p = replace(first, profile_id=f"3333333{i}-2222-3333-4444-555555555555")
+            save_calibration_profile(next_p, data_dir=tmp_path)
+
+        for gen in (1, 2, 3):
+            assert profile_backup_path(
+                data_dir=tmp_path, mind_id="default", generation=gen
+            ).is_file()
+        backups = list_calibration_backups(data_dir=tmp_path, mind_id="default")
+        assert len(backups) == 3
+
+    def test_fourth_save_drops_oldest_generation(self, tmp_path: Path) -> None:
+        """Chain is bounded at MAX_BACKUP_GENERATIONS — 4th save drops
+        the oldest (.bak.3 deleted, .bak.2 → .bak.3, .bak.1 → .bak.2,
+        current → .bak.1). No unbounded disk growth."""
+        from dataclasses import replace
+
+        from sovyx.voice.calibration._persistence import list_calibration_backups
+
+        first = _profile(signature=None)
+        save_calibration_profile(first, data_dir=tmp_path)
+        for i in range(4):
+            next_p = replace(first, profile_id=f"4444444{i}-2222-3333-4444-555555555555")
+            save_calibration_profile(next_p, data_dir=tmp_path)
+
+        # Still bounded at 3.
+        backups = list_calibration_backups(data_dir=tmp_path, mind_id="default")
+        assert len(backups) == 3
+
+    def test_rollback_shifts_chain_down(self, tmp_path: Path) -> None:
+        """After rollback, .bak.2 becomes .bak.1, .bak.3 becomes .bak.2 —
+        operator can roll back AGAIN through the chain."""
+        from dataclasses import replace
+
+        from sovyx.voice.calibration import rollback_calibration_profile
+        from sovyx.voice.calibration._persistence import list_calibration_backups
+
+        first = _profile(signature=None)
+        save_calibration_profile(first, data_dir=tmp_path)
+        for i in range(3):
+            next_p = replace(first, profile_id=f"5555555{i}-2222-3333-4444-555555555555")
+            save_calibration_profile(next_p, data_dir=tmp_path)
+
+        # Pre-rollback: 3 backups available.
+        before = list_calibration_backups(data_dir=tmp_path, mind_id="default")
+        assert len(before) == 3
+
+        rollback_calibration_profile(data_dir=tmp_path, mind_id="default")
+
+        # Post-rollback: 2 backups remain (chain shifted down).
+        after = list_calibration_backups(data_dir=tmp_path, mind_id="default")
+        assert len(after) == 2
+        # Generations are still numbered 1, 2 (not 2, 3).
+        assert {gen for gen, _ in after} == {1, 2}
+
+    def test_rollback_chain_exhaustion_raises(self, tmp_path: Path) -> None:
+        """After consuming all 3 backups, the 4th rollback raises with
+        a friendly message pointing to --calibrate."""
+        from dataclasses import replace
+
+        from sovyx.voice.calibration import rollback_calibration_profile
+        from sovyx.voice.calibration._persistence import (
+            CalibrationProfileRollbackError,
+        )
+
+        first = _profile(signature=None)
+        save_calibration_profile(first, data_dir=tmp_path)
+        for i in range(3):
+            next_p = replace(first, profile_id=f"6666666{i}-2222-3333-4444-555555555555")
+            save_calibration_profile(next_p, data_dir=tmp_path)
+
+        # Exhaust the chain.
+        for _ in range(3):
+            rollback_calibration_profile(data_dir=tmp_path, mind_id="default")
+
+        # 4th rollback: chain empty.
+        with pytest.raises(CalibrationProfileRollbackError) as exc_info:
+            rollback_calibration_profile(data_dir=tmp_path, mind_id="default")
+        assert "exhausted" in str(exc_info.value).lower()
+
+    def test_legacy_bak_migrated_into_chain_on_save(self, tmp_path: Path) -> None:
+        """Pre-rc.12 single-slot ``.bak`` is auto-migrated to ``.bak.1``
+        when the next save happens. Operators upgrading from rc.11 keep
+        their last backup."""
+        import shutil
+        from dataclasses import replace
+
+        from sovyx.voice.calibration._persistence import (
+            _LEGACY_BAK_SUFFIX,
+            _PROFILE_FILENAME,
+            list_calibration_backups,
+        )
+
+        first = _profile(signature=None)
+        save_calibration_profile(first, data_dir=tmp_path)
+        # Manually fabricate the legacy .bak by copying the current
+        # canonical aside (simulating an rc.11-format backup left
+        # over after upgrade).
+        canonical = tmp_path / "default" / _PROFILE_FILENAME
+        legacy_bak = tmp_path / "default" / (_PROFILE_FILENAME + _LEGACY_BAK_SUFFIX)
+        shutil.copy(canonical, legacy_bak)
+
+        # Trigger a save — should migrate legacy .bak → .bak.1 BEFORE
+        # rotating the current into .bak.1 (so .bak.1 ends up holding
+        # the rotated CURRENT, .bak.2 holds the migrated legacy).
+        # Actually: the migration runs BEFORE rotation, so legacy → .bak.1
+        # then rotation makes .bak.1 → .bak.2 + current → .bak.1.
+        second = replace(first, profile_id="77777777-2222-3333-4444-555555555555")
+        save_calibration_profile(second, data_dir=tmp_path)
+
+        backups = list_calibration_backups(data_dir=tmp_path, mind_id="default")
+        # 2 generations: rotated current at .bak.1, migrated legacy at .bak.2.
+        assert len(backups) == 2
+        # Legacy file no longer exists (consumed by the migration).
+        assert not legacy_bak.is_file()
+
+    def test_legacy_bak_migrated_on_rollback_when_no_chain(self, tmp_path: Path) -> None:
+        """Operator upgrades from rc.11 with a legacy .bak in place, has
+        not yet calibrated under rc.12, and clicks Rollback. The legacy
+        file is migrated transparently and the rollback proceeds."""
+        import shutil
+
+        from sovyx.voice.calibration import rollback_calibration_profile
+        from sovyx.voice.calibration._persistence import (
+            _LEGACY_BAK_SUFFIX,
+            _PROFILE_FILENAME,
+        )
+
+        first = _profile(signature=None)
+        save_calibration_profile(first, data_dir=tmp_path)
+        canonical = tmp_path / "default" / _PROFILE_FILENAME
+        legacy_bak = tmp_path / "default" / (_PROFILE_FILENAME + _LEGACY_BAK_SUFFIX)
+        shutil.copy(canonical, legacy_bak)
+
+        # Replace the canonical with something different so the
+        # rollback has to actually restore the legacy content.
+        canonical.write_text('{"changed": true}', encoding="utf-8")
+
+        restored = rollback_calibration_profile(data_dir=tmp_path, mind_id="default")
+        assert restored == canonical
+        # The restored content matches the legacy backup (which was
+        # the original valid profile).
+        import json
+
+        loaded = json.loads(canonical.read_text(encoding="utf-8"))
+        assert loaded.get("profile_id") == first.profile_id
+
+    def test_invalid_generation_raises_value_error(self, tmp_path: Path) -> None:
+        """profile_backup_path defends the generation argument."""
+        from sovyx.voice.calibration._persistence import profile_backup_path
+
+        with pytest.raises(ValueError, match="generation must be in"):
+            profile_backup_path(data_dir=tmp_path, mind_id="default", generation=0)
+        with pytest.raises(ValueError, match="generation must be in"):
+            profile_backup_path(data_dir=tmp_path, mind_id="default", generation=4)

@@ -524,6 +524,7 @@
       "api_start_failed": "Error al iniciar calibración",
       "api_load_failed": "Error al cargar trabajo de calibración",
       "api_cancel_failed": "Error al cancelar calibración",
+      "api_rollback_failed": "Error al retroceder calibración",
       "ws_connection_error": "Error de conexión WebSocket de calibración"
     }
   }

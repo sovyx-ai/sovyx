@@ -2005,14 +2005,27 @@ export interface StartCalibrationRequest {
 }
 
 export interface StartCalibrationResponse {
-  /** Stable identifier; equal to ``mind_id`` for v0.30.16 (one job per mind). */
+  /** Stable identifier; equal to the RESOLVED ``mind_id`` (v0.30.16: one job per mind). */
   job_id: string;
   /**
    * Relative WebSocket path for live progress (e.g.,
-   * ``/api/voice/calibration/jobs/default/stream``). Open via
+   * ``/api/voice/calibration/jobs/meu-mind/stream``). Open via
    * ``new WebSocket(host + stream_url + "?token=" + token)``.
    */
   stream_url: string;
+  /**
+   * rc.12 (anti-pattern #35): the mind_id the calibration ACTUALLY
+   * runs under. Frontend MUST trust this value over the request body
+   * for any subsequent /jobs/{id}/* call (the job_id IS this value).
+   * Optional + defaults to empty string for backward compat with
+   * pre-rc.12 daemons that don't return the field.
+   */
+  resolved_mind_id?: string;
+  /**
+   * rc.12: provenance of the resolution. One of ``request_body`` /
+   * ``app_state`` / ``mind_manager`` / ``fallback_default``.
+   */
+  resolved_mind_id_source?: string;
 }
 
 export interface PreviewFingerprintResponse {
@@ -2037,6 +2050,37 @@ export interface PreviewFingerprintResponse {
  * operator (or another caller) has flipped the value in-memory via
  * ``POST /feature-flag`` since boot.
  */
+/**
+ * rc.12 — response for ``POST /api/voice/calibration/rollback``.
+ * Restores generation 1 of the multi-generation backup chain as the
+ * current profile and shifts the chain down so the operator can roll
+ * back AGAIN up to ``MAX_BACKUP_GENERATIONS`` times total.
+ */
+export interface CalibrationRollbackResponse {
+  /** Absolute path of the canonical profile after rollback. */
+  restored_path: string;
+  /**
+   * How many MORE rollback steps the operator can take before the
+   * chain exhausts. 0 means the next click returns HTTP 409. UI
+   * disables the Rollback button when this is 0.
+   */
+  backup_generations_remaining: number;
+  resolved_mind_id: string;
+  resolved_mind_id_source: string;
+}
+
+/**
+ * rc.12 — response for ``GET /api/voice/calibration/backups``.
+ * Read-only enumeration of available rollback generations so the
+ * RollbackButton can render enabled/disabled correctly without a
+ * speculative POST.
+ */
+export interface CalibrationBackupListResponse {
+  mind_id: string;
+  /** Generation numbers (1 = newest, MAX = oldest). Empty when no backups. */
+  generations: number[];
+}
+
 export interface CalibrationFeatureFlagResponse {
   enabled: boolean;
   runtime_override_active: boolean;

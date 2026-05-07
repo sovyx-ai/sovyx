@@ -1550,6 +1550,12 @@ export const StartCalibrationRequestSchema = z.object({
 export const StartCalibrationResponseSchema = z.object({
   job_id: z.string(),
   stream_url: z.string(),
+  // rc.12 (anti-pattern #35): backend resolves frontend's "default"
+  // sentinel to the real active mind_id. Optional + default empty
+  // string for backward compat with pre-rc.12 daemons that don't
+  // return the field — frontend falls back to job_id in that case.
+  resolved_mind_id: z.string().optional().default(""),
+  resolved_mind_id_source: z.string().optional().default(""),
 });
 
 export const PreviewFingerprintResponseSchema = z.object({
@@ -1558,6 +1564,19 @@ export const PreviewFingerprintResponseSchema = z.object({
   system_vendor: z.string(),
   system_product: z.string(),
   recommendation: z.enum(["slow_path", "fast_path"]),
+});
+
+// rc.12: rollback chain (multi-generation backup).
+export const CalibrationRollbackResponseSchema = z.object({
+  restored_path: z.string(),
+  backup_generations_remaining: z.number().int().nonnegative(),
+  resolved_mind_id: z.string(),
+  resolved_mind_id_source: z.string(),
+});
+
+export const CalibrationBackupListResponseSchema = z.object({
+  mind_id: z.string(),
+  generations: z.array(z.number().int().positive()),
 });
 
 export const CalibrationFeatureFlagResponseSchema = z.object({

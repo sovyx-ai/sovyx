@@ -70,7 +70,22 @@ logger = get_logger(__name__)
 
 _PROFILE_FILENAME = "calibration.json"
 _TMP_SUFFIX = ".tmp"
-_BAK_SUFFIX = ".bak"
+
+# Pre-rc.12 single-slot backup suffix. Kept as a constant for the
+# legacy-migration code path: any operator with an existing
+# ``calibration.json.bak`` (from v0.30.x..v0.31.0-rc.11) needs that
+# file moved into the new generational chain on first save/rollback
+# AFTER the rc.12 upgrade.
+_LEGACY_BAK_SUFFIX = ".bak"
+
+# rc.12 multi-generation backup chain. Operator can roll back up to
+# 3 calibrations in a row before exhausting the chain. Generation 1
+# is the most-recent prior profile (one step back); generation 3 is
+# the oldest. This addresses the operator-debt item flagged in the
+# rc.11 final-audit ("operator calibrates twice ruim, original
+# state is lost") without unbounded disk growth.
+_BAK_SUFFIX_TEMPLATE = ".bak.{generation}"
+_MAX_BACKUP_GENERATIONS = 3
 
 
 class SaveProfileResult(NamedTuple):
@@ -271,16 +286,103 @@ def profile_path(*, data_dir: Path, mind_id: str) -> Path:
     return data_dir / mind_id / _PROFILE_FILENAME
 
 
-def profile_backup_path(*, data_dir: Path, mind_id: str) -> Path:
-    """Return the rollback-target path for a mind's prior calibration profile.
+def profile_backup_path(
+    *,
+    data_dir: Path,
+    mind_id: str,
+    generation: int = 1,
+) -> Path:
+    """Return the path for generation N of a mind's calibration backup chain.
 
-    Used by :func:`save_calibration_profile` to rotate the current
-    ``calibration.json`` to ``calibration.json.bak`` before overwriting,
-    and by :func:`rollback_calibration_profile` to restore it. Single-
-    step rollback only; v0.30.19 does NOT keep a multi-generation
-    history (operator can re-run ``--calibrate`` to regenerate).
+    rc.12: replaces the single-slot ``.bak`` model with a 3-generation
+    rotating chain. Generation 1 = most recent prior profile (one
+    rollback step away from current); generation 3 = oldest. Caller
+    MUST pass ``generation in (1, 2, 3)`` -- values outside the valid
+    range raise ``ValueError`` so a typo doesn't silently address the
+    wrong file.
+
+    Args:
+        data_dir: The Sovyx data directory.
+        mind_id: The mind whose backup to address.
+        generation: Which generation to address (1 = newest, default).
+
+    Returns:
+        ``<data_dir>/<mind_id>/calibration.json.bak.<generation>``.
+
+    Raises:
+        ValueError: when ``generation`` is outside [1, MAX_BACKUP_GENERATIONS].
     """
-    return data_dir / mind_id / (_PROFILE_FILENAME + _BAK_SUFFIX)
+    if not 1 <= generation <= _MAX_BACKUP_GENERATIONS:
+        raise ValueError(
+            f"generation must be in [1, {_MAX_BACKUP_GENERATIONS}], got {generation}",
+        )
+    suffix = _BAK_SUFFIX_TEMPLATE.format(generation=generation)
+    return data_dir / mind_id / (_PROFILE_FILENAME + suffix)
+
+
+def _legacy_backup_path(*, data_dir: Path, mind_id: str) -> Path:
+    """rc.12: pre-rc.12 single-slot backup at ``calibration.json.bak``.
+
+    Kept for migration only — the upgrade path moves the legacy file
+    into ``.bak.1`` on first ``save_calibration_profile`` /
+    ``rollback_calibration_profile`` after the rc.12 upgrade.
+    """
+    return data_dir / mind_id / (_PROFILE_FILENAME + _LEGACY_BAK_SUFFIX)
+
+
+def _migrate_legacy_backup_if_present(*, data_dir: Path, mind_id: str) -> None:
+    """Move ``calibration.json.bak`` (rc.11 and earlier) into ``.bak.1``.
+
+    Idempotent + no-op when no legacy file exists OR when ``.bak.1``
+    already exists (operator already rolled into the new chain). Logged
+    once at INFO so operators reading logs see the one-time migration.
+    """
+    legacy = _legacy_backup_path(data_dir=data_dir, mind_id=mind_id)
+    if not legacy.is_file():
+        return
+    gen1 = profile_backup_path(data_dir=data_dir, mind_id=mind_id, generation=1)
+    if gen1.is_file():
+        # Operator has already saved at least once after rc.12 upgrade;
+        # drop the now-redundant legacy file.
+        legacy.unlink(missing_ok=True)
+        return
+    os.replace(legacy, gen1)
+    logger.info(
+        "voice.calibration.profile.legacy_backup_migrated",
+        mind_id_hash=_short_hash(mind_id),
+        from_path_suffix=_LEGACY_BAK_SUFFIX,
+        to_generation=1,
+    )
+
+
+def list_calibration_backups(
+    *,
+    data_dir: Path,
+    mind_id: str,
+) -> list[tuple[int, Path]]:
+    """Enumerate available backup generations for a mind, ordered newest-first.
+
+    rc.12 dashboard surface: the operator's Settings → Voice card
+    needs to know how many rollback steps are still available so the
+    Rollback button can be disabled when the chain is empty + show
+    "N backups available" instead of guessing.
+
+    Returns:
+        List of ``(generation, path)`` tuples for every existing
+        backup file, ordered by generation ascending (1 = newest
+        first). Empty list when no backups exist.
+    """
+    _migrate_legacy_backup_if_present(data_dir=data_dir, mind_id=mind_id)
+    found: list[tuple[int, Path]] = []
+    for generation in range(1, _MAX_BACKUP_GENERATIONS + 1):
+        path = profile_backup_path(
+            data_dir=data_dir,
+            mind_id=mind_id,
+            generation=generation,
+        )
+        if path.is_file():
+            found.append((generation, path))
+    return found
 
 
 def save_calibration_profile(
@@ -327,12 +429,21 @@ def save_calibration_profile(
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target.with_suffix(target.suffix + _TMP_SUFFIX)
 
-    # Rotate the current profile into the .bak slot BEFORE the new
-    # write so a subsequent --rollback can restore it. Single-step
-    # rollback (v0.30.19): the previous .bak is overwritten, NOT
-    # archived multi-generation. Operators who need historical state
-    # can keep their own backups.
-    backup_target = profile_backup_path(data_dir=data_dir, mind_id=profile.mind_id)
+    # rc.12 multi-generation backup chain. Pre-rc.12 the current
+    # profile rotated into a single ``.bak`` slot, overwriting any
+    # prior backup — so an operator who calibrated twice in a row
+    # with a bad result lost their original good state forever. Now:
+    # rotate .bak.2 → .bak.3 (drop oldest), .bak.1 → .bak.2, current
+    # → .bak.1. Operator can roll back up to MAX_BACKUP_GENERATIONS
+    # times before the chain exhausts. Legacy ``.bak`` (single-slot,
+    # pre-rc.12) is auto-migrated into ``.bak.1`` before rotation.
+    _migrate_legacy_backup_if_present(data_dir=data_dir, mind_id=profile.mind_id)
+    _rotate_backup_chain(data_dir=data_dir, mind_id=profile.mind_id)
+    backup_target = profile_backup_path(
+        data_dir=data_dir,
+        mind_id=profile.mind_id,
+        generation=1,
+    )
     if target.is_file():
         os.replace(target, backup_target)
 
@@ -385,14 +496,59 @@ def save_calibration_profile(
     tmp_path.write_text(payload, encoding="utf-8")
     os.replace(tmp_path, target)
 
+    backup_generations = len(list_calibration_backups(data_dir=data_dir, mind_id=profile.mind_id))
     logger.info(
         "voice.calibration.profile.persisted",
         mind_id_hash=_short_hash(profile.mind_id),
         profile_id_hash=_short_hash(profile.profile_id),
         signed=was_signed,
         backup_present=backup_target.is_file(),
+        backup_generations=backup_generations,
     )
     return SaveProfileResult(path=target, signed=was_signed)
+
+
+def _rotate_backup_chain(*, data_dir: Path, mind_id: str) -> None:
+    """Shift the .bak.N chain up by one generation; oldest is dropped.
+
+    rc.12: called BEFORE ``save_calibration_profile`` rotates the
+    current profile into ``.bak.1``. Walking from oldest to newest
+    so each rename target is empty when reached:
+
+    - ``.bak.3`` deleted (drop oldest if present).
+    - ``.bak.2`` → ``.bak.3``.
+    - ``.bak.1`` → ``.bak.2``.
+
+    Now ``.bak.1`` is empty + ready to receive the about-to-be-
+    rotated current profile. No-op when no backups exist (fresh
+    install). Idempotent across crashes (each rename is a single
+    ``os.replace``, atomic on POSIX + Windows when on the same
+    volume).
+    """
+    # Walk newest-target first (delete .bak.3) so renames don't
+    # collide. The loop walks from MAX down to 1; each iteration
+    # promotes generation N to generation N+1.
+    oldest = profile_backup_path(
+        data_dir=data_dir,
+        mind_id=mind_id,
+        generation=_MAX_BACKUP_GENERATIONS,
+    )
+    if oldest.is_file():
+        oldest.unlink(missing_ok=True)
+    for generation in range(_MAX_BACKUP_GENERATIONS - 1, 0, -1):
+        src = profile_backup_path(
+            data_dir=data_dir,
+            mind_id=mind_id,
+            generation=generation,
+        )
+        if not src.is_file():
+            continue
+        dst = profile_backup_path(
+            data_dir=data_dir,
+            mind_id=mind_id,
+            generation=generation + 1,
+        )
+        os.replace(src, dst)
 
 
 def rollback_calibration_profile(
@@ -400,13 +556,14 @@ def rollback_calibration_profile(
     data_dir: Path,
     mind_id: str,
 ) -> Path:
-    """Restore the prior calibration profile from the .bak slot.
+    """Restore generation 1 of the backup chain as the current profile.
 
-    Atomically swaps ``calibration.json.bak`` -> ``calibration.json``
-    and removes the .bak. Single-step rollback only (v0.30.19): a
-    second consecutive ``--rollback`` raises
-    :class:`CalibrationProfileRollbackError` because the .bak is
-    consumed by the swap.
+    rc.12: walks the .bak.1..N chain. Restores .bak.1 as the current
+    profile (consumed by ``os.replace``), then shifts the remaining
+    backups down by one generation (.bak.2 → .bak.1, .bak.3 →
+    .bak.2). Pre-rc.12 was single-step (one .bak slot, consumed-on-
+    rollback); rc.12 lets the operator roll back up to
+    MAX_BACKUP_GENERATIONS times before the chain is exhausted.
 
     Args:
         data_dir: Sovyx data directory.
@@ -417,18 +574,20 @@ def rollback_calibration_profile(
         (always ``<data_dir>/<mind_id>/calibration.json``).
 
     Raises:
-        CalibrationProfileRollbackError: when no .bak exists, the
-            current profile cannot be removed, or the .bak cannot be
-            renamed into place.
+        CalibrationProfileRollbackError: when no backup exists at
+            generation 1 (chain exhausted OR fresh install with no
+            backups), or the .bak.1 cannot be loaded as a valid
+            CalibrationProfile (refuse to roll back to corrupt state).
     """
+    _migrate_legacy_backup_if_present(data_dir=data_dir, mind_id=mind_id)
     target = profile_path(data_dir=data_dir, mind_id=mind_id)
-    backup = profile_backup_path(data_dir=data_dir, mind_id=mind_id)
+    backup = profile_backup_path(data_dir=data_dir, mind_id=mind_id, generation=1)
 
     if not backup.is_file():
         raise CalibrationProfileRollbackError(
             f"no calibration backup at {backup} -- nothing to roll back. "
-            f"Single-step rollback only; if you've already rolled back once, "
-            f"re-run `sovyx doctor voice --calibrate` to regenerate."
+            f"The backup chain is exhausted (or never populated). "
+            f"Re-run `sovyx doctor voice --calibrate` to regenerate."
         )
 
     # Best-effort: if the rollback can't load the backup as a valid
@@ -449,11 +608,32 @@ def rollback_calibration_profile(
     # POSIX + Windows when source and target are on the same volume.
     os.replace(backup, target)
 
+    # rc.12: shift remaining backups down one generation so the
+    # operator can roll back AGAIN. .bak.2 → .bak.1, .bak.3 → .bak.2.
+    # Walking newest-shifted-target last so each rename target is
+    # empty (the just-consumed .bak.1, then the just-shifted .bak.2).
+    for generation in range(2, _MAX_BACKUP_GENERATIONS + 1):
+        src = profile_backup_path(
+            data_dir=data_dir,
+            mind_id=mind_id,
+            generation=generation,
+        )
+        if not src.is_file():
+            continue
+        dst = profile_backup_path(
+            data_dir=data_dir,
+            mind_id=mind_id,
+            generation=generation - 1,
+        )
+        os.replace(src, dst)
+
+    remaining = len(list_calibration_backups(data_dir=data_dir, mind_id=mind_id))
     logger.info(
         "voice.calibration.applier.rolled_back",
         profile_id_hash=_short_hash(backup_profile.profile_id),
         mind_id_hash=_short_hash(mind_id),
         rollback_reason="operator_initiated",
+        backup_generations_remaining=remaining,
     )
     return target
 

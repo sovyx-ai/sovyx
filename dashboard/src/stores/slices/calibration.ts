@@ -30,8 +30,10 @@ import type { StateCreator } from "zustand";
 import { ApiError, BASE_URL, api } from "@/lib/api";
 import i18n from "@/lib/i18n";
 import type {
+  CalibrationBackupListResponse,
   CalibrationFeatureFlagResponse,
   CalibrationFeatureFlagUpdateRequest,
+  CalibrationRollbackResponse,
   CancelJobResponse,
   PreviewFingerprintResponse,
   StartCalibrationRequest,
@@ -40,7 +42,9 @@ import type {
 } from "@/types/api";
 import { isWizardCalibrationTerminal } from "@/types/api";
 import {
+  CalibrationBackupListResponseSchema,
   CalibrationFeatureFlagResponseSchema,
+  CalibrationRollbackResponseSchema,
   CancelJobResponseSchema,
   PreviewFingerprintResponseSchema,
   StartCalibrationResponseSchema,
@@ -73,6 +77,13 @@ export interface CalibrationSlice {
    * null as "do not mount" (conservative gate).
    */
   calibrationFeatureFlag: CalibrationFeatureFlagResponse | null;
+  /**
+   * rc.12 — count of available rollback generations from
+   * ``GET /api/voice/calibration/backups``. Null while unloaded;
+   * populate via ``loadCalibrationBackups``. The RollbackButton uses
+   * this to render enabled (>0) or disabled (0).
+   */
+  calibrationBackupCount: number | null;
 
   // ── Actions ──
   /**
@@ -132,6 +143,24 @@ export interface CalibrationSlice {
   setCalibrationFeatureFlag: (
     enabled: boolean,
   ) => Promise<CalibrationFeatureFlagResponse | null>;
+
+  /**
+   * rc.12 — fetch the number of available rollback generations
+   * from ``GET /api/voice/calibration/backups``. Idempotent + cheap.
+   * Populates ``calibrationBackupCount``; on failure leaves the
+   * field null (RollbackButton treats null as "do not render"
+   * — conservative gate).
+   */
+  loadCalibrationBackups: () => Promise<number | null>;
+
+  /**
+   * rc.12 — POST ``/api/voice/calibration/rollback``. Restores
+   * generation 1 of the chain as the current profile. Returns the
+   * full response (with remaining-generations counter) on success
+   * or null on failure (409 chain exhausted / 500 corrupt backup
+   * / 401 / etc.) — error string populated for UI.
+   */
+  rollbackCalibration: () => Promise<CalibrationRollbackResponse | null>;
 }
 
 export const createCalibrationSlice: StateCreator<
@@ -147,6 +176,7 @@ export const createCalibrationSlice: StateCreator<
   calibrationError: null,
   calibrationWs: null,
   calibrationFeatureFlag: null,
+  calibrationBackupCount: null,
 
   // ── fetchCalibrationPreview ──
   fetchCalibrationPreview: async () => {
@@ -351,6 +381,50 @@ export const createCalibrationSlice: StateCreator<
       return data;
     } catch (err) {
       const message = _extractApiError(err, "Failed to update feature flag");
+      set({ calibrationLoading: false, calibrationError: message });
+      return null;
+    }
+  },
+
+  // ── loadCalibrationBackups (rc.12) ──
+  loadCalibrationBackups: async () => {
+    try {
+      const data = await api.get<CalibrationBackupListResponse>(
+        "/api/voice/calibration/backups",
+        { schema: CalibrationBackupListResponseSchema },
+      );
+      set({ calibrationBackupCount: data.generations.length });
+      return data.generations.length;
+    } catch (err) {
+      // Same conservative-gate pattern as loadCalibrationFeatureFlag
+      // — transient backend hiccup shouldn't poison the UI; leave
+      // the count null so RollbackButton stays disabled.
+      // eslint-disable-next-line no-console
+      console.warn("[calibration] backup-list load failed:", err);
+      set({ calibrationBackupCount: null });
+      return null;
+    }
+  },
+
+  // ── rollbackCalibration (rc.12) ──
+  rollbackCalibration: async () => {
+    set({ calibrationLoading: true, calibrationError: null });
+    try {
+      const data = await api.post<CalibrationRollbackResponse>(
+        "/api/voice/calibration/rollback",
+        {},
+        { schema: CalibrationRollbackResponseSchema },
+      );
+      set({
+        calibrationLoading: false,
+        calibrationBackupCount: data.backup_generations_remaining,
+      });
+      return data;
+    } catch (err) {
+      const message = _extractApiError(
+        err,
+        i18n.t("voice:calibration.error.api_rollback_failed"),
+      );
       set({ calibrationLoading: false, calibrationError: message });
       return null;
     }

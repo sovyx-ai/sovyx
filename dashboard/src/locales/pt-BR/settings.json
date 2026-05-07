@@ -188,6 +188,20 @@
     "startSuccess": "Calibração iniciada. Acompanhe o progresso no wizard de onboarding.",
     "startFailed": "Não foi possível iniciar a calibração."
   },
+  "rollback": {
+    "title": "Restaurar calibração anterior",
+    "description": "Volta para a calibração que estava ativa antes da última execução. O Sovyx mantém até 3 perfis anteriores para você reverter calibrações ruins sem perder o estado original bom.",
+    "button": "Voltar um passo",
+    "confirmButton": "Sim, restaurar a anterior",
+    "cancelButton": "Cancelar",
+    "loadingNote": "Verificando quantos passos de rollback estão disponíveis…",
+    "countNote_one": "{{count}} calibração anterior disponível para restaurar.",
+    "countNote_other": "{{count}} calibrações anteriores disponíveis para restaurar.",
+    "countNote_zero": "Nenhuma calibração anterior para restaurar. Rode uma calibração primeiro.",
+    "emptyChainTooltip": "Nenhuma calibração anterior para restaurar. Rode uma calibração primeiro.",
+    "success": "Restaurado. Ainda há {{remaining}} calibração(ões) anterior(es) disponível(eis) para reverter.",
+    "failed": "Não foi possível reverter a calibração. O backup pode estar corrompido — veja o log do daemon."
+  },
   "calibrationWizard": {
     "title": "Etapa de calibração de voz no onboarding",
     "description": "Monta o assistente de calibração multi-etapas com consciência de hardware durante a configuração de voz. Desabilitado por padrão enquanto a Camada 3 do sistema auto-calibrável está em soak; ative para optar por incluir este deployment.",
