@@ -259,6 +259,115 @@ class TestHypothesisIdEnum:
             HypothesisId("H999")
 
 
+class TestEndpointProbedAndFailedHelper:
+    """``_endpoint_probed_and_failed`` — explicit-failure semantics.
+
+    Closes the v0.31.2 audit's F1 (sibling of the rc.16 ``6359b2b``
+    null-coercion bug class). The bash diag emits per-endpoint records
+    with ``dns_ok`` / ``tcp_ok`` fields that may be:
+
+    * Python ``True`` / ``False`` (JSON ``true`` / ``false``)
+    * ``1`` / ``0`` (some bash variants emit ints)
+    * ``None`` (JSON ``null`` — value present but undefined)
+    * absent entirely (key missing from the record)
+
+    Pre-v0.31.2, the H7 check used ``not n.get("dns_ok")`` which
+    returned True for None / missing AND for False / 0, silently
+    inflating H7 evidence for endpoints that had not actually been
+    probed. The helper makes the failure semantic explicit:
+    only ``False`` and ``0`` count as failures; ``None`` and missing
+    mean "not probed".
+    """
+
+    def test_explicit_false_dns_counts_as_failed(self) -> None:
+        from sovyx.voice.diagnostics.triage import _endpoint_probed_and_failed
+
+        assert _endpoint_probed_and_failed({"dns_ok": False, "tcp_ok": True}) is True
+
+    def test_explicit_false_tcp_counts_as_failed(self) -> None:
+        from sovyx.voice.diagnostics.triage import _endpoint_probed_and_failed
+
+        assert _endpoint_probed_and_failed({"dns_ok": True, "tcp_ok": False}) is True
+
+    def test_int_zero_dns_counts_as_failed(self) -> None:
+        from sovyx.voice.diagnostics.triage import _endpoint_probed_and_failed
+
+        assert _endpoint_probed_and_failed({"dns_ok": 0, "tcp_ok": 1}) is True
+
+    def test_null_dns_does_not_count_as_failed(self) -> None:
+        """JSON null = "not probed", NOT failure (the v0.31.2 fix)."""
+        from sovyx.voice.diagnostics.triage import _endpoint_probed_and_failed
+
+        assert _endpoint_probed_and_failed({"dns_ok": None, "tcp_ok": None}) is False
+
+    def test_missing_keys_does_not_count_as_failed(self) -> None:
+        """Missing keys = "not probed", NOT failure (the v0.31.2 fix)."""
+        from sovyx.voice.diagnostics.triage import _endpoint_probed_and_failed
+
+        assert _endpoint_probed_and_failed({"host": "x"}) is False
+
+    def test_partial_probe_dns_failed_tcp_unknown(self) -> None:
+        """DNS explicitly failed, TCP not probed — endpoint is failed."""
+        from sovyx.voice.diagnostics.triage import _endpoint_probed_and_failed
+
+        assert _endpoint_probed_and_failed({"dns_ok": False, "tcp_ok": None}) is True
+
+    def test_both_true_counts_as_healthy(self) -> None:
+        from sovyx.voice.diagnostics.triage import _endpoint_probed_and_failed
+
+        assert _endpoint_probed_and_failed({"dns_ok": True, "tcp_ok": True}) is False
+
+    def test_h7_does_not_fire_on_unprobed_endpoint(self, tmp_path: Path) -> None:
+        """Integration: ``triage_tarball`` returns no H7 evidence for an
+        endpoint with all-null probe fields (the pre-v0.31.2 bug
+        path inflated H7 confidence for these endpoints)."""
+        summary = _make_summary(
+            network_llm=[
+                {
+                    "host": "api.anthropic.com",
+                    "port": 443,
+                    "dns_ok": None,
+                    "tcp_ok": None,
+                    "rtt_ms": None,
+                },
+            ],
+        )
+        tar = _make_linux_tarball(tmp_path, summary=summary)
+        result = triage_tarball(tar)
+        h7 = next(
+            (h for h in result.hypotheses if h.hid == HypothesisId.H7_NETWORK_BLOCKED_PROVIDER),
+            None,
+        )
+        assert h7 is not None
+        # The unprobed endpoint must NOT contribute evidence.
+        assert h7.confidence == 0.0
+        assert all("api.anthropic.com" not in ev for ev in h7.evidence_for)
+
+    def test_h7_fires_on_explicitly_failed_endpoint(self, tmp_path: Path) -> None:
+        """Integration: explicit ``dns_ok: false`` still triggers H7."""
+        summary = _make_summary(
+            network_llm=[
+                {
+                    "host": "api.openai.com",
+                    "port": 443,
+                    "dns_ok": False,
+                    "tcp_ok": False,
+                    "rtt_ms": None,
+                },
+            ],
+        )
+        tar = _make_linux_tarball(tmp_path, summary=summary)
+        result = triage_tarball(tar)
+        h7 = next(
+            (h for h in result.hypotheses if h.hid == HypothesisId.H7_NETWORK_BLOCKED_PROVIDER),
+            None,
+        )
+        assert h7 is not None
+        # 1 endpoint × 0.3 weight.
+        assert h7.confidence == pytest.approx(0.3)
+        assert any("api.openai.com" in ev for ev in h7.evidence_for)
+
+
 class TestRecommendedActions:
     """Hypotheses with operator-facing fix commands surface them in verdicts."""
 

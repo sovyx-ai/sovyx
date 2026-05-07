@@ -375,6 +375,33 @@ class _HypothesisBuilder:
         self.confidence = max(0.0, self.confidence - weight)
 
 
+def _endpoint_probed_and_failed(n: dict[str, Any]) -> bool:
+    """Return True iff the endpoint was probed AND one probe failed.
+
+    The bash diag emits per-endpoint records with ``dns_ok`` /
+    ``tcp_ok`` fields that may be JSON ``true`` / ``false`` (Python
+    bool), the integers ``1`` / ``0``, JSON ``null`` (Python ``None``),
+    or absent entirely. Pre-v0.31.2 H7 used ``not n.get("dns_ok")``
+    which returned True for None / missing — silently inflating H7
+    evidence weight when an endpoint had not been probed at all.
+
+    Explicit-failure semantics:
+
+    * ``True`` (bool) / ``1`` (int) → success → endpoint NOT failed.
+    * ``False`` (bool) / ``0`` (int) → explicit failure → endpoint failed.
+    * ``None`` / missing key → "not probed" → endpoint NOT failed.
+
+    Sibling of the dict.get() null-coercion bug class fixed in commit
+    ``6359b2b`` (rc.16) for substring ``in`` checks; this one is the
+    boolean-coercion variant of the same class. v0.31.2 closes it.
+    """
+    dns = n.get("dns_ok")
+    tcp = n.get("tcp_ok")
+    dns_failed = dns is False or dns == 0
+    tcp_failed = tcp is False or tcp == 0
+    return dns_failed or tcp_failed
+
+
 def _evaluate_hypotheses(
     root: Path, summary: dict[str, Any], toolkit: str, alerts: list[dict[str, Any]]
 ) -> list[_HypothesisBuilder]:
@@ -520,7 +547,16 @@ def _evaluate_hypotheses(
     network_data = summary.get("network_llm", [])
     # NOTE: Linux toolkit currently doesn't put network_llm in SUMMARY.json;
     # extending H7 to scan I_network/* artifacts would be a future improvement.
-    failed_endpoints = [n for n in network_data if not n.get("dns_ok") or not n.get("tcp_ok")]
+    #
+    # Defensive: use explicit-failure semantics for the probe fields so
+    # ``dns_ok=null`` / missing keys are treated as "not probed", NOT as
+    # "failed". The pre-v0.31.2 ``not n.get("dns_ok")`` shape returned
+    # True for None (missing OR JSON null) AND for False AND for 0,
+    # silently inflating H7 evidence weight when the bash diag did not
+    # probe an endpoint. Sibling of the dict.get() null-coercion bug
+    # class fixed in commit 6359b2b (rc.16) for substring ``in`` checks
+    # — this one is the boolean-coercion variant of the same class.
+    failed_endpoints = [n for n in network_data if _endpoint_probed_and_failed(n)]
     for n in failed_endpoints:
         h7.add_for(
             f"unreachable: {n.get('host')} dns={n.get('dns_ok')} tcp={n.get('tcp_ok')}", weight=0.3
