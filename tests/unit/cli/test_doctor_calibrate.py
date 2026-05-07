@@ -54,9 +54,20 @@ from sovyx.voice.diagnostics import (
 # naive substring assertions. Strip them before content checks.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
+# rc.16 — Rich also wraps long error-panel content at the terminal width
+# (default 80 cols on CI Linux). The wrap inserts box-drawing characters
+# (``│`` U+2502, ``╮`` U+256E, ``╯`` U+256F, etc.) that survive whitespace
+# stripping and split path filenames across lines (e.g.
+# ``no_such_key.p│em`` instead of ``no_such_key.pem``). Strip them too
+# so substring assertions on filenames work regardless of CI terminal
+# width. Local Windows runs don't reproduce because the Click CliRunner
+# uses a different default Console width on Windows.
+_BOX_DRAWING_RE = re.compile(r"[─-╿]")
+
 
 def _strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text)
+    """Strip ANSI escape codes AND Rich box-drawing chars (rc.16)."""
+    return _BOX_DRAWING_RE.sub("", _ANSI_RE.sub("", text))
 
 
 runner = CliRunner()

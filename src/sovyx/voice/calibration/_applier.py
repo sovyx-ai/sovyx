@@ -750,13 +750,13 @@ async def _apply_linux_mixer(
         if intent == "boost_up":
             apply_snap = await apply_mixer_boost_up(
                 card_snapshot.card_index,
-                card_snapshot,
+                card_snapshot.controls,
                 tuning=tuning,
             )
         else:  # intent == "reset"
             apply_snap = await apply_mixer_reset(
                 card_snapshot.card_index,
-                card_snapshot,
+                card_snapshot.controls,
                 tuning=tuning,
             )
     except BypassApplyError as exc:
