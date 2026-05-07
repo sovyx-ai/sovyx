@@ -2,7 +2,7 @@
 
 ## What it does
 
-The `sovyx.voice.calibration` package turns the forensic diagnostic toolkit (`sovyx doctor voice --full-diag`) into a deterministic, rule-based decision engine. Given a hardware fingerprint, a measurement snapshot, and a triage verdict, it produces a signed `CalibrationProfile` recording every applicable decision (set, advise, or preserve) along with full provenance — which rule fired, what conditions matched, what it produced. The applier persists the profile to `<data_dir>/<mind_id>/calibration.json` and exposes single-step rollback.
+The `sovyx.voice.calibration` package turns the forensic diagnostic toolkit (`sovyx doctor voice --full-diag`) into a deterministic, rule-based decision engine. Given a hardware fingerprint, a measurement snapshot, and a triage verdict, it produces a `CalibrationProfile` recording every applicable decision (set, advise, or preserve) along with full provenance — which rule fired, what conditions matched, what it produced. By default the profile is **unsigned** (LENIENT-loadable; STRICT mode rejects); pass `--signing-key <pem-path>` to sign with an Ed25519 private key. The applier persists the profile to `<data_dir>/<mind_id>/calibration.json` and exposes single-step rollback.
 
 This is Layer 2 of `MISSION-voice-self-calibrating-system-2026-05-05.md`. Layer 1 (the diag toolkit) provides the input; Layer 3 (the dashboard wizard) wraps Layer 2 in a tiered UX; Layer 4 (community KB) is deferred.
 
