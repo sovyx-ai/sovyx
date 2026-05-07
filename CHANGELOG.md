@@ -6,7 +6,148 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.11 below)
+(none — every shipped delta is in v0.31.0-rc.12 below)
+
+## [0.31.0-rc.12] — 2026-05-07
+
+Operator-debt closure round on top of v0.31.0-rc.11. The rc.11 final-
+audit had identified one CRITICAL (cross-platform gate, fixed in rc.11
+itself) plus several P1/P2/P3 operator-debt items that survived to
+rc.12: anti-pattern #35 reincidente (frontend-hardcoded
+``mind_id="default"`` skipping the backend resolver),
+single-slot backup losing original good state when the operator
+calibrated twice with bad results, no dashboard surface for rollback
+(CLI-only), no early-bail when no microphone is connected, and no
+defense-in-depth watchdog on the slow-path bash diag. rc.12 closes
+all of them with enterprise-grade fixes (no doc-only band-aids, no
+backend-only band-aids).
+
+### Fixed
+
+- **Fix #1 (CRITICAL — operator-blocking) — anti-pattern #35
+  reincidente: ``mind_id`` sentinel resolution.** The frontend
+  hardcoded ``mind_id="default"`` in two surfaces (onboarding step 4
+  ``VoiceStep.tsx:226`` and Settings ``RecalibrateButton`` default
+  prop). Pre-rc.12 the calibration backend at
+  ``voice_calibration.py:343`` accepted ``body.mind_id`` cleanly as
+  job_id AND on-disk path, meaning an operator who ran
+  ``sovyx init meu-mind`` saw the calibration profile land at
+  ``<data_dir>/default/calibration.json`` instead of
+  ``<data_dir>/meu-mind/calibration.json``. Next ``sovyx start`` would
+  load mind "meu-mind" + the factory would look for the profile in
+  the right per-mind directory, never find it, and silently skip it
+  — operator waited 8-12 minutes for a calibration with zero
+  persistent effect. **Fix:** when ``body.mind_id`` carries the
+  literal sentinel ``"default"``, resolve via
+  ``resolve_active_mind_id_for_request`` (the same resolver
+  ``/api/voice/enable`` uses post-T1.2). Explicit non-sentinel
+  mind_ids pass through. Same contract applied to the new
+  ``/rollback`` + ``/backups`` endpoints. Response now carries
+  ``resolved_mind_id`` + ``resolved_mind_id_source`` so dashboards
+  can confirm the resolution. 5 new tests in
+  ``TestStartEndpointMindIdResolution``.
+
+- **Fix #2 (P1) — multi-generation backup chain (3 generations).**
+  Pre-rc.12 the backup model was single-slot at
+  ``calibration.json.bak``, overwritten on every save. An operator
+  who calibrated twice with bad results lost the original good
+  state forever. **Fix:** rotating chain at
+  ``calibration.json.bak.{1,2,3}`` (max 3 generations). Each save
+  rotates: drop ``.bak.3``, shift ``.bak.2 → .bak.3``,
+  ``.bak.1 → .bak.2``, current → ``.bak.1``. Each rollback shifts
+  back: restore ``.bak.1`` as current (consumed), shift
+  ``.bak.2 → .bak.1``, ``.bak.3 → .bak.2``. Operator can roll back
+  up to 3 times before the chain exhausts. Legacy single-slot
+  ``.bak`` from rc.11 and earlier is auto-migrated to ``.bak.1`` on
+  first save/rollback after upgrade — operators upgrading don't lose
+  their last backup. 8 new tests in ``TestMultiGenerationBackup``.
+
+- **Fix #3 (P1) — dashboard Rollback button + REST surface.** Pre-
+  rc.12 rollback was CLI-only (``sovyx doctor voice --calibrate
+  --rollback``). The rc.11 final-audit flagged this as P3 operator-
+  debt: non-technical operators had no dashboard recovery path.
+  **Fix:** new ``POST /api/voice/calibration/rollback`` endpoint
+  (anti-pattern #35 contract: resolves sentinel mind_id) +
+  ``GET /api/voice/calibration/backups`` for read-only enumeration
+  so the button can render enabled/disabled correctly without a
+  speculative POST. New ``RollbackButton.tsx`` component in
+  Settings → Voice next to Recalibrate; two-step confirm UX,
+  disabled tooltip when chain is empty, success toast cites
+  remaining-generations counter. 6 new tests for backend (rollback +
+  backups), 6 new tests for the component. i18n in 3 locales.
+
+- **Fix #4 (P2) — orchestrator early-bail on no microphone.** Pre-
+  rc.12 the orchestrator would run the full 8-12 min slow-path bash
+  diag against an absent microphone, then surface a generic
+  fallback. **Fix:** detect upstream from the PROBING fingerprint
+  (``capture_devices`` field, ~1s overhead, already captured) and
+  emit FALLBACK with explicit ``reason="no_capture_device"`` +
+  actionable summary ("Connect a microphone and re-run") before the
+  slow-path runs. 2 new tests in ``TestOrchestratorNoCaptureDevice``.
+
+- **Fix #5 (P2) — slow-path total deadline (defense-in-depth
+  watchdog).** Pre-rc.12 the bash diag could hang indefinitely on a
+  driver bug / blocked syscall / paged-out swap; the wizard would
+  hang with it until the operator clicked Cancel manually. **Fix:**
+  new ``total_deadline_s`` parameter on ``run_full_diag_async``
+  defaulting to 30 minutes (2.5× the 12-minute design budget). On
+  expiry the watchdog fires the existing SIGTERM-grace-SIGKILL
+  cancellation path so trap-EXIT cleanup still runs; raises
+  ``DiagRunError`` citing the watchdog deadline. CLI operators on
+  genuinely slow hosts can pass ``None`` to disable the watchdog
+  (preserves pre-rc.12 unbounded-wait contract). 3 new tests in
+  ``TestSlowPathWatchdog``.
+
+- **Fix #6 (P2/P3) — telemetry retention contract documented +
+  rc.12 events catalogued.** ``docs/modules/voice-calibration.md``
+  Telemetry section gains a Retention contract subsection
+  documenting that calibration events flow through the standard
+  ``EngineConfig.logging.*`` retention horizon (no calibration-only
+  policy needed because calibration events carry no PII — mind_id is
+  hashed, profile_id is a UUID). New rc.12 events table:
+  ``mind_id_resolved``, ``rollback.mind_id_resolved``,
+  ``rollback.chain_exhausted``, ``rollback.backup_corrupt``,
+  ``profile.legacy_backup_migrated``, ``wizard.no_capture_device``,
+  ``full_diag_watchdog_fired``. Failure-modes table updated with the
+  3 rc.12 additions (multi-gen rollback, no-mic early-bail,
+  watchdog).
+
+### Quality gates
+
+- ``uv lock --check`` — clean (lockfile regenerated for the version
+  bump 0.31.0-rc.11 → 0.31.0-rc.12).
+- ``uv run ruff check src/ tests/`` — clean.
+- ``uv run ruff format --check src/ tests/`` — clean (1099 files).
+- ``uv run mypy src/`` — Success: no issues found in 512 source
+  files.
+- ``uv run bandit -r src/sovyx/`` — zero LOW/MEDIUM/HIGH.
+- ``uv run python -m pytest tests/ --ignore=tests/smoke
+  --timeout=30`` — 14540 passed / 26 skipped / 68 deselected (rc.12
+  adds 24 new tests across persistence + dashboard + orchestrator +
+  diagnostics + RollbackButton).
+- ``cd dashboard && npx tsc -b tsconfig.app.json`` — clean.
+- ``cd dashboard && npx vitest run`` — 1225 passed (+6 from rc.11's
+  1219).
+
+### Anti-patterns reinforced
+
+- **#35 (cross-layer config defaults are sentinels, not values).**
+  rc.12 adds a second worked example: the calibration ``/start`` and
+  ``/rollback`` endpoints now resolve the ``"default"`` sentinel
+  via ``resolve_active_mind_id_for_request`` instead of accepting
+  it cleanly. The forensic case is documented in the commit body +
+  this CHANGELOG.
+
+### Decision: rc.12, not GA
+
+rc.11 closed a critical cross-platform gap; rc.12 closes a critical
+correctness gap (mind_id sentinel) plus 4 medium operator-debt items
+that all touch production code paths. Per ``feedback_staged_adoption``
++ ``feedback_validation_batching``, real changes get one validation
+pass even when small. After rc.12 stabilises and the operator
+validates the canonical jornada (``sovyx init meu-mind`` → onboarding
+voice step → verify ``<data_dir>/meu-mind/calibration.json`` exists,
+NOT ``<data_dir>/default/calibration.json``), v0.31.0 GA is unblocked.
 
 ## [0.31.0-rc.11] — 2026-05-06
 

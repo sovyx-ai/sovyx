@@ -3632,7 +3632,7 @@ wheels = [
 
 [[package]]
 name = "sovyx"
-version = "0.31.0rc11"
+version = "0.31.0rc12"
 source = { editable = "." }
 dependencies = [
     { name = "aiogram" },
