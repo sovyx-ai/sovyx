@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from sovyx.dashboard.server import create_app
@@ -329,7 +330,21 @@ def _seed_persisted_profile(data_dir: Path, mind_id: str, profile_id: str) -> No
 class TestRollbackEndpoint:
     """rc.12 — ``POST /api/voice/calibration/rollback`` walks the
     multi-generation backup chain. Same sentinel-resolution contract
-    as /start (anti-pattern #35)."""
+    as /start (anti-pattern #35).
+
+    All tests in this class assume the daemon is running on Linux
+    (calibration is Linux-only per the v0.31.2 F4 platform gate). The
+    ``_linux_platform`` autouse fixture makes the assumption explicit
+    + portable across Win/macOS dev hosts where these tests still
+    need to exercise the rc.12 rollback contract."""
+
+    @pytest.fixture(autouse=True)
+    def _linux_platform(self):
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.sys.platform",
+            "linux",
+        ):
+            yield
 
     def test_rollback_409_when_chain_empty(self, tmp_path: Path) -> None:
         """No backups: 409 with operator-friendly message."""
@@ -418,7 +433,19 @@ class TestRollbackEndpoint:
 class TestBackupsEndpoint:
     """rc.12 — ``GET /api/voice/calibration/backups`` enumerates the
     chain so the dashboard's RollbackButton can render
-    enabled/disabled correctly without a wasted POST."""
+    enabled/disabled correctly without a wasted POST.
+
+    All tests in this class assume Linux per the v0.31.2 F4 platform
+    gate; the ``_linux_platform`` autouse fixture matches the
+    sibling ``TestRollbackEndpoint`` pattern."""
+
+    @pytest.fixture(autouse=True)
+    def _linux_platform(self):
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.sys.platform",
+            "linux",
+        ):
+            yield
 
     def test_backups_empty_on_fresh_install(self, tmp_path: Path) -> None:
         app = _build_app(tmp_path=tmp_path)
@@ -453,6 +480,81 @@ class TestBackupsEndpoint:
         client_no_auth = TestClient(app)
         response = client_no_auth.get("/api/voice/calibration/backups")
         assert response.status_code == 401
+
+
+# ====================================================================
+# v0.31.2 F4 — defense-in-depth platform gate for rollback surfaces
+# ====================================================================
+
+
+class TestRollbackPlatformGate:
+    """Backend refuses rollback enumeration + execution on non-Linux
+    daemons (defense-in-depth — frontend already gates on
+    ``platform_supported``, but the server-side check ensures even a
+    forgotten frontend gate can't trigger a rollback on an
+    unsupported platform).
+
+    Closes audit F4 from the v0.31.2 audit-closure mission. Same
+    bug class as rc.11..rc.14 (cross-platform gate uniform across
+    every consumer of ``calibrationFeatureFlag``)."""
+
+    def test_list_backups_returns_empty_on_non_linux(self, tmp_path: Path) -> None:
+        """Even with .bak.{1,2,3} files on disk (e.g. operator
+        hand-copied from another host), Win/macOS daemon returns
+        an empty list rather than enumerate."""
+        app = _build_app(tmp_path=tmp_path)
+        # Seed a real chain so the filesystem isn't empty.
+        for i in range(3):
+            _seed_persisted_profile(tmp_path, "default", f"abcdef0{i}-abcd-abcd-abcd-abcdefabcdef")
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.sys.platform",
+            "win32",
+        ):
+            response = _client(app).get("/api/voice/calibration/backups")
+        assert response.status_code == 200
+        body = response.json()
+        # Filesystem has 2 backups (3 saves → 2 .bak generations), but
+        # the platform gate returns the empty list.
+        assert body["generations"] == []
+
+    def test_rollback_refuses_409_on_non_linux(self, tmp_path: Path) -> None:
+        """POST /rollback returns 409 with platform-mention message
+        on non-Linux even when the chain has backups available."""
+        app = _build_app(tmp_path=tmp_path)
+        for i in range(2):
+            _seed_persisted_profile(tmp_path, "default", f"bcdef00{i}-bcde-bcde-bcde-bcdefbcdefbc")
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.sys.platform",
+            "darwin",
+        ):
+            response = _client(app).post(
+                "/api/voice/calibration/rollback",
+                json={"mind_id": "default"},
+            )
+        assert response.status_code == 409
+        # Operator-actionable message: mentions platform + points at
+        # the cross-platform fallback.
+        assert "Linux-only" in response.text
+        assert "darwin" in response.text or "device-test" in response.text
+
+    def test_rollback_succeeds_on_linux_with_chain(self, tmp_path: Path) -> None:
+        """Sanity: when the patch resolves to ``linux``, the
+        rollback proceeds normally — the platform gate is the only
+        difference between this test and ``test_rollback_succeeds_with_chain``."""
+        app = _build_app(tmp_path=tmp_path)
+        for i in range(2):
+            _seed_persisted_profile(tmp_path, "default", f"cdef000{i}-cdef-cdef-cdef-cdefcdefcdef")
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.sys.platform",
+            "linux",
+        ):
+            response = _client(app).post(
+                "/api/voice/calibration/rollback",
+                json={"mind_id": "default"},
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["backup_generations_remaining"] == 0
 
 
 # ====================================================================

@@ -201,6 +201,7 @@
     "countNote_other": "{{count}} prior calibrations available to restore.",
     "countNote_zero": "No prior calibrations to restore. Run a calibration first.",
     "emptyChainTooltip": "No prior calibrations to restore. Run a calibration first.",
+    "platformUnsupportedTooltip": "Calibration rollback is Linux-only. The bundled bash diagnostic toolkit doesn't run on Windows or macOS, so no rollback is available on this platform.",
     "success": "Restored. {{remaining}} prior calibration(s) still available to roll back to.",
     "failed": "Could not roll back the calibration. The backup may be corrupt — see the daemon log."
   },

@@ -912,7 +912,27 @@ async def rollback_calibration(
 
     Idempotency: NOT idempotent — each call consumes one generation.
     The dashboard SHOULD show a confirm dialog before invoking.
+
+    Cross-platform contract (v0.31.2 F4): calibration is Linux-only,
+    so rollback is too. On non-Linux daemons we refuse with HTTP 409
+    + an actionable message rather than walk the filesystem (which
+    might contain leftover ``.bak.{1,2,3}`` files from a migrated
+    data_dir or hand-copied calibration). Mirrors the
+    ``platform_supported=False`` contract that gates the rest of the
+    calibration surface; defense-in-depth so the frontend's
+    ``platform_supported`` check + this server-side gate both have to
+    fail before a non-supported platform mutation can land.
     """
+    if sys.platform != "linux":
+        raise HTTPException(
+            status_code=HTTP_409_CONFLICT,
+            detail=(
+                "Calibration rollback is Linux-only (the calibration "
+                "wizard runs the bundled bash diag toolkit which is "
+                f"not available on platform {sys.platform!r}). "
+                "Use the dashboard's simple device-test setup instead."
+            ),
+        )
     data_dir = _resolve_data_dir(request)
     resolved_mind_id, resolved_source = await _resolve_mind_id_from_sentinel(request, body.mind_id)
     if resolved_mind_id != body.mind_id:
@@ -978,7 +998,21 @@ async def list_calibration_backups_endpoint(
     Avoids the operator clicking Rollback only to see a 409.
 
     Same sentinel-resolution contract as ``/start`` and ``/rollback``.
+
+    Cross-platform contract (v0.31.2 F4): calibration is Linux-only,
+    so rollback enumeration is too. Non-Linux daemons return an empty
+    list regardless of filesystem state — even if leftover
+    ``.bak.{1,2,3}`` files exist (e.g. operator hand-copied or
+    migrated a data_dir from another host), enumerating them on a
+    non-supported platform would mislead the dashboard into rendering
+    the Rollback button enabled for a feature that cannot run.
+    Mirrors the ``platform_supported=False`` contract.
     """
+    if sys.platform != "linux":
+        return CalibrationBackupListResponse(
+            mind_id=mind_id,
+            generations=[],
+        )
     data_dir = _resolve_data_dir(request)
     resolved_mind_id, _source = await _resolve_mind_id_from_sentinel(request, mind_id)
     backups = list_calibration_backups(data_dir=data_dir, mind_id=resolved_mind_id)

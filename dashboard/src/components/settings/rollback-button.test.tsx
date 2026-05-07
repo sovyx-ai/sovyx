@@ -210,4 +210,72 @@ describe("RollbackButton", () => {
       { timeout: 3000, interval: 100 },
     );
   });
+
+  // ====================================================================
+  // v0.31.2 F4 — defense-in-depth platform_supported gate
+  // ====================================================================
+
+  it("disables button when platform_supported=false even with backups present", async () => {
+    // Backend (post-v0.31.2) actually returns generations=[] on non-Linux,
+    // but the frontend gate is defense-in-depth: if a future refactor
+    // ever loosens the backend, the platform_supported flag still gates.
+    // Here we simulate the "stale state" scenario: backups already
+    // loaded BEFORE the platform_supported flag arrived.
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ mind_id: "default", generations: [1, 2] }),
+    );
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: false,
+      },
+    });
+    render(<RollbackButton />);
+    await waitFor(() => {
+      const trigger = screen.getByTestId("settings-rollback-toggle");
+      expect(trigger).toBeDisabled();
+    });
+    // Tooltip surfaces the platform-specific message, not the
+    // empty-chain message.
+    const trigger = screen.getByTestId("settings-rollback-toggle");
+    expect(trigger.getAttribute("title")).toMatch(/Linux-only|Linux only/i);
+  });
+
+  it("enables button when platform_supported=true and backups exist", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ mind_id: "default", generations: [1] }),
+    );
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: true,
+      },
+    });
+    render(<RollbackButton />);
+    await waitFor(() => {
+      const trigger = screen.getByTestId("settings-rollback-toggle");
+      expect(trigger).not.toBeDisabled();
+    });
+  });
+
+  it("falls through to legacy behaviour when platform_supported is undefined (pre-rc.11 zod schema)", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ mind_id: "default", generations: [1] }),
+    );
+    // Legacy flag without platform_supported field — schema's
+    // ?? true default applies, button enables when count > 0.
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+      } as never,
+    });
+    render(<RollbackButton />);
+    await waitFor(() => {
+      const trigger = screen.getByTestId("settings-rollback-toggle");
+      expect(trigger).not.toBeDisabled();
+    });
+  });
 });

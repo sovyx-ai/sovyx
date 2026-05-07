@@ -43,6 +43,16 @@ export function RollbackButton() {
   const currentJob = useDashboardStore((s) => s.currentCalibrationJob);
   const loadBackups = useDashboardStore((s) => s.loadCalibrationBackups);
   const rollbackCalibration = useDashboardStore((s) => s.rollbackCalibration);
+  // v0.31.2 F4: closes the audit gap where RollbackButton was the only
+  // calibration surface NOT gating on ``platform_supported``. Same bug
+  // class as rc.11 EIXO 2 (VoiceStep) / rc.13 (RecalibrateButton) /
+  // rc.14 (CalibrationWizardCard) — the prior closure protocol stopped
+  // at three siblings and missed this fourth. Defense-in-depth: backend
+  // ``list_calibration_backups_endpoint`` also refuses on non-Linux,
+  // so even if this gate is ever accidentally weakened, the operator
+  // still sees ``backupCount=0`` and the button stays disabled.
+  const featureFlag = useDashboardStore((s) => s.calibrationFeatureFlag);
+  const platformSupported = featureFlag?.platform_supported ?? true;
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const retriedRef = useRef(false);
@@ -105,10 +115,22 @@ export function RollbackButton() {
   }, [rollbackCalibration, t]);
 
   // Conservative gate: render disabled when the count hasn't loaded
-  // yet (null) OR is zero. Operators see the surface but can't
-  // accidentally trigger a 409.
-  const enabled = typeof backupCount === "number" && backupCount > 0;
-  const tooltip = !enabled ? t("settings:rollback.emptyChainTooltip") : undefined;
+  // yet (null), is zero, OR the platform doesn't support calibration
+  // (Win/macOS). Operators see the surface but can't accidentally
+  // trigger a 409. The platform check uses ?? true so legacy
+  // (pre-rc.11) zod schemas without the field fall through to
+  // legacy single-platform behaviour.
+  const enabled =
+    platformSupported && typeof backupCount === "number" && backupCount > 0;
+  const tooltip = (() => {
+    if (!platformSupported) {
+      return t("settings:rollback.platformUnsupportedTooltip");
+    }
+    if (!enabled) {
+      return t("settings:rollback.emptyChainTooltip");
+    }
+    return undefined;
+  })();
 
   return (
     <section

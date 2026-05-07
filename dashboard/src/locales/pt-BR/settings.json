@@ -201,6 +201,7 @@
     "countNote_other": "{{count}} calibrações anteriores disponíveis para restaurar.",
     "countNote_zero": "Nenhuma calibração anterior para restaurar. Rode uma calibração primeiro.",
     "emptyChainTooltip": "Nenhuma calibração anterior para restaurar. Rode uma calibração primeiro.",
+    "platformUnsupportedTooltip": "Rollback de calibração é Linux-only. O toolkit bash de diagnóstico não roda no Windows ou macOS, então não há rollback disponível nesta plataforma.",
     "success": "Restaurado. Ainda há {{remaining}} calibração(ões) anterior(es) disponível(eis) para reverter.",
     "failed": "Não foi possível reverter a calibração. O backup pode estar corrompido — veja o log do daemon."
   },
