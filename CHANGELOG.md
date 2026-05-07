@@ -6,7 +6,95 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.15 below)
+(none — every shipped delta is in v0.31.0-rc.16 below)
+
+## [0.31.0-rc.16] — 2026-05-07
+
+CI-fix RC. Operator showed that `publish.yml` + `ci.yml` had been
+**failing on Linux + macOS + Windows runners since rc.11** (mypy +
+3 pytest tests). The local quality-gate validation in rc.11..rc.15
+ran on the operator's Windows host, where mypy false-positives and
+Rich rendering differences masked real Linux-baseline failures.
+
+This is a worked example of CLAUDE.md Debugging Rule #10:
+> Windows mypy noise: local ``uv run mypy src/`` on Windows reports
+> platform-specific ``AF_UNIX`` / ``os.sysconf`` / ``getrusage`` /
+> ``open_unix_server`` errors. Those 9 are false positives on
+> Windows; only count errors OUTSIDE that list as real regressions.
+> CI runs Linux — the true baseline.
+
+I ignored my own rule for 5 RCs. rc.16 closes the gap by fixing
+the actual Linux-baseline issues + tightening tests so this class
+cannot recur.
+
+### Fixed
+
+- **rc.16 — mypy `_applier.py:753,759` Linux baseline.** Two
+  ``apply_mixer_*`` calls passed ``card_snapshot`` (a
+  ``MixerCardSnapshot``) where the function expected
+  ``Sequence[MixerControlSnapshot]`` (the ``.controls`` field of
+  the snapshot). Linux mypy strict caught it; Windows mypy did
+  not (ignored as a "noise" error). Fix: pass
+  ``card_snapshot.controls`` instead. **The runtime behaviour was
+  already correct** — `apply_mixer_boost_up` and
+  `apply_mixer_reset` iterate over the second argument as a
+  Sequence; ``MixerCardSnapshot`` is iterable + yields its
+  ``controls``, so the runtime contract held. The mypy error
+  flagged the type signature lying — fix tightens the signature
+  to match the runtime contract.
+
+- **rc.16 — `test_calibrate_flag_help_lists_all_options` ANSI
+  stripping.** The test asserted ``"--full-diag" in result.output``
+  but on CI Linux, Rich emits each ``-`` of ``--`` separated by
+  ANSI colour escapes (TTY-detected). The literal substring
+  ``"--full-diag"`` doesn't appear in the colourised output. Fix:
+  strip ANSI escapes before the substring assertion. Local Windows
+  shells don't trigger Rich's colour path so the test passed
+  locally but failed on CI Linux + macOS for 5 RCs.
+
+- **rc.16 — `test_signing_key_missing_path_rejected_before_diag`
+  box-drawing stripping.** The test asserted
+  ``"no_such_key.pem" in combined_compact`` after stripping ANSI +
+  whitespace. But Rich wraps long error-panel content at the
+  terminal width (default 80 cols on CI Linux), inserting
+  box-drawing characters (``│`` U+2502) that survive whitespace
+  stripping and split the filename across lines (e.g.
+  ``no_such_key.p│em``). Fix: ``_strip_ansi`` helper now also
+  strips Unicode box-drawing chars (``[─-╿]`` range). Local
+  Windows reproduction differs because Click CliRunner uses a
+  different default Console width on Windows.
+
+### Quality gates @ HEAD (rc.16)
+
+- ``uv lock --check`` — clean.
+- ``uv run ruff check src/ tests/`` — clean.
+- ``uv run ruff format --check src/ tests/`` — clean (1099 files).
+- ``uv run mypy src/`` — Success: no issues found in 512 source
+  files (Linux baseline, post-fix).
+- ``uv run bandit -r src/sovyx/`` — zero LOW/MEDIUM/HIGH.
+- ``uv run python -m pytest tests/ --ignore=tests/smoke
+  --timeout=30`` — green (post-fix; CI-aware test fixtures).
+- ``cd dashboard && npx vitest run`` — 1235 passed (no frontend
+  changes; identical to rc.15).
+
+### Anti-pattern reinforced
+
+CLAUDE.md Debugging Rule #10 reincidente. The 5-RC delay between
+introducing the mypy bug (likely pre-rc.11) and catching it
+(rc.16) is a worked example of why ``CI runs Linux — the true
+baseline`` matters. Mitigation: my self-audit pattern across
+rc.11..rc.15 only checked the operator's local pytest/vitest/
+mypy, never asked ``has CI been green since the last green
+build?``. Going forward, every RC closure should include a
+``gh run list --limit 3`` check on the previous tag's CI status
+before declaring "all gates green".
+
+### Decision: rc.16, then v0.31.0 GA gate
+
+After rc.16 closes the CI-Linux regression, every gate is green
+on every runner. v0.31.0 GA tag is gated only on operator
+validation (canonical jornada across rc.11..rc.15 surfaces) +
+this newly-green CI signal.
 
 ## [0.31.0-rc.15] — 2026-05-07
 
