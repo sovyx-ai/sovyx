@@ -333,7 +333,14 @@ def _detect_toolkit(summary: dict[str, Any]) -> str:
     if "mac" in tool:
         return "macos"
     # v4.3 Linux: detect via host_capability_summary.kernel_line.
-    kline = (summary.get("host_capability_summary", {}) or {}).get("kernel_line", "")
+    # The bash SUMMARY.json may emit ``kernel_line: null`` when uname
+    # was unavailable / errored — JSON ``null`` decodes to Python
+    # ``None``. ``.get(key, default)`` does NOT use the default when
+    # the key exists with a None value, so we need an explicit
+    # ``or ""`` after the chain to coerce None → "" before the
+    # substring checks. Without it, ``"Darwin" in None`` raises
+    # ``TypeError: argument of type 'NoneType' is not iterable``.
+    kline = (summary.get("host_capability_summary", {}) or {}).get("kernel_line") or ""
     if "Darwin" in kline:
         return "macos"
     if "Microsoft" in kline or "WSL" in kline:
@@ -382,11 +389,17 @@ def _evaluate_hypotheses(
     h1 = get(
         "H1", "Microphone signal destroyed upstream of user-space (APO/HAL plug-in/mute/hardware)"
     )
+    # Defensive null coercion: ``a["message"]`` may be JSON null (None
+    # in Python) — ``.get(key, "")`` does NOT substitute the default
+    # for null values, only for missing keys. ``or ""`` after the get
+    # coerces None → "" before the ``in`` substring check, avoiding
+    # ``TypeError: argument of type 'NoneType' is not iterable``.
+    # Same pattern as ``_detect_toolkit`` kernel_line handling above.
     silence_alerts = [
         a
         for a in alerts
-        if "silence_across" in a.get("message", "")
-        or "voice_clarity_destroying" in a.get("message", "")
+        if "silence_across" in (a.get("message") or "")
+        or "voice_clarity_destroying" in (a.get("message") or "")
     ]
     for a in silence_alerts:
         h1.add_for(f"alert: {a['message'][:200]}", weight=0.5)
@@ -458,12 +471,14 @@ def _evaluate_hypotheses(
             "Linux PipeWire/PulseAudio destructive filter loaded (echo-cancel/rnnoise/webrtc)",
         )
         for a in alerts:
+            # Same null-coercion as the silence_alerts block above.
+            msg = a.get("message") or ""
             if (
-                "destructive pactl modules" in a.get("message", "")
-                or "destructive filter" in a.get("message", "")
-                or "PipeWire DSP filters" in a.get("message", "")
+                "destructive pactl modules" in msg
+                or "destructive filter" in msg
+                or "PipeWire DSP filters" in msg
             ):
-                h4.add_for(f"alert: {a['message'][:200]}", weight=0.4)
+                h4.add_for(f"alert: {msg[:200]}", weight=0.4)
 
     # --- H5: Mic permission denied (cross-OS) ---
     h5 = get("H5", "Microphone permission denied to Sovyx process")

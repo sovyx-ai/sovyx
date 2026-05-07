@@ -128,6 +128,45 @@ class TestSchemaValidation:
         assert rc == 1
         assert "SUMMARY.json not found" in err
 
+    def test_null_kernel_line_does_not_crash_detect_toolkit(self, tmp_path: Path) -> None:
+        """Regression for the Voice-Bash-Diag-Smoke gate failure.
+
+        Bash SUMMARY.json may emit ``"kernel_line": null`` when ``uname``
+        was unavailable / returned non-zero. JSON null decodes to
+        Python ``None``, and ``dict.get(key, default)`` does NOT
+        substitute the default for null values — only for missing
+        keys. Pre-fix ``_detect_toolkit`` then evaluated
+        ``"Darwin" in None`` → ``TypeError: argument of type 'NoneType'
+        is not iterable``. Fix coerces None → "" via ``... or ""``
+        before the substring checks. Same defensive pattern applied
+        to every other ``a.get("message", "")`` site that feeds into
+        a substring ``in`` check.
+        """
+        bad_summary = _make_summary()
+        bad_summary["host_capability_summary"] = {"kernel_line": None}
+        tar = _make_linux_tarball(tmp_path, summary=bad_summary)
+        rc, out, err = _run_triage(tar)
+        # Triage should NOT crash; should default-detect linux toolkit
+        # (since tool name + null kernel line don't say macos/windows).
+        assert rc == 0, f"triage crashed: stderr={err!r}"
+        # Sanity: the run produced a verdict instead of a TypeError.
+        assert "TypeError" not in err
+
+    def test_null_alert_message_does_not_crash_h1(self, tmp_path: Path) -> None:
+        """Regression for the same null-coercion bug class on
+        ``alerts[*].message``. Bash MAY emit ``message: null`` for an
+        alert that fired without a structured message body. The H1
+        evaluator's ``"silence_across" in a.get("message", "")`` would
+        previously crash with the same TypeError; now it coerces None
+        → "" before the ``in`` check.
+        """
+        bad_summary = _make_summary()
+        bad_alerts = [{"severity": "warning", "message": None}]
+        tar = _make_linux_tarball(tmp_path, summary=bad_summary, alerts=bad_alerts)
+        rc, _, err = _run_triage(tar)
+        assert rc == 0, f"triage crashed: stderr={err!r}"
+        assert "TypeError" not in err
+
 
 class TestHypothesisH1MicDead:
     """H1 — Microphone signal destroyed (cross-OS)."""
