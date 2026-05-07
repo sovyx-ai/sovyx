@@ -6,7 +6,115 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.1 below)
+(none — every shipped delta is in v0.31.2 below)
+
+## [0.31.2] — 2026-05-07
+
+Audit-closure second pass. Fresh post-v0.31.1 audit (8 senior-dev
+lenses) found 5 NEW findings beyond the 6 closed in v0.31.1: 1
+functional regression (sibling of the rc.16 ``6359b2b`` null-coercion
+bug class), 2 doc drifts the v0.31.1 closure verification grep
+missed, 1 cross-platform gate gap, and 1 baseline observation
+(v0.31.1 CI status pending at audit time, since landed green).
+
+The meta-lesson archived: my v0.31.1 closure verification grep was
+scoped to ``voice-calibration.md`` + ``doctor.py`` only, NOT
+codebase-wide. ``feedback_ci_preflight`` literally documents this
+anti-pattern: "verification grep must span ENTIRE codebase the bug
+class affects (src/ + docs/ + dashboard/src/)". v0.31.2 codifies
+the protocol at the mission level (D7 in the mission spec): every
+closure now requires running grep across all three surfaces with
+zero non-forensic matches.
+
+### Fixed
+
+- **F1 — `triage.py:523` H7 null-coercion bug.** Sibling of the
+  rc.16 ``6359b2b`` fix for substring ``in`` checks; this is the
+  boolean-coercion variant. Pre-v0.31.2 ``not n.get("dns_ok")``
+  evaluated True for None / missing AND for False / 0, silently
+  inflating H7 evidence weight when the bash diag did not probe an
+  endpoint. Replaced with an explicit-failure
+  ``_endpoint_probed_and_failed(n)`` helper: only ``False`` (Python
+  literal) or ``0`` (int) count as failures; ``None`` / missing key
+  mean "not probed". 8 new regression tests cover all four plausible
+  bash emissions (true/false JSON booleans, 1/0 ints, null, missing)
+  + 2 integration tests via ``triage_tarball``.
+
+### Documentation (audit-closure docs sweep)
+
+- **F2 — retention table corrected.** ``voice-calibration.md:147-148``
+  claimed "14 days × 5MB rotated files"; actual config defaults at
+  ``engine/config.py:2459-2460`` are ``file_max_bytes = 50 MB`` +
+  ``file_backup_count = 10`` (≈ 550 MB total capacity). Doc was both
+  10× off on size AND mistakenly described rotation by time (it's by
+  size). Replaced with factual table + explicit note + correct env
+  override pointers (``SOVYX_OBSERVABILITY__FILE_MAX_BYTES`` /
+  ``SOVYX_OBSERVABILITY__FILE_BACKUP_COUNT``).
+
+- **F3 — `getting-started.md:183-187` rollback prose updated.**
+  Pre-v0.31.2 the operator-facing onboarding still described the
+  rc.11 single-slot rollback model ("single backup", "single step
+  only — one backup slot"). rc.12 introduced the multi-generation
+  chain (``.bak.{1,2,3}``); v0.31.0-rc.12 updated
+  ``voice-calibration.md`` and v0.31.1 D6 updated the CLI help, but
+  ``getting-started.md`` was missed because the v0.31.1 verification
+  grep was scoped too narrowly. Replaced with the rc.12 contract
+  (up to 3 prior calibrations retained; rollback consumes one
+  generation; ``--calibrate`` repopulates after exhaustion; CLI
+  prints how many rollback steps remain).
+
+### Cross-platform contract
+
+- **F4 — defense-in-depth platform gate for rollback.**
+  ``RollbackButton`` was the only ``calibrationFeatureFlag`` consumer
+  NOT gating on ``platform_supported`` (the rc.11 EIXO 2 / rc.13 /
+  rc.14 closure protocol stopped at three siblings and missed this
+  fourth). Dual-layer gate now in place: backend
+  ``list_calibration_backups_endpoint`` returns ``{generations: []}``
+  on non-Linux + ``rollback_calibration`` refuses with HTTP 409;
+  frontend ``RollbackButton`` reads
+  ``platform_supported ?? true`` with Linux-only tooltip. After
+  v0.31.2: zero production consumer of ``calibrationFeatureFlag``
+  ignores ``platform_supported``. 6 new tests (3 backend + 3
+  frontend); plus ``_linux_platform`` autouse fixture on
+  ``TestRollbackEndpoint`` + ``TestBackupsEndpoint`` so their
+  pre-existing tests still exercise the rc.12 contract on Win/macOS
+  dev hosts.
+
+### Verification gates (all return zero non-forensic matches at v0.31.2 tag)
+
+```bash
+# v0.31.2 closure
+git grep -nE 'not\s+\w+\.get\(' src/sovyx/voice/diagnostics/   # F1
+git grep -nE '14 days × 5\s?MB|14 days x 5\s?MB' docs/   # F2
+git grep -nE 'single backup|one backup slot|single-step undo|single step only' docs/ dashboard/src/   # F3
+
+# Legacy v0.31.1 closure (still green)
+git grep -n "on next mind start" src/sovyx/voice/calibration/ docs/   # D1
+git grep -nE 'Future commits in v0\.30|\[v0\.30\.[0-9]+\+\]' src/sovyx/voice/calibration/   # D5
+git grep -n "Single-step undo only" src/sovyx/cli/commands/doctor.py   # D6
+```
+
+(F1 grep returns 2 forensic docstring/comment narrative matches at
+``triage.py:384`` + ``:553`` — audit-trail per
+``feedback_no_rc_cadence``, accepted in the closure memo.)
+
+### Quality gates (all green at HEAD)
+
+- ruff + format: clean
+- mypy strict: 0 issues in 512 source files (Linux baseline match)
+- bandit: 0/0/0/0
+- pytest: 14564 passed (+24 from v0.31.1 baseline of 14540)
+- vitest: 1238 passed (+3 from v0.31.1 baseline of 1235)
+- tsc -b: clean
+- uv lock --check: clean
+
+### Mission
+
+Spec:
+``docs-internal/missions/MISSION-voice-v0_31_2-audit-closure-2026-05-07.md``.
+Four-commit chain (F1 fix + F2/F3 doc sweep + F4 dual-layer gate +
+release) per ``feedback_staged_adoption``.
 
 ## [0.31.1] — 2026-05-07
 
