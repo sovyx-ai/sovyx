@@ -160,12 +160,20 @@ sovyx doctor voice --calibrate --non-interactive
 This is an automatic 8-12 minute hardware tune-up. It detects mic/mixer
 issues, applies safe fixes, and saves the result so the next run replays
 the cached profile in ~5 seconds. **You don't need any technical
-knowledge to run it** — the dashboard's onboarding flow surfaces it
-automatically; the CLI command above is a manual entry point for the
-same flow. Linux only (uses bundled bash diag tools).
+knowledge to run it** — the dashboard's onboarding flow mounts the
+calibration wizard automatically with a "Start calibration" button on
+the Voice step (one click, then it runs unattended). The CLI command
+above is a manual entry point for the same flow.
+
+**Linux only** — the slow-path uses bundled bash diag tools that aren't
+available on Windows or macOS. On those platforms the dashboard skips
+the auto-fix wizard and shows the simple device-test setup instead, so
+you still get a guided path; the CLI command above will print a
+"Linux-only" message.
 
 The dashboard's Settings → Voice section also has a "Recalibrate" button
-that re-runs the same flow any time without leaving the UI.
+that re-runs the same flow any time without leaving the UI (also
+disabled on non-Linux daemons).
 
 #### What if the auto-fix didn't help?
 

@@ -102,34 +102,47 @@ llm:
 
 ### Voice calibration wizard
 
-The dashboard's onboarding flow can mount a calibration wizard that
-runs the full forensic diag (8-12 min) and applies the matching rule
-automatically. Default OFF — the legacy `<HardwareDetection />` flow
-runs unless the flag is enabled.
+The dashboard's onboarding flow mounts a calibration wizard that runs
+the full forensic diag (8-12 min) and applies the matching rule
+automatically. **Default ON since v0.31.0-rc.10** — fresh installs see
+the auto-fix wizard on the onboarding Voice step. Flip OFF to keep the
+legacy `<HardwareDetection />` flow.
 
 ```yaml
 voice:
-  calibration_wizard_enabled: false   # default; flip to true to mount the wizard
+  calibration_wizard_enabled: true   # default since v0.31.0-rc.10; flip to false to disable
 ```
 
 Or via env:
 
 ```bash
-export SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED=true
+export SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED=false
 ```
 
 Or runtime via the dashboard: **Settings → Voice → Calibration wizard**
 toggle (in-memory override; restart re-reads the persisted config).
 
 When ON, the dashboard onboarding mounts `<VoiceCalibrationStep />`;
-when OFF (default), it falls through to the legacy hardware-detection
-+ optional setup wizard. Both flows persist `voice_id` + `language` to
+when OFF, it falls through to the legacy hardware-detection + optional
+setup wizard. Both flows persist `voice_id` + `language` to
 `mind.yaml`. The recalibrate button in **Settings → Voice** is always
 visible regardless of this flag (disabled with a tooltip when off).
 
+**Cross-platform behaviour** — the underlying bash diag toolkit is
+Linux-only (`voice/diagnostics/_runner.py:_check_prerequisites`
+raises on non-Linux). On Windows / macOS daemons, the dashboard's
+`GET /api/voice/calibration/feature-flag` response carries
+`platform_supported: false`; the frontend gates the wizard mount on
+`enabled AND platform_supported`, so non-Linux operators get the
+legacy flow plus a banner explaining the limitation. Flipping
+`calibration_wizard_enabled` on a non-Linux daemon has no visible
+effect on the onboarding step (still gated by `platform_supported`).
+
 CLI operators don't need this flag — `sovyx doctor voice --calibrate`
 runs the same calibration pipeline end-to-end without the dashboard
-mount.
+mount (also Linux-only; non-Linux callers get a friendly
+DiagPrerequisiteError message pointing at `sovyx doctor voice` for
+cross-platform health checks).
 
 ## Mind Config — `mind.yaml`
 
