@@ -6,7 +6,108 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.13 below)
+(none — every shipped delta is in v0.31.0-rc.14 below)
+
+## [0.31.0-rc.14] — 2026-05-07
+
+Single-fix release closing the bug class definitively. The rc.13
+self-audit response surfaced ONE remaining surface that gated only
+on ``flag.enabled`` ignoring ``platform_supported``: the
+``CalibrationWizardCard`` toggle in Settings → Voice → Advanced.
+The card's status badge said "Enabled" on Win/macOS while every
+downstream user-facing surface (wizard mount + Recalibrate) was
+actually disabled because of platform — the card LIED about state.
+
+Pre-rc.14 cenário on Win/macOS:
+- ``calibration_wizard_enabled`` is True by default since rc.10.
+- Operator opens Settings → Voice → sees CalibrationWizardCard
+  status badge "Enabled" (gate was just ``flag.enabled``).
+- Operator clicks "Disable wizard" → toggle flips OK → toast
+  "disabled" → status badge changes to "Disabled".
+- Operator clicks "Enable wizard" → toggle flips OK → toast
+  "enabled" → status badge says "Enabled" again.
+- BUT every other surface in the dashboard ignores the flip
+  because of platform_supported. Operator confused by the
+  inconsistency between this card's claim of state and what they
+  actually see in onboarding + Recalibrate.
+
+This was the **fourth surface** of the same bug class — a 4th
+landing of the lesson "fix the bug class, not where the brief
+surfaces it":
+- rc.11 closed the gate on ``VoiceStep.tsx`` (onboarding wizard)
+- rc.13 closed the gate on ``RecalibrateButton`` (Settings)
+- rc.14 closes the gate on ``CalibrationWizardCard`` (Settings)
+- After rc.14: zero ``calibrationFeatureFlag`` consumer ignores
+  ``platform_supported``. The class is closed.
+
+### Fixed
+
+- **rc.14 single fix — CalibrationWizardCard platform_supported
+  gate.** ``dashboard/src/components/settings/calibration-wizard-card.tsx``
+  now computes ``platformSupported = flag?.platform_supported ??
+  true`` (defaults to True for pre-rc.12 daemon back-compat per
+  zod schema contract). Three behaviour changes:
+  1. Status badge: when ``platform_supported`` is false, shows
+     ``statusPlatformUnsupported`` ("Linux-only (unavailable
+     here)") instead of the misleading ``statusEnabled``/
+     ``statusDisabled`` based on the in-memory flag.
+  2. Toggle button: disabled when ``platform_supported`` is
+     false (or ``loading`` or ``flag === null``). Tooltip cites
+     the Linux-only limitation, NOT the generic disabled hint.
+  3. Body note: when ``platform_supported`` is false, shows
+     ``platformUnsupportedNote`` explaining the Linux-only
+     constraint + pointing at the simple device-test wizard
+     instead of the standard ``persistenceNote``.
+- 2 new tests in ``calibration-wizard-card.test.tsx``:
+  - ``platform_supported=false`` disables the toggle + status
+    badge says Linux-only + tooltip cites Linux.
+  - Missing ``platform_supported`` field defaults to True
+    (pre-rc.12 daemon back-compat).
+- i18n: ``settings:calibrationWizard.statusPlatformUnsupported``
+  + ``platformUnsupportedTooltip`` + ``platformUnsupportedNote``
+  in en, pt-BR, es.
+
+### Quality gates
+
+- ``uv lock --check`` — clean.
+- ``uv run ruff check src/ tests/`` — clean.
+- ``uv run ruff format --check src/ tests/`` — clean (1099 files).
+- ``uv run mypy src/`` — Success: no issues found in 512 source
+  files.
+- ``uv run bandit -r src/sovyx/`` — zero LOW/MEDIUM/HIGH.
+- ``uv run python -m pytest tests/ --ignore=tests/smoke
+  --timeout=30`` — green (no Python changes; identical to rc.13's
+  14540 passed).
+- ``cd dashboard && npx tsc -b tsconfig.app.json`` — clean.
+- ``cd dashboard && npx vitest run`` — 1229 passed (+2 from rc.13's
+  1227).
+
+### Anti-patterns reinforced (4th repetition)
+
+Same lesson as rc.9 / rc.10 / rc.12 / rc.13: **"fix the bug class,
+not where the brief surfaces it."** When fixing a bug at site X,
+grep ALL sites of the same bug class BEFORE writing the patch.
+This time the lesson finally landed at the right boundary: the
+rc.13 closure self-audit caught the CalibrationWizardCard miss,
+and the rc.14 grep confirmed (via
+``grep -rE "calibrationFeatureFlag" dashboard/src/``) that this
+was the LAST consumer without the gate. The class is now closed
+definitively.
+
+**Going-forward mitigation:** when introducing a new
+``calibrationFeatureFlag`` consumer, run the grep + verify all
+sites already gate on ``platform_supported``. The closed class
+means any future consumer that gates only on ``enabled`` is the
+new bug.
+
+### Decision: rc.14, not GA
+
+Tiny single-fix RC. Per ``feedback_staged_adoption``, even a
+mechanical 30 LOC fix gets one validation pass before tag. After
+rc.14 stabilises and the operator validates the canonical jornada
+(Win/macOS Settings → Voice → CalibrationWizardCard now shows
+"Linux-only (unavailable here)" + toggle disabled with Linux
+tooltip), v0.31.0 GA is unblocked.
 
 ## [0.31.0-rc.13] — 2026-05-07
 
