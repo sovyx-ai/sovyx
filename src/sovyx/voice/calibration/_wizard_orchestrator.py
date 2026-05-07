@@ -470,6 +470,35 @@ class WizardOrchestrator:
         if self._is_cancelled(job_id):
             return self._emit_cancelled(state, tracker)
 
+        # rc.12 (operator-debt P2 from rc.11 final-audit): early-bail
+        # when the host has zero capture devices. Pre-rc.12 the
+        # orchestrator would run the full 8-12 min slow-path bash diag
+        # against an absent microphone, producing a useless triage
+        # winner (likely H9_NO_MICROPHONE). Operator sees the fallback
+        # only AFTER waiting 12 minutes. Now: detect upstream from the
+        # PROBING fingerprint (~1s overhead), emit FALLBACK with a
+        # specific reason so the dashboard shows actionable guidance
+        # ("connect a microphone and re-run") instead of generic
+        # "diag failed". The fingerprint already enumerates capture
+        # devices via PortAudio (``capture_devices`` field), so the
+        # check is free.
+        if not fingerprint.capture_devices:
+            logger.info(
+                "voice.calibration.wizard.no_capture_device",
+                job_id_hash=short_hash(job_id),
+                mind_id_hash=short_hash(state.mind_id),
+            )
+            return self._emit_fallback(
+                state,
+                tracker,
+                reason="no_capture_device",
+                summary=(
+                    "No microphone detected on this host. The calibration "
+                    "wizard needs a working capture device to measure mic "
+                    "input. Connect a microphone and re-run the calibration."
+                ),
+            )
+
         # Stage 2 (fast path): KB lookup. If the local cache has a
         # profile for this fingerprint, replay it (~5s) instead of
         # running the full 8-12 min slow path. Cache miss falls

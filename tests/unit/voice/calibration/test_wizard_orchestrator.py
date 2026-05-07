@@ -389,6 +389,67 @@ class TestOrchestratorCancellation:
 
 
 @pytest.mark.asyncio()
+class TestOrchestratorNoCaptureDevice:
+    """rc.12 (operator-debt P2): orchestrator early-bails to FALLBACK
+    when the host has zero capture devices, instead of running the
+    full 8-12 min slow-path bash diag against an absent microphone."""
+
+    async def test_no_capture_devices_emits_fallback_immediately(self, tmp_path: Path) -> None:
+        from dataclasses import replace
+
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        # Fingerprint with empty capture_devices tuple.
+        fp_no_mic = replace(_fingerprint(), capture_devices=())
+
+        with (
+            patch.object(wo, "capture_fingerprint", return_value=fp_no_mic),
+            # MUST NOT call run_full_diag — early-bail before slow path.
+            patch.object(wo, "run_full_diag_async") as run_full_diag_mock,
+        ):
+            result = await orch.run(job_id="testjob", mind_id="default")
+
+        assert result.status == WizardStatus.FALLBACK
+        assert result.fallback_reason == "no_capture_device"
+        assert "no microphone" in (result.error_summary or "").lower()
+        run_full_diag_mock.assert_not_called()
+
+    async def test_capture_devices_present_runs_normal_pipeline(self, tmp_path: Path) -> None:
+        """Sanity: when capture_devices is non-empty, the slow-path
+        runs normally (this is the canonical happy-path; the no-mic
+        early-bail must not regress it)."""
+
+        from sovyx.voice.calibration._kb_cache import store_profile
+
+        # Pre-seed cache so we take fast path (avoids needing a real
+        # bash diag mock).
+        cached = _r10_profile()
+        store_profile(cached, data_dir=tmp_path)
+
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        applied_path = tmp_path / "default" / "calibration.json"
+
+        with (
+            patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+            patch.object(wo, "run_full_diag_async") as run_full_diag_mock,
+            patch.object(
+                wo.CalibrationApplier,
+                "apply",
+                return_value=ApplyResult(
+                    profile_path=applied_path,
+                    applied_decisions=(),
+                    skipped_decisions=(),
+                    advised_actions=(),
+                    dry_run=False,
+                ),
+            ),
+        ):
+            result = await orch.run(job_id="testjob", mind_id="default")
+
+        assert result.status == WizardStatus.DONE
+        run_full_diag_mock.assert_not_called()  # fast-path; diag skipped
+
+
+@pytest.mark.asyncio()
 class TestOrchestratorFastPath:
     """KB cache hit takes the FAST_PATH branch + skips diag entirely."""
 

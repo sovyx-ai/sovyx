@@ -135,6 +135,32 @@ voice.calibration.profile.signature_missing {mind_id_hash, profile_id_hash, mode
 
 `mind_id_hash` and `profile_id_hash` are the 16-hex-char SHA256 prefix of the raw value. Operators correlate across the engine → applier → persistence pipeline without telemetry leaking the operator-set mind name.
 
+### Retention contract
+
+Calibration telemetry events flow through Sovyx's standard observability pipeline (`sovyx.observability.logging.setup_logging`). Retention is governed by the same daemon-wide policy that handles all other `voice.*` / `engine.*` / `dashboard.*` events — there is **no** separate calibration-only retention horizon.
+
+Effective retention defaults:
+
+| Surface | Retention | Source |
+|---|---|---|
+| Console handler (stderr) | None — emitted-then-dropped | structlog default |
+| File handler (`<data_dir>/logs/sovyx.log`) | 14 days × 5MB rotated files | `EngineConfig.logging.file_max_bytes` + `file_backup_count` |
+| OTel export (when `[otel]` extra installed) | Per upstream collector retention | OTLP exporter |
+
+To override, set `SOVYX_LOG__FILE_MAX_BYTES` / `SOVYX_LOG__FILE_BACKUP_COUNT` in your env or system.yaml. Calibration events carry no PII (mind_id is hashed; profile_id is a UUID; never the raw operator-set mind name) so the policy can be relaxed for telemetry-driven KB development without GDPR / LGPD impact.
+
+### rc.12 additions
+
+| Event | Fields |
+|---|---|
+| `voice.calibration.mind_id_resolved` | `requested`, `resolved_hash`, `source` (`request_body`/`app_state`/`mind_manager`/`fallback_default`) |
+| `voice.calibration.rollback.mind_id_resolved` | same as above (mirrors anti-pattern #35 contract) |
+| `voice.calibration.rollback.chain_exhausted` | `mind_id_hash` (operator clicked Rollback past .bak.1) |
+| `voice.calibration.rollback.backup_corrupt` | `mind_id_hash`, `reason` (truncated) — backup file unreadable |
+| `voice.calibration.profile.legacy_backup_migrated` | `mind_id_hash`, `from_path_suffix`, `to_generation` — one-time rc.11→rc.12 upgrade event |
+| `voice.calibration.wizard.no_capture_device` | `job_id_hash`, `mind_id_hash` — early-bail before slow-path |
+| `voice.diagnostics.full_diag_watchdog_fired` | `mode`, `deadline_s`, `elapsed_s` — slow-path watchdog killed a hung diag |
+
 ## Rules registry
 
 | Rule | Priority | Trigger | Confidence | Decision |
@@ -150,8 +176,11 @@ Additional rules (R20..R95) ship in v0.30.20+ per mission §5.8 staged adoption:
 | Engine produces empty decision set | `len(profile.decisions) == 0` | Profile persisted with note "no actionable issues detected"; voice continues to use defaults. |
 | Apply fails mid-flight | `ApplyError` raised | Rollback to snapshot; profile NOT persisted; `apply_failed` event emitted. |
 | Persist fails (disk full, perm denied) | `IOError` | Rollback in-memory; operator sees clear error. |
-| Operator disagrees with verdict | observed at `--show` review | `--rollback` restores prior profile. |
+| Operator disagrees with verdict | observed at `--show` review | `--rollback` restores prior profile (or click Rollback in dashboard Settings → Voice). |
 | Backup is corrupt | `--rollback` validates pre-swap | Refuses; operator re-runs `--calibrate` to regenerate. |
+| Operator rolls back multiple bad calibrations | `--rollback` walks the multi-generation chain (rc.12) | Up to 3 prior profiles restorable from `.bak.{1,2,3}`; once exhausted, `--calibrate` repopulates. |
+| No microphone connected | Orchestrator early-bails after fingerprint (rc.12) | FALLBACK with `reason="no_capture_device"` — operator sees actionable message instead of waiting 8-12 min for a useless diag. |
+| Bash diag hangs (driver bug, blocked syscall) | Watchdog timer (rc.12, default 30 min) | SIGTERM → 10s grace → SIGKILL via existing cancellation path; operator sees `DiagRunError` with watchdog citation. |
 
 ## Example: surgical measurer mode (~30s vs ~10min)
 

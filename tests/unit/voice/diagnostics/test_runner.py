@@ -825,6 +825,80 @@ class TestResultLocators:
 
 
 # ════════════════════════════════════════════════════════════════════
+# rc.12 — slow-path total deadline (defense-in-depth watchdog)
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestSlowPathWatchdog:
+    """rc.12: ``total_deadline_s`` parameter on run_full_diag_async kills
+    a hung diag subprocess before the wizard hangs forever."""
+
+    @pytest.mark.asyncio()
+    async def test_watchdog_fires_when_diag_exceeds_deadline(self, tmp_path: Path) -> None:
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
+
+        spawned: list[_FakeAsyncProcess] = []
+
+        async def _factory(*_args: Any, **_kwargs: Any) -> _FakeAsyncProcess:
+            # Hangs 10s -- much longer than our 0.1s deadline below.
+            proc = _FakeAsyncProcess(returncode=0, hang_seconds=10.0)
+            spawned.append(proc)
+            return proc
+
+        with (
+            patch.object(_runner, "_check_prerequisites"),
+            patch.object(
+                _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+            ),
+            patch.object(_runner.asyncio, "create_subprocess_exec", side_effect=_factory),
+            patch.object(_runner.sys, "platform", "win32"),  # Windows path
+            pytest.raises(_runner.DiagRunError) as exc_info,
+        ):
+            await run_full_diag_async(
+                output_root=output_root,
+                total_deadline_s=0.1,
+            )
+
+        assert "watchdog" in str(exc_info.value).lower()
+        # Watchdog escalated to terminate (Windows path).
+        assert spawned[0].terminate_called is True
+
+    @pytest.mark.asyncio()
+    async def test_watchdog_disabled_with_none_falls_back_to_unbounded_wait(
+        self, tmp_path: Path
+    ) -> None:
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
+
+        with (
+            patch.object(_runner, "_check_prerequisites"),
+            patch.object(
+                _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+            ),
+            patch.object(
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0),
+            ),
+        ):
+            # total_deadline_s=None disables the watchdog; diag returns
+            # immediately so the test doesn't wait. Just exercises the
+            # code path that bypasses asyncio.wait_for.
+            result = await run_full_diag_async(
+                output_root=output_root,
+                total_deadline_s=None,
+            )
+        assert result.exit_code == 0
+
+    def test_watchdog_default_30_minutes(self) -> None:
+        """Default deadline is 30 min (2.5x the 12-min design budget)."""
+        from sovyx.voice.diagnostics._runner import _DEFAULT_TOTAL_DEADLINE_S
+
+        assert _DEFAULT_TOTAL_DEADLINE_S == 30 * 60.0
+
+
+# ════════════════════════════════════════════════════════════════════
 # Dataclass invariants
 # ════════════════════════════════════════════════════════════════════
 

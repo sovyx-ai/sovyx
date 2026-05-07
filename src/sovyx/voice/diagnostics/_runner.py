@@ -85,6 +85,18 @@ _BASH_VERSION_TIMEOUT_S = 5.0
 _CANCEL_GRACE_PERIOD_S = 10.0
 _CANCEL_SIGKILL_WAIT_S = 5.0
 
+# rc.12 (operator-debt P2): defense-in-depth slow-path watchdog. The
+# bash diag's design budget is 8-12 minutes on healthy hardware; a
+# value of 30 minutes covers a 2.5× safety multiplier for slow disk
+# I/O / paged-out swap scenarios and still kills a hung diag long
+# before the operator gives up. Caller can override via
+# ``total_deadline_s`` parameter (None disables the watchdog -- the
+# pre-rc.12 behaviour, kept available for CLI operators who explicitly
+# want to wait indefinitely). Watchdog fires SIGTERM → grace → SIGKILL
+# via the existing cancellation path so all the cleanup invariants
+# (trap-EXIT, process-group teardown) still hold.
+_DEFAULT_TOTAL_DEADLINE_S: float = 30 * 60.0  # 30 minutes
+
 
 # ====================================================================
 # Public types
@@ -171,6 +183,7 @@ async def run_full_diag_async(
     output_root: Path | None = None,
     trigger: str = "cli",
     env_overrides: dict[str, str] | None = None,
+    total_deadline_s: float | None = _DEFAULT_TOTAL_DEADLINE_S,
 ) -> DiagRunResult:
     """Async-native version of :func:`run_full_diag`.
 
@@ -196,6 +209,16 @@ async def run_full_diag_async(
             orchestrator tails (P3 capture-prompt protocol). When
             ``None`` (default), the subprocess inherits the parent's
             full environment via ``os.environ.copy()``.
+        total_deadline_s: rc.12 defense-in-depth watchdog. Maximum
+            wall-clock time the bash diag is allowed to run before
+            the runner cancels it via the same SIGTERM-grace-SIGKILL
+            path the operator-cancellation flow uses. Defaults to
+            :data:`_DEFAULT_TOTAL_DEADLINE_S` (30 minutes — 2.5× the
+            12-minute design budget). Pass ``None`` to disable the
+            watchdog (pre-rc.12 behaviour, kept for CLI operators
+            who explicitly want to wait indefinitely on slow hosts).
+            Operator-cancellation still works regardless of this
+            field.
 
     Returns:
         :class:`DiagRunResult` on successful completion.
@@ -205,7 +228,11 @@ async def run_full_diag_async(
             entry point.
         DiagRunError: same post-run contract.
         asyncio.CancelledError: re-raised after best-effort process
-            termination if the awaiting task was cancelled.
+            termination if the awaiting task was cancelled. Also
+            raised when the watchdog fires (caller cannot tell the
+            two apart from the exception alone — the
+            ``voice.diagnostics.full_diag_watchdog_fired`` log event
+            distinguishes them).
     """
     _check_prerequisites()
 
@@ -256,7 +283,38 @@ async def run_full_diag_async(
             spawn_kwargs["env"] = env
         proc = await asyncio.create_subprocess_exec(*cmd, **spawn_kwargs)  # type: ignore[arg-type]
         try:
-            return_code = await proc.wait()
+            # rc.12: wrap the bash wait in a watchdog timeout so a
+            # hung diag (driver bug, blocked syscall, paged-out swap)
+            # gets force-killed instead of hanging the wizard
+            # forever. Operator-cancellation still flows through the
+            # outer CancelledError handler. When ``total_deadline_s``
+            # is None, fall through to the bare ``proc.wait()`` —
+            # preserves the pre-rc.12 unbounded-wait contract for
+            # CLI operators who explicitly opt out.
+            if total_deadline_s is None:
+                return_code = await proc.wait()
+            else:
+                try:
+                    return_code = await asyncio.wait_for(
+                        proc.wait(),
+                        timeout=total_deadline_s,
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "voice.diagnostics.full_diag_watchdog_fired",
+                        mode=mode,
+                        deadline_s=total_deadline_s,
+                        elapsed_s=round(time.monotonic() - start, 3),
+                    )
+                    await _cancel_process_tree(proc, grace_period_s=_CANCEL_GRACE_PERIOD_S)
+                    raise DiagRunError(
+                        f"diag exceeded the {total_deadline_s:.0f}s watchdog "
+                        f"deadline (design budget 8-12 min); SIGTERM-grace-"
+                        f"SIGKILL escalation completed. Re-run on a less-"
+                        f"loaded host or pass --no-deadline if the diag is "
+                        f"genuinely slow on this hardware.",
+                        exit_code=-1,
+                    ) from None
         except asyncio.CancelledError:
             await _cancel_process_tree(proc, grace_period_s=_CANCEL_GRACE_PERIOD_S)
             raise
