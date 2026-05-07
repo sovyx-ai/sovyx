@@ -307,8 +307,10 @@ def doctor_voice(
         help="Run the calibration engine (Layer 2 of the voice "
         "self-calibrating mission). Captures hardware fingerprint + "
         "mixer state + (optionally) full diag artifacts, evaluates "
-        "all rules, and persists a signed CalibrationProfile to "
-        "<data_dir>/<mind_id>/calibration.json. Linux-only. Mutually "
+        "all rules, and persists a CalibrationProfile to "
+        "<data_dir>/<mind_id>/calibration.json. The profile is "
+        "unsigned by default (LENIENT-loadable; STRICT mode rejects); "
+        "pass --signing-key <pem-path> to sign. Linux-only. Mutually "
         "exclusive with --fix and --full-diag.",
     ),
     mind_id: str = typer.Option(
@@ -452,17 +454,21 @@ def doctor_voice(
                 f"(dev-only); production rotation per docs/contributing/voice-kb-rotation.md.",
                 param_hint="--signing-key",
             )
-        # rc.8 (Agent 2 + Agent 3 cosmetic): scope the symbol import to
-        # this conditional branch. Note: `cryptography` itself ALREADY
-        # loads transitively at module import via
-        # `sovyx.voice.calibration._persistence` top-of-file imports
-        # (lines 43-51); a cold `import sovyx.cli.commands.doctor`
+        # rc.8/rc.9 cosmetic: scope the symbol import to this conditional
+        # branch. Note: `cryptography` itself ALREADY loads transitively
+        # at module import via the voice subsystem's eager imports —
+        # empirical trace (rc.9) shows the FIRST trigger is
+        # `sovyx.voice.health._mixer_kb._signing` (mixer KB profile
+        # signing), with `sovyx.voice.calibration._persistence` and
+        # the calibration trust-store path resolving cryptography
+        # modules transitively. A cold `import sovyx.cli.commands.doctor`
         # pulls in 30+ cryptography modules regardless. So this is NOT
         # a startup-time deferral — it's a name-scoping convention
         # that keeps `_load_private_signing_key` private to the
         # validation block. A future rc.X+ that wants to actually
-        # defer cryptography would have to refactor `_persistence.py`'s
-        # eager imports, which has wider blast radius (every load-path
+        # defer cryptography would have to refactor every
+        # voice/health/_mixer_kb/_signing + calibration/_persistence
+        # eager import, which has wider blast radius (every load-path
         # test depends on those eager imports being available).
         from sovyx.voice.calibration._persistence import (  # noqa: PLC0415
             _load_private_signing_key,

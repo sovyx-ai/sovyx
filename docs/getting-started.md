@@ -246,7 +246,7 @@ operator                bash diag                triage             engine      
    │                                              ▲                    │                  │
    │                                              │                    ▼                  │
    │                                              │           CalibrationProfile          │
-   │                                              │           (frozen + signed)           │
+   │                                              │     (frozen, unsigned by default)     │
    │                                              │                    │                  │
    │                                              │                    ▼                  │
    │                                              │     <data_dir>/<mind_id>/calibration.json

@@ -4,9 +4,12 @@ This package owns the proactive auto-configuration surface that turns
 the L1 :mod:`sovyx.voice.diagnostics` toolkit (forensic observation
 only) into a self-calibrating pipeline that captures hardware
 fingerprint + targeted measurements, evaluates a deterministic
-forward-chaining rule engine, and produces a signed
+forward-chaining rule engine, and produces a
 :class:`CalibrationProfile` -- a structured config diff to apply
-atomically with snapshot+rollback semantics.
+atomically with snapshot+rollback semantics. The profile is **unsigned
+by default** (LENIENT-loadable; STRICT mode rejects); pass
+``--signing-key <pem-path>`` to ``sovyx doctor voice --calibrate`` to
+sign with an Ed25519 private key.
 
 Public surface (post-T2.1, mission
 ``MISSION-voice-self-calibrating-system-2026-05-05.md`` Layer 2):
@@ -17,7 +20,7 @@ Schema (this commit):
     * :class:`MeasurementSnapshot` -- targeted diag artifacts subset
     * :class:`ProvenanceTrace` -- per-rule-firing audit log entry
     * :class:`CalibrationDecision` -- one config field change
-    * :class:`CalibrationProfile` -- complete signed verdict
+    * :class:`CalibrationProfile` -- complete verdict (unsigned by default)
 
 Provenance (this commit):
     * :class:`ProvenanceRecorder` -- engine-internal trace builder
