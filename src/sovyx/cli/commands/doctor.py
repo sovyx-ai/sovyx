@@ -452,8 +452,18 @@ def doctor_voice(
                 f"(dev-only); production rotation per docs/contributing/voice-kb-rotation.md.",
                 param_hint="--signing-key",
             )
-        # Lazy import: avoid loading cryptography at startup for callers
-        # who never pass --signing-key.
+        # rc.8 (Agent 2 + Agent 3 cosmetic): scope the symbol import to
+        # this conditional branch. Note: `cryptography` itself ALREADY
+        # loads transitively at module import via
+        # `sovyx.voice.calibration._persistence` top-of-file imports
+        # (lines 43-51); a cold `import sovyx.cli.commands.doctor`
+        # pulls in 30+ cryptography modules regardless. So this is NOT
+        # a startup-time deferral — it's a name-scoping convention
+        # that keeps `_load_private_signing_key` private to the
+        # validation block. A future rc.X+ that wants to actually
+        # defer cryptography would have to refactor `_persistence.py`'s
+        # eager imports, which has wider blast radius (every load-path
+        # test depends on those eager imports being available).
         from sovyx.voice.calibration._persistence import (  # noqa: PLC0415
             _load_private_signing_key,
         )

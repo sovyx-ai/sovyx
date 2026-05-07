@@ -8,12 +8,18 @@
  * * The detected hypothesis (triage_winner_hid) when one was crowned;
  * * The persisted profile path so operators can locate + audit the
  *   serialized state on disk;
- * * The continue button advancing the onboarding flow OR the
- *   rollback button reverting the just-applied calibration.
+ * * A localized explanation that points at the CLI commands the
+ *   operator can run for deeper inspection (`--show`) or to undo
+ *   the apply (`--rollback`); rollback is NOT a UI button — the
+ *   `calibration.review.decision_explanation` i18n string carries
+ *   the CLI breadcrumb. rc.7 (Agent 2 NEW.4) closed the prior gap
+ *   where the i18n promised an in-UI rollback affordance that
+ *   didn't exist.
+ * * The continue button advancing the onboarding flow.
  *
  * Subcomponent of VoiceCalibrationStep per spec §6.3 (T3.4 split).
- * History: introduced in v0.30.25; supersedes the inline "done"
- * branch of TerminalView.
+ * History: introduced in v0.30.25; rc.7 docstring synced with the
+ * actual rendered surface (no rollback button — CLI command only).
  */
 
 import { useTranslation } from "react-i18next";

@@ -505,8 +505,7 @@
     "review": {
       "title": "Calibration applied",
       "decision_explanation": "The persisted profile (path above) contains the full rule trace + applied decisions. Run `sovyx doctor voice --calibrate --show` from the CLI to inspect the decision details, or click confirm to continue. If the calibration didn't help, run `sovyx doctor voice --calibrate --rollback` from the CLI to restore the prior profile.",
-      "confirm": "Confirm and continue",
-      "rollback": "Roll back this calibration"
+      "confirm": "Confirm and continue"
     },
     "cancel": {
       "title": "Cancel calibration?",
