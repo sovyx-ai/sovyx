@@ -185,6 +185,8 @@
     "note": "A calibration takes 8-12 minutes on first run; subsequent runs on the same hardware replay the cached profile in ~5 seconds via the fast path.",
     "flagOffNote": "Enable the calibration wizard above to run a calibration. Disabled because the dashboard wizard is the only surface that renders calibration progress; running a calibration without the wizard would leave you no way to observe it.",
     "flagOffTooltip": "Enable the calibration wizard above first.",
+    "platformUnsupportedTooltip": "Auto-fix calibration is Linux-only on this host.",
+    "platformUnsupportedNote": "Auto-fix calibration is Linux-only on this host. The 8-12 minute hardware tune-up uses Linux-specific audio diagnostic tools that aren't available on your platform. Use the simple device-test wizard from onboarding instead.",
     "startSuccess": "Calibration started. Watch progress in the onboarding wizard.",
     "startFailed": "Could not start calibration."
   },

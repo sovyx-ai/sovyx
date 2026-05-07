@@ -113,4 +113,50 @@ describe("RecalibrateButton", () => {
       screen.queryByTestId("settings-recalibrate-confirm"),
     ).not.toBeInTheDocument();
   });
+
+  // ════════════════════════════════════════════════════════════════════
+  // rc.13 — close the rc.11 EIXO 2 bug-class miss on this sibling
+  // surface. Pre-rc.13 the button gated on ``flag.enabled`` only,
+  // ignoring ``platform_supported``. Win/macOS operators with the
+  // (default) flag enabled saw the button enabled, clicked it, and
+  // landed in a silent FALLBACK from DiagPrerequisiteError. Now:
+  // gate on the conjunction ``enabled AND platform_supported``;
+  // tooltip explains the limitation.
+  // ════════════════════════════════════════════════════════════════════
+
+  it("renders disabled trigger when platform_supported=false (rc.13 EIXO 2 sibling)", () => {
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: false,
+      },
+    });
+    render(<RecalibrateButton />);
+    const trigger = screen.getByTestId("settings-recalibrate-toggle");
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toBeDisabled();
+    // Tooltip cites the Linux-only limitation, not the flag-off
+    // explanation (which was the pre-rc.13 misleading copy).
+    expect(trigger).toHaveAttribute(
+      "title",
+      expect.stringMatching(/linux/i),
+    );
+  });
+
+  it("treats missing platform_supported as true (pre-rc.12 daemon back-compat)", () => {
+    // Older daemon doesn't ship the field. Component MUST default to
+    // true, preserving the legacy single-platform behaviour: a flag-
+    // enabled button stays clickable exactly as it did before rc.13.
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        // platform_supported intentionally omitted
+      },
+    });
+    render(<RecalibrateButton />);
+    const trigger = screen.getByTestId("settings-recalibrate-toggle");
+    expect(trigger).not.toBeDisabled();
+  });
 });

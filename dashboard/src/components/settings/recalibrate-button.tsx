@@ -49,8 +49,29 @@ export function RecalibrateButton({ mindId = "default" }: { mindId?: string }) {
   // CalibrationWizardCard sibling toggle, so operators see the
   // surface exists + understand what gates it (instead of guessing
   // why a section disappeared).
-  const flagEnabled = featureFlag !== null && featureFlag.enabled;
-  const flagOffTooltip = !flagEnabled ? t("settings:recalibrate.flagOffTooltip") : undefined;
+  //
+  // rc.13 (closes the rc.11 EIXO 2 bug-class miss): also gate on
+  // ``platform_supported``. Pre-rc.13 the Win/macOS operator could
+  // see the button enabled (because flag.enabled is True by default)
+  // and click it, only to have the wizard mount, click Start, and
+  // silently fall through to FALLBACK from
+  // ``DiagPrerequisiteError`` (Linux-only bash diag). Same exact
+  // bug class as rc.11 EIXO 2 in ``VoiceStep.tsx``, missed on this
+  // sibling surface. Pre-rc.12 daemons that don't ship
+  // ``platform_supported`` default to True via the zod schema —
+  // backward compat preserved.
+  const platformSupported = featureFlag?.platform_supported ?? true;
+  const flagEnabled =
+    featureFlag !== null && featureFlag.enabled && platformSupported;
+  const tooltip = (() => {
+    if (featureFlag === null || !featureFlag.enabled) {
+      return t("settings:recalibrate.flagOffTooltip");
+    }
+    if (!platformSupported) {
+      return t("settings:recalibrate.platformUnsupportedTooltip");
+    }
+    return undefined;
+  })();
 
   return (
     <section
@@ -100,7 +121,7 @@ export function RecalibrateButton({ mindId = "default" }: { mindId?: string }) {
             variant="outline"
             onClick={() => setConfirming(true)}
             disabled={!flagEnabled}
-            title={flagOffTooltip}
+            title={tooltip}
             aria-disabled={!flagEnabled}
             data-testid="settings-recalibrate-toggle"
           >
@@ -112,7 +133,9 @@ export function RecalibrateButton({ mindId = "default" }: { mindId?: string }) {
       <p className="mt-3 text-[11px] text-[var(--svx-color-text-tertiary)]">
         {flagEnabled
           ? t("settings:recalibrate.note")
-          : t("settings:recalibrate.flagOffNote")}
+          : !platformSupported && featureFlag?.enabled
+            ? t("settings:recalibrate.platformUnsupportedNote")
+            : t("settings:recalibrate.flagOffNote")}
       </p>
     </section>
   );

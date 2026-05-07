@@ -185,6 +185,8 @@
     "note": "Una calibración toma 8-12 minutos la primera vez; ejecuciones siguientes en el mismo hardware reproducen el perfil en caché en ~5 segundos vía fast path.",
     "flagOffNote": "Habilita el wizard de calibración arriba para ejecutar una calibración. Deshabilitado porque el wizard del dashboard es la única superficie que renderiza el progreso; sin él no podrías observar la ejecución.",
     "flagOffTooltip": "Primero habilita el wizard de calibración arriba.",
+    "platformUnsupportedTooltip": "La calibración automática solo funciona en Linux en este equipo.",
+    "platformUnsupportedNote": "La calibración automática solo funciona en Linux en este equipo. El ajuste automático de 8-12 minutos usa herramientas de diagnóstico de audio específicas de Linux que no están disponibles en tu plataforma. Usa el asistente simple de prueba de dispositivos desde el onboarding.",
     "startSuccess": "Calibración iniciada. Sigue el progreso en el wizard de onboarding.",
     "startFailed": "No se pudo iniciar la calibración."
   },
