@@ -472,6 +472,10 @@
       "H9": "No microphone detected on this system",
       "H10": "Microphone volume was set too low at the system level"
     },
+    "platformUnsupported": {
+      "title": "Auto-fix calibration is Linux-only on this host.",
+      "body": "The 8-12 minute hardware tune-up uses Linux-specific audio diagnostic tools that aren't available on your platform. Use the simple setup wizard below to test your microphone and speakers — it works on Windows, macOS, and Linux."
+    },
     "terminal": {
       "done": {
         "title": "Voice is calibrated for your hardware.",

@@ -2040,6 +2040,18 @@ export interface PreviewFingerprintResponse {
 export interface CalibrationFeatureFlagResponse {
   enabled: boolean;
   runtime_override_active: boolean;
+  /**
+   * True when the daemon's host platform can actually run the
+   * calibration wizard. The bash diag toolkit (slow-path 8-12 min
+   * full-diag) is Linux-only — see ``voice/diagnostics/_runner.py:
+   * _check_prerequisites``. Frontend MUST gate the wizard mount on
+   * ``enabled AND platform_supported`` (see ``VoiceStep.tsx``) so
+   * Windows / macOS operators don't see the wizard mount, click
+   * Start, and fall through to a silent FALLBACK from
+   * DiagPrerequisiteError. Optional + defaults to True for
+   * backward compatibility with pre-rc.11 daemons.
+   */
+  platform_supported?: boolean;
 }
 
 /**

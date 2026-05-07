@@ -1563,6 +1563,11 @@ export const PreviewFingerprintResponseSchema = z.object({
 export const CalibrationFeatureFlagResponseSchema = z.object({
   enabled: z.boolean(),
   runtime_override_active: z.boolean(),
+  // rc.11 EIXO 2: platform_supported gates the wizard mount on
+  // non-Linux daemons. Optional + default True for backward compat —
+  // pre-rc.11 daemons that don't return the field are assumed Linux
+  // (which keeps existing single-platform deployments working).
+  platform_supported: z.boolean().optional().default(true),
 });
 
 export const CalibrationFeatureFlagUpdateRequestSchema = z.object({

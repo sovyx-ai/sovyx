@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import sys
 from typing import TYPE_CHECKING
 
 from fastapi import (
@@ -263,6 +264,22 @@ class FeatureFlagResponse(BaseModel):
             "Settings -> Voice -> Advanced see this flip as well; the "
             "flag is in-memory only -- restart picks up the persisted "
             "config value again."
+        ),
+    )
+    platform_supported: bool = Field(
+        default=True,
+        description=(
+            "True when the daemon's host platform can actually run the "
+            "calibration wizard. The bash diag toolkit (which drives "
+            "the slow-path 8-12 min full-diag) is Linux-only -- see "
+            "``voice/diagnostics/_runner.py:_check_prerequisites``. "
+            "Frontend MUST gate the wizard mount on "
+            "``enabled AND platform_supported`` so Windows / macOS "
+            "operators don't see the wizard mount, click Start, and "
+            "fall through to a silent FALLBACK from "
+            "DiagPrerequisiteError. Defaults to True for backward "
+            "compatibility -- pre-rc.11 clients that ignore this field "
+            "keep their existing behaviour."
         ),
     )
 
@@ -531,9 +548,14 @@ async def get_calibration_feature_flag(request: Request) -> FeatureFlagResponse:
     the operator (or another caller) has flipped the value in-memory
     via ``POST /feature-flag`` since boot.
     """
+    platform_supported = sys.platform == "linux"
     config = _resolve_engine_config(request)
     if config is None:
-        return FeatureFlagResponse(enabled=False, runtime_override_active=False)
+        return FeatureFlagResponse(
+            enabled=False,
+            runtime_override_active=False,
+            platform_supported=platform_supported,
+        )
 
     current = config.voice.calibration_wizard_enabled
     boot = _boot_value(request)
@@ -544,6 +566,7 @@ async def get_calibration_feature_flag(request: Request) -> FeatureFlagResponse:
     return FeatureFlagResponse(
         enabled=current,
         runtime_override_active=current != boot,
+        platform_supported=platform_supported,
     )
 
 
@@ -596,6 +619,7 @@ async def set_calibration_feature_flag(
     return FeatureFlagResponse(
         enabled=body.enabled,
         runtime_override_active=body.enabled != boot,
+        platform_supported=sys.platform == "linux",
     )
 
 

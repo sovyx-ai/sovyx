@@ -375,3 +375,82 @@ class TestFeatureFlagEndpoints:
             "/api/voice/calibration/feature-flag", json={"enabled": True}
         )
         assert post_response.status_code == 401
+
+    def test_get_returns_platform_supported_true_on_linux(self, tmp_path: Path) -> None:
+        """rc.11 (EIXO 2): platform_supported field gates the wizard mount.
+
+        On Linux the bash diag toolkit can run, so the field is True and
+        the frontend mounts the wizard normally.
+        """
+        from sovyx.dashboard.routes import voice_calibration as vc_route
+
+        app = _build_app(tmp_path=tmp_path)
+        with patch.object(vc_route.sys, "platform", "linux"):
+            response = _client(app).get("/api/voice/calibration/feature-flag")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["platform_supported"] is True
+
+    def test_get_returns_platform_supported_false_on_windows(self, tmp_path: Path) -> None:
+        """rc.11 (EIXO 2): on Windows the bash diag toolkit cannot run
+        (DiagPrerequisiteError at ``_runner.py:_check_prerequisites``).
+
+        The frontend MUST gate the wizard mount on the conjunction
+        ``enabled AND platform_supported`` so Windows operators don't
+        see a wizard that immediately falls through to FALLBACK.
+        """
+        from sovyx.dashboard.routes import voice_calibration as vc_route
+
+        app = _build_app(tmp_path=tmp_path)
+        with patch.object(vc_route.sys, "platform", "win32"):
+            response = _client(app).get("/api/voice/calibration/feature-flag")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["platform_supported"] is False
+        # `enabled` (the wizard mount intent) is independent of platform
+        # support — operators who flipped the flag stay flipped; the
+        # frontend short-circuits on platform_supported only.
+        assert body["enabled"] is True
+
+    def test_get_returns_platform_supported_false_on_macos(self, tmp_path: Path) -> None:
+        """rc.11 (EIXO 2): macOS is also non-Linux; same gate applies."""
+        from sovyx.dashboard.routes import voice_calibration as vc_route
+
+        app = _build_app(tmp_path=tmp_path)
+        with patch.object(vc_route.sys, "platform", "darwin"):
+            response = _client(app).get("/api/voice/calibration/feature-flag")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["platform_supported"] is False
+
+    def test_post_returns_platform_supported(self, tmp_path: Path) -> None:
+        """rc.11 (EIXO 2): POST response also carries platform_supported
+        so the dashboard's runtime-toggle UX surfaces the same gate.
+        """
+        from sovyx.dashboard.routes import voice_calibration as vc_route
+
+        app = _build_app(tmp_path=tmp_path)
+        with patch.object(vc_route.sys, "platform", "darwin"):
+            response = _client(app).post(
+                "/api/voice/calibration/feature-flag", json={"enabled": False}
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["platform_supported"] is False
+        assert body["enabled"] is False
+
+    def test_get_no_engine_config_still_returns_platform_supported(self, tmp_path: Path) -> None:
+        """rc.11 (EIXO 2): the no-engine-config fallback path also
+        carries platform_supported so the frontend's gate works on a
+        dashboard whose daemon never registered a config.
+        """
+        from sovyx.dashboard.routes import voice_calibration as vc_route
+
+        app = create_app(token=_TOKEN)
+        with patch.object(vc_route.sys, "platform", "win32"):
+            response = _client(app).get("/api/voice/calibration/feature-flag")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["enabled"] is False
+        assert body["platform_supported"] is False
+        _ = tmp_path  # unused

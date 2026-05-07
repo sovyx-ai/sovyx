@@ -472,6 +472,10 @@
       "H9": "Nenhum microfone detectado neste sistema",
       "H10": "O volume do microfone estava muito baixo no nível do sistema"
     },
+    "platformUnsupported": {
+      "title": "A calibração automática só funciona no Linux nesta máquina.",
+      "body": "O ajuste automático de 8-12 minutos usa ferramentas de diagnóstico de áudio específicas do Linux que não estão disponíveis na sua plataforma. Use o assistente simples abaixo para testar microfone e alto-falantes — ele funciona no Windows, macOS e Linux."
+    },
     "terminal": {
       "done": {
         "title": "A voz está calibrada para o seu hardware.",

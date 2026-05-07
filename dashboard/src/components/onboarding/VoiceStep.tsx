@@ -70,7 +70,19 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
     // on failure (conservative gate -- null means "do not mount").
     void loadCalibrationFeatureFlag();
   }, [loadCalibrationFeatureFlag]);
-  const calibrationWizardEnabled = calibrationFeatureFlag?.enabled ?? false;
+  // rc.11 EIXO 2: gate the mount on the conjunction of operator-intent
+  // (enabled) AND host capability (platform_supported). Pre-rc.11
+  // daemons that don't ship the field default to true via the zod
+  // schema, preserving the legacy single-platform behaviour. On
+  // Win/macOS the bash diag toolkit (`_runner.py:_check_prerequisites`)
+  // raises DiagPrerequisiteError so the wizard would silently FALLBACK
+  // mid-run; surfacing the limitation upfront via the legacy flow +
+  // a banner is the operator-friendly contract.
+  const platformSupported = calibrationFeatureFlag?.platform_supported ?? true;
+  const calibrationFlagEnabled = calibrationFeatureFlag?.enabled ?? false;
+  const calibrationWizardEnabled = calibrationFlagEnabled && platformSupported;
+  const showPlatformUnsupportedBanner =
+    calibrationFlagEnabled && !platformSupported;
   const [detected, setDetected] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -222,6 +234,27 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
         />
       ) : (
         <>
+          {/* rc.11 EIXO 2: platform-aware gate. When the operator (or
+              fresh-install default) intends to mount the wizard but
+              the daemon's host platform can't run the bash diag
+              toolkit, surface the limitation upfront — instead of
+              letting the wizard mount, fail mid-run, and silently
+              fallback. The simple device-test wizard below is the
+              cross-platform fallback. */}
+          {showPlatformUnsupportedBanner && (
+            <div
+              data-testid="voice-calibration-platform-unsupported"
+              className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-status-warning)]/40 bg-[var(--svx-color-status-warning)]/5 p-3 text-xs text-[var(--svx-color-text-primary)]"
+            >
+              <p className="font-medium">
+                {tVoice("calibration.platformUnsupported.title")}
+              </p>
+              <p className="mt-1 text-[var(--svx-color-text-secondary)]">
+                {tVoice("calibration.platformUnsupported.body")}
+              </p>
+            </div>
+          )}
+
           <HardwareDetection
             onDetected={handleDetected}
             onDeviceChange={handleDeviceChange}

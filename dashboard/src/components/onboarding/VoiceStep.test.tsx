@@ -221,6 +221,7 @@ vi.mock("@/components/onboarding/VoiceCalibrationStep", () => ({
 function stubGetsWithCalibrationFlag(flag: {
   enabled: boolean;
   runtime_override_active?: boolean;
+  platform_supported?: boolean;
 }) {
   mockGet.mockImplementation((url: string) => {
     if (url === "/api/voice/hardware-detect") return Promise.resolve(hardwareInfo);
@@ -311,6 +312,148 @@ describe("VoiceStep — single-flow conditional (rc.4 Agent 3 #8)", () => {
     await screen.findByText(/8 cores/i);
     expect(
       screen.queryByTestId("voice-calibration-step-sentinel"),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// rc.11 (EIXO 2) — VoiceStep cross-platform gate.
+// Pre-rc.11, ``platform_supported`` did not exist; the calibration
+// wizard mounted on every platform when ``enabled`` was true. On
+// Win/macOS that meant operators clicked Start and silently fell
+// through to FALLBACK from DiagPrerequisiteError. rc.11 adds the
+// platform_supported field to the feature-flag response and gates
+// mount on (enabled AND platform_supported), surfacing the limitation
+// upfront via a banner that points to the cross-platform fallback.
+// ════════════════════════════════════════════════════════════════════
+
+describe("VoiceStep — cross-platform gate (rc.11 EIXO 2)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ calibrationFeatureFlag: null });
+  });
+
+  it("does NOT mount the calibration wizard when platform_supported=false", async () => {
+    // Operator intent (enabled=true) but daemon is on Win/macOS.
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: false,
+      },
+    });
+    stubGetsWithCalibrationFlag({
+      enabled: true,
+      runtime_override_active: false,
+      platform_supported: false,
+    });
+
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+
+    // Legacy HardwareDetection mounts (cross-platform fallback path).
+    await screen.findByText(/8 cores/i);
+
+    // The calibration step sentinel does NOT mount.
+    expect(
+      screen.queryByTestId("voice-calibration-step-sentinel"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the platform-unsupported banner when enabled but unsupported", async () => {
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: false,
+      },
+    });
+    stubGetsWithCalibrationFlag({
+      enabled: true,
+      runtime_override_active: false,
+      platform_supported: false,
+    });
+
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+    await screen.findByText(/8 cores/i);
+
+    // The banner pointing the operator at the simple setup is present.
+    expect(
+      screen.getByTestId("voice-calibration-platform-unsupported"),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT render the banner when platform_supported=true", async () => {
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: true,
+      },
+    });
+    stubGetsWithCalibrationFlag({
+      enabled: true,
+      runtime_override_active: false,
+      platform_supported: true,
+    });
+
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-calibration-step-sentinel"),
+      ).toBeInTheDocument();
+    });
+    // Banner is gated on (enabled && !platform_supported); should be absent.
+    expect(
+      screen.queryByTestId("voice-calibration-platform-unsupported"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does NOT render the banner when enabled=false (no operator intent)", async () => {
+    // platform_supported=false but operator never asked for the wizard
+    // — no banner needed; the legacy flow is what they expected anyway.
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: false,
+        runtime_override_active: false,
+        platform_supported: false,
+      },
+    });
+    stubGetsWithCalibrationFlag({
+      enabled: false,
+      runtime_override_active: false,
+      platform_supported: false,
+    });
+
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+    await screen.findByText(/8 cores/i);
+
+    expect(
+      screen.queryByTestId("voice-calibration-platform-unsupported"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("treats missing platform_supported as true (pre-rc.11 daemon back-compat)", async () => {
+    // Older daemon doesn't ship the field. zod schema defaults to true,
+    // preserving legacy single-platform behaviour: enabled=true mounts
+    // the wizard exactly as it did before.
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+      },
+    });
+    stubGetsWithCalibrationFlag({
+      enabled: true,
+      runtime_override_active: false,
+    });
+
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-calibration-step-sentinel"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("voice-calibration-platform-unsupported"),
     ).not.toBeInTheDocument();
   });
 });
