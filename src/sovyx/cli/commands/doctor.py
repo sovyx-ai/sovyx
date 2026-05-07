@@ -60,6 +60,7 @@ from sovyx.voice.calibration import (
     CalibrationProfileRollbackError,
     capture_fingerprint,
     capture_measurements,
+    inspect_migrated_profile_dict,
     load_calibration_profile,
     profile_path,
     rollback_calibration_profile,
@@ -334,10 +335,12 @@ def doctor_voice(
     rollback: bool = typer.Option(
         False,
         "--rollback",
-        help="With --calibrate: undo the last calibration and restore "
-        "the previous profile. Single-step undo only (one backup slot). "
-        "Use this if a calibration didn't help; you can re-run --calibrate "
-        "afterward.",
+        help="With --calibrate: restore the most-recent prior "
+        "calibration. Walks the .bak.{1,2,3} multi-generation chain — "
+        "up to 3 prior calibrations are retained, so you can roll back "
+        "repeatedly if a re-calibration didn't help. Each --rollback "
+        "consumes one generation; re-run --calibrate to repopulate the "
+        "chain after exhaustion. Refuses to restore a malformed backup.",
     ),
     surgical: bool = typer.Option(
         False,
@@ -364,6 +367,16 @@ def doctor_voice(
         "on your hardware without running the full 8-12 min tune-up or "
         "applying any changes. Useful for triage before committing to "
         "a real calibration run.",
+    ),
+    inspect_migration: bool = typer.Option(
+        False,
+        "--inspect-migration",
+        help="With --calibrate: read-only — print the calibration profile "
+        "dict AFTER walking the schema-migration chain to the runtime's "
+        "current schema version. Useful at schema bump time to preview "
+        "the post-migration shape without committing to it. Skips the "
+        "signature gate; the dict is not a fully-validated profile. "
+        "Mutually exclusive with --show / --rollback / --evaluate-rules.",
     ),
 ) -> None:
     """Voice subsystem health checks + auto-fix tools.
@@ -407,18 +420,27 @@ def doctor_voice(
             "--calibrate runs --full-diag internally + adds the "
             "fingerprint + measurer + engine + applier pipeline."
         )
-    if (show or rollback) and not calibrate:
+    if (show or rollback or inspect_migration) and not calibrate:
         raise typer.BadParameter(
-            "--show and --rollback require --calibrate. They operate on "
-            "the per-mind <data_dir>/<mind_id>/calibration.json + .bak "
+            "--show, --rollback, and --inspect-migration require "
+            "--calibrate. They operate on the per-mind "
+            "<data_dir>/<mind_id>/calibration.json (+ .bak chain) "
             "files which only exist after at least one --calibrate run."
         )
-    if show and rollback:
+    # Read-only inspect modes form a closed-enum mutex set: each one
+    # is a distinct operator intent (show=current state, rollback=revert,
+    # evaluate_rules=preview-without-running, inspect_migration=preview
+    # post-migration shape). Enforce single-intent at the flag-parse
+    # boundary so the dispatcher in `_run_voice_doctor` doesn't have
+    # to disambiguate downstream.
+    _read_only_modes_set = sum([show, rollback, evaluate_rules, inspect_migration])
+    if _read_only_modes_set > 1:
         raise typer.BadParameter(
-            "--show and --rollback are mutually exclusive. --show is "
-            "read-only inspection; --rollback consumes the .bak slot. "
-            "Run --show first to confirm what you'd revert TO, then "
-            "--rollback in a separate invocation if that's what you want."
+            "--show, --rollback, --evaluate-rules, and "
+            "--inspect-migration are mutually exclusive — each is a "
+            "distinct read-only inspection mode. Pick one per "
+            "invocation; chain them in separate commands if you need "
+            "more than one."
         )
     # rc.6 (Agent 2 A.5): fail-fast on a missing --signing-key path so an
     # operator typo doesn't waste 8-12 min of diag runtime + then silently
@@ -491,6 +513,7 @@ def doctor_voice(
         surgical=surgical,
         signing_key=signing_key,
         evaluate_rules=evaluate_rules,
+        inspect_migration=inspect_migration,
     )
     raise typer.Exit(exit_code)
 
@@ -513,6 +536,7 @@ def _run_voice_doctor(
     surgical: bool = False,
     signing_key: Path | None = None,
     evaluate_rules: bool = False,
+    inspect_migration: bool = False,
 ) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
     if calibrate and show:
@@ -521,6 +545,8 @@ def _run_voice_doctor(
         return _run_voice_calibrate_rollback(mind_id=mind_id)
     if calibrate and evaluate_rules:
         return _run_voice_calibrate_evaluate_rules(mind_id=mind_id, explain=explain)
+    if calibrate and inspect_migration:
+        return _run_voice_calibrate_inspect_migration(mind_id=mind_id)
     if calibrate:
         return _run_voice_calibrate(
             mind_id=mind_id,
@@ -987,17 +1013,32 @@ def _run_voice_calibrate_evaluate_rules(*, mind_id: str, explain: bool) -> int:
 
 
 def _run_voice_calibrate_rollback(*, mind_id: str) -> int:
-    """Restore the prior calibration profile from the .bak slot.
+    """Restore the most-recent prior calibration profile (multi-generation chain).
 
-    Single-step rollback (consumes the .bak). Surfaces the verdict
-    of the restored profile so the operator immediately sees what
-    landed back in place.
+    Walks the ``calibration.json.bak.{1,2,3}`` chain (rc.12 multi-
+    generation backup). Each invocation consumes one generation:
+    ``.bak.1`` becomes the canonical profile; ``.bak.2`` shifts to
+    ``.bak.1``; ``.bak.3`` shifts to ``.bak.2``. Operator can roll
+    back up to 3 prior calibrations in a row before the chain
+    exhausts; once empty, ``--calibrate`` repopulates.
+
+    Refuses to restore a malformed backup (validates JSON + schema
+    BEFORE the swap), so the operator's voice config is never left
+    pointing at a corrupt profile.
 
     Returns:
-        * EXIT_DOCTOR_OK on a successful rollback + render.
-        * EXIT_DOCTOR_GENERIC_FAILURE when no .bak exists or the
-          .bak is malformed (rollback refuses to restore corrupt state).
+        * EXIT_DOCTOR_OK on successful rollback + render.
+        * EXIT_DOCTOR_GENERIC_FAILURE when the chain is exhausted, or
+          the backup is malformed (rollback refuses to restore corrupt
+          state).
     """
+    # Local import keeps the persistence dependency surface narrow at
+    # the module level — only the rollback path needs the backup-listing
+    # helper, and the rest of doctor.py operates without it.
+    from sovyx.voice.calibration._persistence import (  # noqa: PLC0415
+        list_calibration_backups,
+    )
+
     data_dir = Path.home() / ".sovyx"
     console.print(
         f"\n[bold cyan]Voice calibration rollback[/bold cyan] [dim](mind_id={mind_id})[/dim]\n"
@@ -1008,9 +1049,58 @@ def _run_voice_calibrate_rollback(*, mind_id: str) -> int:
         console.print(f"\n[red]Rollback failed:[/red] {exc}")
         return EXIT_DOCTOR_GENERIC_FAILURE
 
-    console.print(f"[green]Restored prior profile to[/green] {restored}\n")
+    remaining = len(list_calibration_backups(data_dir=data_dir, mind_id=mind_id))
+    console.print(f"[green]Restored prior profile to[/green] {restored}")
+    console.print(
+        f"[dim]Backup chain: {remaining} generation"
+        f"{'' if remaining == 1 else 's'} remaining "
+        f"(re-run --calibrate to repopulate)[/dim]\n"
+    )
     # Render the restored profile so the operator confirms what's now active.
     return _run_voice_calibrate_show(mind_id=mind_id, explain=False)
+
+
+def _run_voice_calibrate_inspect_migration(*, mind_id: str) -> int:
+    """Print the migrated calibration profile dict (post-schema-walk).
+
+    Operator inspection mode for schema bumps: reads the raw JSON,
+    walks the migration registry to bring the dict to the runtime's
+    current ``CALIBRATION_PROFILE_SCHEMA_VERSION``, and emits the
+    result to stdout (pretty-printed). Skips signature verification +
+    profile dataclass construction, so the dict is suitable for
+    diffing against the on-disk file but is NOT a fully-validated
+    profile.
+
+    Useful at schema-bump time: an operator running v0.31.x with a
+    profile written under schema_version=1 can preview the v2 shape
+    BEFORE upgrading by running this command on a Sovyx that supports
+    v2. The output is exactly what ``load_calibration_profile`` would
+    feed into ``_profile_from_dict`` had the load completed.
+
+    Returns:
+        * EXIT_DOCTOR_OK on success — migrated dict printed.
+        * EXIT_DOCTOR_GENERIC_FAILURE when the file is missing,
+          malformed, or the migration chain refuses (CalibrationProfile
+          MigrationError subclasses CalibrationProfileLoadError).
+    """
+    data_dir = Path.home() / ".sovyx"
+    console.print(
+        f"\n[bold cyan]Voice calibration migration inspection[/bold cyan] "
+        f"[dim](mind_id={mind_id})[/dim]\n"
+    )
+    try:
+        migrated = inspect_migrated_profile_dict(data_dir=data_dir, mind_id=mind_id)
+    except CalibrationProfileLoadError as exc:
+        console.print(f"\n[red]Inspection failed:[/red] {exc}")
+        return EXIT_DOCTOR_GENERIC_FAILURE
+
+    rendered = json.dumps(migrated, indent=2, sort_keys=True, ensure_ascii=False)
+    # Plain stdout (NOT console.print) so operators can pipe the output
+    # into ``jq`` or ``diff``. Rich-rendering would inject ANSI escapes
+    # that break shell pipelines.
+    sys.stdout.write(rendered)
+    sys.stdout.write("\n")
+    return EXIT_DOCTOR_OK
 
 
 def _render_calibration_verdict(
