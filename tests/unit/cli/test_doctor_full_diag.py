@@ -43,8 +43,10 @@ runner = CliRunner()
 def _make_diag_result(tmp_path: Path) -> DiagRunResult:
     """Synthetic DiagRunResult pointing at a real tarball path (need not exist
     for the purposes of mocked-triage tests; the path is just plumbed)."""
+    # rc.16+post: tarball is a sibling of the work dir (real bash
+    # layout). Path is plumbed-only here; not asserted to exist.
     return DiagRunResult(
-        tarball_path=tmp_path / "sovyx-diag-host" / "sovyx-voice-diag_x.tar.gz",
+        tarball_path=tmp_path / "sovyx-diag-host.tar.gz",
         duration_s=42.0,
         exit_code=0,
     )

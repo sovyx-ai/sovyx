@@ -903,9 +903,11 @@ class TestRunnerEmissionPrivacy:
         (extracted / "sovyx-voice-diag.sh").write_text("#!/bin/bash\nexit 0\n")
         output_root = tmp_path / "out"
         output_root.mkdir()
-        diag_dir = output_root / "sovyx-diag-host-20260506T180000Z-deadbeef"
-        diag_dir.mkdir()
-        tarball = diag_dir / "sovyx-voice-diag_x.tar.gz"
+        # rc.16+post: tarball is a SIBLING of the work dir (matches
+        # bash ``finalize.sh::_build_tarball`` reality), not inside it.
+        diag_basename = "sovyx-diag-host-20260506T180000Z-deadbeef"
+        (output_root / diag_basename).mkdir()
+        tarball = output_root / f"{diag_basename}.tar.gz"
         tarball.write_bytes(b"\x1f\x8b\x08\x00")
 
         with (

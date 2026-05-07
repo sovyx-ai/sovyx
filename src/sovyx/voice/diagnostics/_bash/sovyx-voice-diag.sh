@@ -71,7 +71,8 @@ Flags:
   -h, --help                 Esta mensagem
 
 Saída:
-  <outdir>/sovyx-voice-diag_<hostname>_<ts>_<uuid>.tar.gz
+  <parent-de-outdir>/sovyx-diag-<hostname>-<ts>-<uuid>.tar.gz
+  (tarball é irmão do work dir; ambos vivem em $HOME por default)
 
 Tempo esperado: 8-12 min (padrão) + 1-2 min por flag intrusiva.
 

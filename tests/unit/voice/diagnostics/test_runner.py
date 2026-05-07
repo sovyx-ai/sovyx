@@ -136,10 +136,20 @@ def _async_proc_factory(
 
 
 def _make_result_tarball(home: Path, *, mtime: float | None = None) -> Path:
-    """Create a synthetic ``$HOME/sovyx-diag-X/sovyx-voice-diag_X.tar.gz``."""
-    diag_dir = home / "sovyx-diag-host-20260505T160000Z-deadbeef"
+    """Create a synthetic ``$HOME/sovyx-diag-X.tar.gz`` (sibling of work dir).
+
+    Mirrors the bash ``finalize.sh::_build_tarball`` reality: tarball is
+    ``${parent}/${basename(outdir)}${suffix}.tar.gz`` — a SIBLING of
+    ``outdir``, not inside it. Pre-rc.16 the test layout encoded the
+    misleading help-text claim instead, hiding the production bug
+    discovered when the Voice-Bash-Diag-Smoke CI gate first ran end-
+    to-end after the conftest fixes.
+    """
+    diag_basename = "sovyx-diag-host-20260505T160000Z-deadbeef"
+    # The work dir + the tarball coexist at top level of ``home``.
+    diag_dir = home / diag_basename
     diag_dir.mkdir(parents=True, exist_ok=True)
-    tarball = diag_dir / "sovyx-voice-diag_host_20260505T160000Z_deadbeef.tar.gz"
+    tarball = home / f"{diag_basename}.tar.gz"
     tarball.write_bytes(b"\x1f\x8b\x08\x00synthetic-gzip-header")
     if mtime is not None:
         import os
@@ -333,17 +343,15 @@ class TestSuccessfulRun:
         output_root = tmp_path / "home"
         output_root.mkdir()
 
-        old_dir = output_root / "sovyx-diag-old"
-        old_dir.mkdir()
-        old_tarball = old_dir / "sovyx-voice-diag_old.tar.gz"
-        old_tarball.write_bytes(b"old")
+        # Two sibling tarballs at the top level (matches bash reality
+        # post-rc.16 fix; pre-fix tests used the wrong inside-dir layout).
         import os
 
+        old_tarball = output_root / "sovyx-diag-old.tar.gz"
+        old_tarball.write_bytes(b"old")
         os.utime(old_tarball, (1000.0, 1000.0))
 
-        new_dir = output_root / "sovyx-diag-new"
-        new_dir.mkdir()
-        new_tarball = new_dir / "sovyx-voice-diag_new.tar.gz"
+        new_tarball = output_root / "sovyx-diag-new.tar.gz"
         new_tarball.write_bytes(b"new")
         os.utime(new_tarball, (2000.0, 2000.0))
 

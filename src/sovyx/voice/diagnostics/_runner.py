@@ -73,7 +73,19 @@ logger = get_logger(__name__)
 
 _DIAG_SCRIPT_NAME = "sovyx-voice-diag.sh"
 _RESULT_DIR_GLOB = "sovyx-diag-*"
-_RESULT_TARBALL_GLOB = "sovyx-voice-diag_*.tar.gz"
+# Bash reality (verified via ``finalize.sh::_build_tarball`` line 467):
+# the tarball lands at ``$parent/${base}${suffix}.tar.gz`` where ``base``
+# is the basename of ``SOVYX_DIAG_OUTDIR`` (= ``sovyx-diag-${host}-${ts}-
+# ${uuid}``) and ``suffix`` is empty on success or ``_PARTIAL`` on
+# interrupted runs. So the tarball is a SIBLING of the work dir, not
+# inside it. Pre-rc.16 the constant + ``_find_latest_result_tarball``
+# encoded the misleading help-text claim ``<outdir>/sovyx-voice-diag_
+# <hostname>_<ts>_<uuid>.tar.gz`` — but no production bash code ever
+# emitted that path. The CI Voice-Bash-Diag-Smoke gate had been
+# ``Skipped`` since rc.10 (because upstream gates were failing) so the
+# bug surfaced only when the gate finally ran post-conftest enterprise
+# fixes.
+_RESULT_TARBALL_GLOB = "sovyx-diag-*.tar.gz"
 _BASH_VERSION_CMD = ("bash", "-c", "echo $BASH_VERSINFO")
 _BASH_VERSION_TIMEOUT_S = 5.0
 
@@ -588,13 +600,17 @@ def _find_latest_result_dir(output_root: Path | None) -> Path | None:
 
 
 def _find_latest_result_tarball(output_root: Path | None) -> Path | None:
-    """Return the newest ``sovyx-voice-diag_*.tar.gz`` under any ``sovyx-diag-*/``."""
+    """Return the newest ``sovyx-diag-*.tar.gz`` directly under ``output_root``.
+
+    The tarball is a SIBLING of the work dir (both share the
+    ``sovyx-diag-${host}-${ts}-${uuid}`` prefix; the dir has no suffix,
+    the tarball has ``.tar.gz``). Search at the top level only —
+    descending into the dir would never find the tarball. Filters out
+    sub-directories that would otherwise match the glob (e.g. a stray
+    ``sovyx-diag-name.tar.gz`` that's actually a directory).
+    """
     root = output_root if output_root is not None else Path.home()
-    candidates: list[Path] = []
-    for diag_dir in root.glob(_RESULT_DIR_GLOB):
-        if not diag_dir.is_dir():
-            continue
-        candidates.extend(diag_dir.glob(_RESULT_TARBALL_GLOB))
+    candidates = [p for p in root.glob(_RESULT_TARBALL_GLOB) if p.is_file()]
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)

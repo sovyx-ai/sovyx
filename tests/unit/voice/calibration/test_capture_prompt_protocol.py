@@ -298,9 +298,10 @@ class TestRunFullDiagAsyncEnvOverrides:
         (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
         output_root = tmp_path / "home"
         output_root.mkdir()
-        diag_dir = output_root / "sovyx-diag-x"
-        diag_dir.mkdir()
-        (diag_dir / "sovyx-voice-diag_x.tar.gz").write_bytes(b"\x1f\x8b\x08\x00")
+        # rc.16+post: tarball is a SIBLING of the work dir (matches
+        # bash ``finalize.sh::_build_tarball`` reality), not inside it.
+        (output_root / "sovyx-diag-x").mkdir()
+        (output_root / "sovyx-diag-x.tar.gz").write_bytes(b"\x1f\x8b\x08\x00")
 
         with (
             patch.object(_runner, "_check_prerequisites"),
@@ -340,9 +341,10 @@ class TestRunFullDiagAsyncEnvOverrides:
         (extracted / "sovyx-voice-diag.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
         output_root = tmp_path / "home"
         output_root.mkdir()
-        diag_dir = output_root / "sovyx-diag-x"
-        diag_dir.mkdir()
-        (diag_dir / "sovyx-voice-diag_x.tar.gz").write_bytes(b"\x1f\x8b\x08\x00")
+        # rc.16+post: tarball is a SIBLING of the work dir (matches
+        # bash ``finalize.sh::_build_tarball`` reality), not inside it.
+        (output_root / "sovyx-diag-x").mkdir()
+        (output_root / "sovyx-diag-x.tar.gz").write_bytes(b"\x1f\x8b\x08\x00")
 
         with (
             patch.object(_runner, "_check_prerequisites"),
