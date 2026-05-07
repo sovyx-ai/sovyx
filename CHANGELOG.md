@@ -6,7 +6,110 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.16 below)
+(none — every shipped delta is in v0.31.1 below)
+
+## [0.31.1] — 2026-05-07
+
+Audit-closure patch. The pre-v0.31.0 GA audit on 2026-05-07 (8
+senior-dev lenses across functional / cross-platform / failure
+modes / observability / privacy / BC / test coverage / docs)
+verdict: **SIM com 4 ressalvas LOW** (later expanded to 6 during
+deep-dive). Confidence 80%. Zero functional bugs; all findings
+were doc / contract drift that erodes senior-dev trust without
+breaking behaviour. v0.31.1 closes all 6 findings as a single
+coherent SemVer patch — doc-only + 1 bounded CLI flag wire-up.
+
+### Added
+
+- **`sovyx doctor voice --calibrate --inspect-migration`.** Wires
+  the orphan ``inspect_migrated_profile_dict`` public API (P5
+  v0.30.33+, previously zero call-sites in production) as a real
+  operator-facing read-only mode. Reads the on-disk profile, walks
+  the schema-migration registry to bring the dict to the runtime's
+  current ``CALIBRATION_PROFILE_SCHEMA_VERSION``, and prints the
+  result to stdout (pipeable into ``jq`` / ``diff``). Skips
+  signature verification + dataclass construction so the dict is
+  suitable for previewing the post-migration shape WITHOUT
+  committing to it. Useful at schema-bump time. Mutex with
+  ``--show`` / ``--rollback`` / ``--evaluate-rules`` (closed-enum
+  read-only inspection set; pick one per invocation). Closes audit F3.
+
+### Fixed
+
+- **`--rollback` help + body now reflect the rc.12 multi-generation
+  chain.** Pre-v0.31.1 the help still claimed "Single-step undo only
+  (one backup slot)" — false since rc.12, which introduced the
+  ``.bak.{1,2,3}`` 3-generation rotation. Help text now explains the
+  walk-the-chain semantics; the rollback body surfaces "N generations
+  remaining" so the operator sees how many more rollback steps they
+  have. Closes audit F6.
+
+### Documentation (single-source-of-truth audit closure)
+
+- **D1 — "applier replays on next mind start" claim falsified
+  (3 sites).** The docstring claim that ``CalibrationApplier`` reads
+  the profile at next mind start is false: zero
+  ``load_calibration_profile`` call-sites in any bootstrap /
+  mind-start hook (verified by grep). Cross-reboot persistence of
+  actual mixer state is delegated to
+  ``packaging/systemd/sovyx-audio-mixer-persist.service`` +
+  ``alsactl store``. Adding a parallel bootstrap-load path would
+  create a "two sources of truth" conflict with operator-side
+  ``alsamixer`` adjustments. ``calibration.json`` is now correctly
+  documented as the audit + KB-cache feed artifact (consumed by
+  ``--show`` / ``--explain`` / ``--inspect-migration`` operator
+  inspection paths and by the wizard's FAST_PATH replay via
+  ``_kb_cache.lookup_profile``).
+
+- **D2 — STRICT-flip narrative single-sourced (6 sites).**
+  Pre-v0.31.1, six docstring sites disagreed about WHEN the
+  LENIENT→STRICT default flips (v0.30.17 / v0.31.0 / v0.31.x /
+  v0.32.0+). Canonical narrative now uniform: STRICT is **opt-in**
+  in v0.31.x via explicit ``mode=Mode.STRICT`` argument. The
+  default flip is gated on **wizard-driven Ed25519 key generation**
+  landing in the dashboard, planned for v0.32.0+. Rationale: pre-v0.32
+  the only key-gen path is ``scripts/dev/generate_calibration_signing_key.py``
+  (dev-only), so STRICT-by-default would break every existing
+  install whose operator hasn't run that dev script.
+
+- **D4 — Rule registry surfaces R10-only-mutates fact.**
+  ``docs/modules/voice-calibration.md`` rules table updated to list
+  all 10 shipped rules (R10..R95) with explicit ``Operation``
+  column distinguishing ``set`` (R10 only — auto-applies via
+  ``CalibrationApplier``) from ``advise`` (R20..R95 — surface as
+  copy-paste shell commands). New "Rule promotion roadmap" section
+  documents the deliberate enterprise discipline: every rule ships
+  advise-first; promotion to ``set`` is a code change soaked across
+  one minor cycle. Justifies operator-in-the-loop pattern for
+  security-sensitive changes (TCC permission, Voice Clarity APO
+  bypass, RNNoise disabling).
+
+- **D5 — Sunset stale forward-looking claims (10+ sites).**
+  Cleaned up "Future commits in v0.30.15" / "[v0.30.17+]" /
+  "deferred to v0.X" annotations across the calibration package
+  for work that has since landed: mid-stage cancellation IS
+  supported via ``asyncio.CancelledError`` + SIGTERM escalation,
+  FAST_PATH branches ARE wired via ``_kb_cache.py``, etc. Cleaned
+  sites: ``__init__.py`` (full architecture overview rewrite),
+  ``_wizard_orchestrator.py``, ``_wizard_state.py``,
+  ``_measurer.py``, ``_fingerprint.py``. Forensic rc.X comments
+  throughout (``# rc.12 (operator-debt P2)`` etc.) are kept intact
+  as audit trail per ``feedback_no_rc_cadence``.
+
+### Verification gates (all return zero matches post-commit)
+
+```bash
+git grep -n "on next mind start" src/sovyx/voice/calibration/ docs/   # D1 closed
+git grep -nE 'Future commits in v0\.30|\[v0\.30\.[0-9]+\+\]' src/sovyx/voice/calibration/   # D5 closed
+git grep -n "Single-step undo only" src/sovyx/cli/commands/doctor.py   # D6 closed
+```
+
+### Mission
+
+Spec:
+``docs-internal/missions/MISSION-voice-v0_31_1-audit-closure-2026-05-07.md``.
+Three-commit chain (feature CLI + doc sweep + release) per
+``feedback_staged_adoption``.
 
 ## [0.31.0-rc.16] — 2026-05-07
 
