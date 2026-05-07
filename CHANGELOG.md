@@ -6,7 +6,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.14 below)
+(none — every shipped delta is in v0.31.0-rc.15 below)
+
+## [0.31.0-rc.15] — 2026-05-07
+
+Polish bundle closing the 4 LOW UX items surfaced by the rc.14
+self-audit. None operator-blocking; all four address micro-rough
+edges in the Settings → Voice + onboarding wizard surfaces.
+Single-RC bundle per operator request ("polimento absoluto pré-
+GA"). Frontend-only changes; pytest baseline identical to rc.14.
+
+### Fixed
+
+- **rc.15 LOW.1 — RollbackButton auto-refreshes backup count when
+  a calibration job reaches a terminal state.** Pre-rc.15 the
+  backup count loaded only at component mount, so an operator who
+  ran Recalibrate (8-12 min slow-path or ~5s fast-path) and then
+  came back to the Rollback button saw a stale count (didn't
+  include the just-created ``.bak.1`` from the new save). Now: a
+  ``useEffect`` listens on ``currentCalibrationJob.{job_id, status}``
+  and re-fetches backups when the status flips to terminal (DONE /
+  FAILED / CANCELLED / FALLBACK / ROLLED_BACK). Test in
+  ``rollback-button.test.tsx::rc.15 LOW.1``.
+
+- **rc.15 LOW.2 — Backup count refreshes after rollback failure.**
+  Pre-rc.15 a 409 chain-exhausted left the cached count stale; the
+  RollbackButton would still render enabled (count > 0) and the
+  operator could double-click into the same 409. Now: the slice's
+  ``rollbackCalibration`` catch block fires
+  ``loadCalibrationBackups`` so the UI reflects ground truth (likely
+  0, disabling the button) immediately. Test in
+  ``calibration.test.ts::rc.15 LOW.2``.
+
+- **rc.15 LOW.3 — Resolved mind_id displayed in wizard header.**
+  Pre-rc.15 the operator running ``sovyx init meu-mind`` saw
+  "Calibrating..." with no visual confirmation that the rc.12
+  backend resolver landed the right mind (only filesystem
+  inspection of ``~/.sovyx/meu-mind/calibration.json`` confirmed).
+  Now: small ``Mind: <name>`` label next to the wizard title when
+  ``currentJob.mind_id !== "default"``. Hidden for the default-
+  mind case so the single-mind operator UX stays clean. i18n in
+  3 locales (``calibration.mindLabel``). 3 tests in
+  ``VoiceCalibrationStep.test.tsx``: hidden-no-job / hidden-default-
+  sentinel / shown-non-default.
+
+- **rc.15 LOW.4 — Single retry on initial-mount load failure.**
+  Pre-rc.15 a network blip on first dashboard mount left the
+  RollbackButton in a perpetual "Checking how many rollback steps
+  are available…" disabled state. ``api.get`` already retries
+  429/503/5xx; this layer covers dashboard-load-races where the
+  daemon is starting up and returns 4xx-but-eventually-recovers.
+  Now: a ref-tracked single retry after 1500ms. The ref guards
+  against infinite-retry loops on persistent failure (operator can
+  refresh the page if needed). Module constant ``_RETRY_DELAY_MS``
+  exposed for test introspection. Test in
+  ``rollback-button.test.tsx::rc.15 LOW.4``.
+
+### Quality gates
+
+- ``uv lock --check`` — clean.
+- ``uv run ruff check src/ tests/`` — clean.
+- ``uv run ruff format --check src/ tests/`` — clean (1099 files).
+- ``uv run mypy src/`` — Success: no issues found in 512 source
+  files.
+- ``uv run bandit -r src/sovyx/`` — zero LOW/MEDIUM/HIGH.
+- ``uv run python -m pytest tests/ --ignore=tests/smoke
+  --timeout=30`` — green (no Python changes; identical to rc.14's
+  14540 passed).
+- ``cd dashboard && npx tsc -b tsconfig.app.json`` — clean.
+- ``cd dashboard && npx vitest run`` — 1233 passed (+4 from rc.14's
+  1229).
+
+### Decision: rc.15, then v0.31.0 GA gate
+
+This is the polish pass. After rc.15, **zero** known UX rough
+edges remain in the voice setup flow. Per
+``feedback_validation_batching``, v0.31.0 GA tag is gated on
+operator validation of the canonical jornada across all 4 surfaces
+(rc.11 banner / rc.12 mind_id / rc.13 RecalibrateButton / rc.14
+CalibrationWizardCard / rc.15 polish). If validation passes,
+v0.31.0 ships.
 
 ## [0.31.0-rc.14] — 2026-05-07
 
