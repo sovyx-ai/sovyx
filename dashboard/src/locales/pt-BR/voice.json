@@ -443,7 +443,6 @@
     "button": {
       "start": "Iniciar calibração",
       "cancel": "Cancelar",
-      "continue": "Continuar",
       "try_again": "Tentar novamente",
       "use_simple_setup": "Usar configuração simples",
       "show_preview": "Mostrar hardware detectado"
@@ -487,9 +486,7 @@
     },
     "fast_path": {
       "title": "Calibração rápida",
-      "subtitle": "Seu hardware já foi calibrado antes. Replay do perfil em cache leva cerca de 5 segundos.",
-      "progress": "Validando perfil em cache...",
-      "success": "Replay rápido concluído."
+      "subtitle": "Seu hardware já foi calibrado antes. Replay do perfil em cache leva cerca de 5 segundos."
     },
     "slow_path": {
       "title": "Calibração completa",
@@ -498,9 +495,7 @@
       "stage_triage": "Analisando o diagnóstico + capturando medições",
       "stage_apply": "Aplicando o perfil de calibração",
       "prompt_speak": "Diga \"{{phrase}}\" claramente",
-      "prompt_silence": "Fique em silêncio por {{seconds}} segundos",
-      "success": "Calibração completa concluída.",
-      "fallback": "Calibração abortada; voltando para configuração simples."
+      "prompt_silence": "Fique em silêncio por {{seconds}} segundos"
     },
     "review": {
       "title": "Calibração aplicada",
@@ -513,12 +508,6 @@
       "cancel": "Não, continuar"
     },
     "error": {
-      "generic": "A calibração não conseguiu completar: {{message}}",
-      "bash_unavailable": "O toolkit de diagnóstico requer bash 4+. Instale bash via o gerenciador de pacotes da sua distribuição.",
-      "selftest_failed": "O self-test do analisador falhou. Tente novamente após reiniciar o daemon; se persistir, abra uma issue anexando o tarball de diagnóstico.",
-      "hardware_gap": "Nenhum dispositivo de captura detectado neste host. Conecte ou pareie um microfone, depois rode a calibração novamente.",
-      "timeout": "A calibração esgotou o tempo após {{seconds}} segundos. O diag pode ter travado em uma janela de captura; tente novamente ou use a configuração simples.",
-      "permission_denied": "A Sovyx não tem permissão para acessar o microfone. Conceda a permissão nas configurações de privacidade do seu sistema operacional.",
       "api_fingerprint_failed": "Falha ao capturar fingerprint",
       "api_start_failed": "Falha ao iniciar calibração",
       "api_load_failed": "Falha ao carregar job de calibração",

@@ -10,11 +10,14 @@
  * AND the multi-stage timeline.
  *
  * Subcomponent of VoiceCalibrationStep per spec §6.3 (T3.4 split).
- * Active in v0.30.25 alpha as a render-only surface; the orchestrator
- * does not yet emit a structured "prompt" event so the parent
- * conditionally renders it via local heuristics. Wire-up to a
- * dedicated `voice.calibration.wizard.prompt` event lands when the
- * bash diag emits structured prompts upstream (post-v0.30.25).
+ * Wire-up shipped in P3 v0.30.31: the bash diag's
+ * ``prompt_emit_structured`` writes one JSONL line per operator-facing
+ * prompt to ``<job_dir>/prompts.jsonl``; the orchestrator's
+ * ``_tail_prompts_file`` polls that file every 500 ms and pushes each
+ * parsed prompt into ``state.extras["current_prompt"]``. The parent
+ * (``VoiceCalibrationStep``) reads ``currentJob.extras?.current_prompt``
+ * and conditionally renders this component during slow_path_diag (per
+ * sibling ``_SlowPathProgress.tsx`` flow).
  */
 
 import { useTranslation } from "react-i18next";

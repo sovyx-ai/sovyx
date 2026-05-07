@@ -443,7 +443,6 @@
     "button": {
       "start": "Start calibration",
       "cancel": "Cancel",
-      "continue": "Continue",
       "try_again": "Try again",
       "use_simple_setup": "Use simple setup",
       "show_preview": "Show detected hardware"
@@ -487,9 +486,7 @@
     },
     "fast_path": {
       "title": "Fast-path calibration",
-      "subtitle": "Your hardware was previously calibrated. Replaying the cached profile takes about 5 seconds.",
-      "progress": "Validating cached profile...",
-      "success": "Fast-path replay complete."
+      "subtitle": "Your hardware was previously calibrated. Replaying the cached profile takes about 5 seconds."
     },
     "slow_path": {
       "title": "Full calibration",
@@ -498,9 +495,7 @@
       "stage_triage": "Analyzing the diagnostic + capturing measurements",
       "stage_apply": "Applying the calibration profile",
       "prompt_speak": "Say \"{{phrase}}\" clearly",
-      "prompt_silence": "Stay silent for {{seconds}} seconds",
-      "success": "Slow-path calibration complete.",
-      "fallback": "Calibration aborted; falling back to simple setup."
+      "prompt_silence": "Stay silent for {{seconds}} seconds"
     },
     "review": {
       "title": "Calibration applied",
@@ -513,12 +508,6 @@
       "cancel": "No, continue"
     },
     "error": {
-      "generic": "Calibration could not complete: {{message}}",
-      "bash_unavailable": "The bundled diagnostic toolkit requires bash 4+. Install bash via your distribution package manager.",
-      "selftest_failed": "The analyzer self-test failed. Re-run after a daemon restart; if the issue persists, file an issue with the diagnostic tarball attached.",
-      "hardware_gap": "No capture device detected on this host. Plug in or pair a microphone, then re-run calibration.",
-      "timeout": "Calibration timed out after {{seconds}} seconds. The diag may be stuck on a capture window; retry or use simple setup.",
-      "permission_denied": "Sovyx is missing the permission to access the microphone. Grant permission via your operating system's privacy settings.",
       "api_fingerprint_failed": "Failed to capture fingerprint",
       "api_start_failed": "Failed to start calibration",
       "api_load_failed": "Failed to load calibration job",
