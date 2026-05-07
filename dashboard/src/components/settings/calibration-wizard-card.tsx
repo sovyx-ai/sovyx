@@ -51,6 +51,18 @@ export function CalibrationWizardCard() {
 
   const enabled = flag?.enabled ?? false;
   const overrideActive = flag?.runtime_override_active ?? false;
+  // rc.14 (closes the bug class — same lesson as rc.11/rc.13): the
+  // wizard mount + Recalibrate button surfaces both gate on
+  // ``platform_supported``, but pre-rc.14 this CARD did not. Result:
+  // a Win/macOS operator saw status "Enabled" + a clickable toggle
+  // here while every downstream surface was actually disabled
+  // because of platform — the card LIED about state. Now: when
+  // ``platform_supported`` is false, the toggle is disabled with a
+  // Linux-only tooltip + the status badge says
+  // ``statusPlatformUnsupported`` instead of ``statusEnabled``.
+  // Pre-rc.12 daemons that don't ship the field default to True via
+  // the zod schema, preserving legacy single-platform behaviour.
+  const platformSupported = flag?.platform_supported ?? true;
 
   return (
     <section
@@ -72,9 +84,11 @@ export function CalibrationWizardCard() {
       <div className="mt-4 flex items-center justify-between gap-4">
         <div className="text-xs text-[var(--svx-color-text-tertiary)]">
           <span className="font-medium text-[var(--svx-color-text-primary)]">
-            {enabled
-              ? t("settings:calibrationWizard.statusEnabled")
-              : t("settings:calibrationWizard.statusDisabled")}
+            {!platformSupported
+              ? t("settings:calibrationWizard.statusPlatformUnsupported")
+              : enabled
+                ? t("settings:calibrationWizard.statusEnabled")
+                : t("settings:calibrationWizard.statusDisabled")}
           </span>
           {overrideActive && (
             <span className="ml-2 inline-flex items-center gap-1 text-[var(--svx-color-status-warning)]">
@@ -86,8 +100,14 @@ export function CalibrationWizardCard() {
         <Button
           type="button"
           variant={enabled ? "outline" : "default"}
-          disabled={loading || flag === null}
+          disabled={loading || flag === null || !platformSupported}
           onClick={() => void handleToggle(!enabled)}
+          title={
+            !platformSupported
+              ? t("settings:calibrationWizard.platformUnsupportedTooltip")
+              : undefined
+          }
+          aria-disabled={loading || flag === null || !platformSupported}
           data-testid="settings-calibration-wizard-toggle"
         >
           {loading ? (
@@ -101,7 +121,9 @@ export function CalibrationWizardCard() {
       </div>
 
       <p className="mt-3 text-[11px] text-[var(--svx-color-text-tertiary)]">
-        {t("settings:calibrationWizard.persistenceNote")}
+        {!platformSupported
+          ? t("settings:calibrationWizard.platformUnsupportedNote")
+          : t("settings:calibrationWizard.persistenceNote")}
       </p>
     </section>
   );

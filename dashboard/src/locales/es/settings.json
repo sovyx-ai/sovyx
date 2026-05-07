@@ -207,6 +207,9 @@
   "calibrationWizard": {
     "title": "Paso de calibración de voz en el onboarding",
     "description": "Monta el asistente de calibración multi-etapa consciente del hardware durante la configuración de voz. Desactivado por defecto mientras la Capa 3 del sistema auto-calibrante está en soak; actívalo para incluir este deployment.",
+    "statusPlatformUnsupported": "Solo Linux (no disponible aquí)",
+    "platformUnsupportedTooltip": "La calibración automática solo funciona en Linux en este equipo.",
+    "platformUnsupportedNote": "La calibración automática solo funciona en Linux — el toolkit de diagnóstico bash no está disponible en tu plataforma. Usa el asistente simple de prueba de dispositivos del onboarding. Cambiar este flag no tiene efecto en Windows o macOS.",
     "statusEnabled": "Activado",
     "statusDisabled": "Desactivado",
     "enableButton": "Activar wizard",
