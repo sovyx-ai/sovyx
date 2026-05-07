@@ -17,29 +17,29 @@ if TYPE_CHECKING:
 
 
 # ── Click/Typer Rich-rendering normalization (CI cross-platform) ───────────
-# Rationale (replaces the rc.16 per-test ANSI/box-drawing strip
-# band-aids): every test that runs ``CliRunner().invoke(...)`` and asserts
-# on ``result.output`` is sensitive to Rich's TTY-detected colour codes
-# (``--full-diag`` rendered as ``-`` + ANSI + ``-full`` + ANSI + ``-diag``)
-# AND to Rich's terminal-width wrapping (long paths split by box-drawing
-# ``│`` U+2502 chars). On Linux/macOS CI runners those features are
-# active; on local Windows shells they aren't. The diff broke
-# ``test_calibrate_flag_help`` + ``test_signing_key_missing_path`` for
-# 5 RCs.
+# Two-layer normalisation. The env vars below cover what env CAN cover;
+# tests that assert on substrings within Rich-rendered output STILL
+# need a per-test ANSI strip because Rich's bold/dim/italic codes
+# survive ``NO_COLOR=1`` (the no-color.org spec covers *colour* only,
+# not text formatting).
 #
-# rc.16 fixed it via post-strip in 2 individual tests — but per
-# ``feedback_enterprise_only`` that's symptom-fix, not cause-fix.
-# This session-level setdefault is the upstream fix: sourced ONCE,
-# every ``CliRunner.invoke`` call inherits it, future tests get the
-# discipline for free. ``setdefault`` so an individual test that
-# WANTS the colour/wrap behaviour (testing TTY rendering itself)
-# can override locally via ``CliRunner.invoke(..., env={...})``.
-#
-# * ``NO_COLOR=1`` — disables Rich/Click colour output (POSIX
-#   ``no-color`` standard, https://no-color.org).
 # * ``COLUMNS=240`` — wide terminal so Rich doesn't wrap error
-#   panels at 80 cols + insert box-drawing chars that split words
-#   like filenames across lines.
+#   panels at 80 cols + insert box-drawing ``│`` chars that split
+#   words like filenames across lines. Effective; eliminates the
+#   wrap-induced split-filename failures from rc.16.
+#
+# * ``NO_COLOR=1`` — disables Rich's *colour* output (POSIX no-color
+#   standard, https://no-color.org). Helpful for assertions that
+#   check terminal output for colour-meaningful content. Does NOT
+#   disable bold/dim/italic — Rich still emits ``\x1b[1m`` etc on
+#   help text. Tests asserting on substrings of formatted help/error
+#   output (e.g. ``test_calibrate_flag_help_lists_all_options``)
+#   MUST still strip ANSI codes locally before the assertion — that
+#   is the canonical pattern for testing Rich-rendered CLI output,
+#   not a band-aid.
+#
+# ``setdefault`` so an individual test that explicitly tests TTY
+# rendering can override via ``CliRunner.invoke(..., env={...})``.
 os.environ.setdefault("NO_COLOR", "1")
 os.environ.setdefault("COLUMNS", "240")
 

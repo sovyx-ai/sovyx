@@ -232,18 +232,41 @@ class TestCLISurface:
     """Every documented --calibrate flag is parseable."""
 
     def test_calibrate_flag_help_lists_all_options(self) -> None:
+        import re
+
         from typer.testing import CliRunner
 
         from sovyx.cli.main import app
 
-        # Rich colour + wrap normalisation lives in tests/conftest.py
-        # (NO_COLOR=1 + COLUMNS=240 set at session start). CliRunner
-        # inherits it; output is plain ASCII, no ANSI escapes, no
-        # 80-col wrap. Substring asserts work cross-platform without
-        # post-strip helpers.
+        # Two-layer cross-platform output normalisation. Both are
+        # required because Rich's TTY-detected formatting can't be
+        # fully disabled via env alone:
+        #
+        # 1. ``tests/conftest.py`` sets ``COLUMNS=240`` so Rich
+        #    doesn't wrap the help panel at 80 cols + insert
+        #    box-drawing chars that would split flag names.
+        # 2. ``NO_COLOR=1`` (also conftest) disables Rich's *colour*
+        #    output per the no-color.org spec. BUT Rich still emits
+        #    *bold* / *dim* ANSI codes (``\x1b[1m...\x1b[0m``)
+        #    independently — those are formatting, not colour.
+        #    Concrete failure: Rich renders ``--evaluate-rules`` as
+        #    ``-`` + ``\x1b[1m`` + ``-evaluate`` + ``\x1b[0m`` + ... so
+        #    the substring ``"--evaluate-rules"`` does NOT appear
+        #    literally in ``result.output``. The local ANSI strip
+        #    handles that residual formatting.
+        #
+        # This is structurally correct, not a band-aid: Rich's bold
+        # output cannot be suppressed via env (no Rich-supported flag
+        # disables ALL formatting AND keeps the help layout). The
+        # strip is the canonical pattern for testing Rich-rendered
+        # CLI output across CI runners. Local Windows shells happen
+        # not to trigger Rich's formatting, which is why the test
+        # passed locally for 5 RCs without the strip.
+        ansi_re = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
         runner = CliRunner()
         result = runner.invoke(app, ["doctor", "voice", "--help"])
         assert result.exit_code == 0
+        plain_output = ansi_re.sub("", result.output)
         for flag in (
             "--full-diag",
             "--calibrate",
@@ -259,7 +282,7 @@ class TestCLISurface:
             "--signing-key",
             "--evaluate-rules",
         ):
-            assert flag in result.output, f"--help is missing documented flag {flag!r}"
+            assert flag in plain_output, f"--help is missing documented flag {flag!r}"
 
 
 # ════════════════════════════════════════════════════════════════════
