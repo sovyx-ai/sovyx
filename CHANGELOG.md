@@ -6,7 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.2 below)
+(none — every shipped delta is in v0.31.3 below)
+
+## [0.31.3] — 2026-05-07
+
+CI Windows-baseline regression close. v0.31.2 CI ended red on the
+``Test (windows-latest / Python 3.12)`` job with a single failing
+test:
+
+    FAILED tests/dashboard/test_voice_health.py::TestQuarantineEndpoint::test_populated_snapshot_returns_entries
+    assert 60.00000000000003 <= 60.0
+
+Root cause: ``QuarantineEntryModel.from_domain`` clamped
+``seconds_until_expiry`` to ``[0, +inf)`` only, despite the test +
+documented contract requiring ``[0, quarantine_s]``. On Windows
+runners ``time.monotonic()`` ticks at ~15.6 ms (CLAUDE.md
+anti-pattern #22), so when the test added an entry and read the
+snapshot inside the same tick the route saw ``now == added_at`` —
+and ``(added + 60.0) - now`` produced ``60.0 + IEEE-754-residual``
+≈ ``60.00000000000003``, breaking the upper bound. Linux + macOS
+runners didn't trigger because their monotonic clock has sub-µs
+resolution + ``now`` was reliably > ``added``.
+
+This was NOT a regression introduced by v0.31.1 / v0.31.2 — it was
+a pre-existing bug that surfaced when v0.31.2 happened to schedule
+the test on a Windows runner where the same-tick path was
+exercised. Out of the original audit-closure scope but blocked
+v0.31.0 GA shipping.
+
+### Fixed
+
+- **``EndpointQuarantine.quarantine_s`` exposed as a read-only
+  property.** Callers that need to clamp derived values now read
+  the constructor's literal float instead of inferring it from
+  ``expires - added`` (which carries the same IEEE 754 residual that
+  caused the bug). 3 new unit tests cover constructor value /
+  factory-singleton default / setter rejection.
+
+- **``QuarantineEntryModel.from_domain`` clamps upper bound.**
+  ``seconds_until_expiry = min(quarantine_s, max(0.0, expires -
+  now))`` honors the documented contract regardless of monotonic
+  clock resolution. New required ``quarantine_s`` kwarg makes the
+  bound explicit at the type level.
+
+- **``voice_health`` route imports ``time`` at module level.** The
+  prior ``import time as _time`` inside the route body prevented
+  cleanly patching ``time.monotonic`` from tests. Module-level
+  import is the canonical Python pattern + costs nothing at import
+  time (``time`` is stdlib + already loaded). 1 new regression test
+  uses a fake clock + ``patch("...voice_health.time.monotonic")``
+  to simulate the Windows same-tick path, asserting
+  ``seconds_until_expiry == quarantine_s`` exactly (pre-fix:
+  ``60.00000000000003``; post-fix: clamped to ``60.0``).
+
+### Quality gates (all green at HEAD)
+
+- ruff + format: clean
+- mypy strict: 0 issues in 512 source files
+- bandit: 0/0/0/0
+- pytest (voice + dashboard scope): 7271 passed
+- ruff format check: clean
+
+### Mission
+
+This patch sits outside the v0.31.1 / v0.31.2 audit-closure mission
+scope (which targeted voice setup + diag + calibration). The
+quarantine route is a sibling §4.4.7 surface; its CI regression
+gated v0.31.0 GA shipping, so a focused single-fix patch was the
+right enterprise call rather than bundling with a future feature
+release. Per ``feedback_no_rc_cadence``: direct SemVer patch.
 
 ## [0.31.2] — 2026-05-07
 
