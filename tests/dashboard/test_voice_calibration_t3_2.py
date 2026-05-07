@@ -172,6 +172,290 @@ class TestStartEndpoint:
 
 
 # ====================================================================
+# rc.12 (anti-pattern #35) — mind_id sentinel resolution
+# ====================================================================
+
+
+class TestStartEndpointMindIdResolution:
+    """Frontend hardcodes ``mind_id="default"`` in onboarding +
+    Settings; backend MUST resolve it to the real active mind via
+    ``resolve_active_mind_id_for_request``. Else the calibration
+    profile lands at ``<data_dir>/default/calibration.json`` even
+    when the operator's actual mind is "meu-mind", silently breaking
+    persistence on next ``sovyx start``.
+    """
+
+    def test_explicit_non_default_mind_id_skips_resolver(self, tmp_path: Path) -> None:
+        """When the operator passes an explicit mind_id (not the
+        sentinel), the resolver MUST NOT run — multi-mind operators
+        explicitly targeting a specific mind get exactly that mind.
+        """
+        app = _build_app(tmp_path=tmp_path)
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.WizardOrchestrator.run",
+            new=AsyncMock(),
+        ):
+            response = _client(app).post(
+                "/api/voice/calibration/start",
+                json={"mind_id": "meu-mind"},
+            )
+        assert response.status_code == 202
+        body = response.json()
+        assert body["job_id"] == "meu-mind"
+        assert body["resolved_mind_id"] == "meu-mind"
+        assert body["resolved_mind_id_source"] == "request_body"
+        assert body["stream_url"] == "/api/voice/calibration/jobs/meu-mind/stream"
+
+    def test_sentinel_default_no_registry_falls_back_to_default(self, tmp_path: Path) -> None:
+        """No MindManager registered (fresh install): the resolver
+        falls back to the literal "default" with source
+        ``fallback_default``. Preserves pre-rc.12 behaviour for
+        operators who haven't set up a mind yet.
+        """
+        app = _build_app(tmp_path=tmp_path)
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.WizardOrchestrator.run",
+            new=AsyncMock(),
+        ):
+            response = _client(app).post(
+                "/api/voice/calibration/start",
+                json={"mind_id": "default"},
+            )
+        assert response.status_code == 202
+        body = response.json()
+        assert body["job_id"] == "default"
+        assert body["resolved_mind_id"] == "default"
+        assert body["resolved_mind_id_source"] == "fallback_default"
+
+    def test_sentinel_default_resolves_via_app_state(self, tmp_path: Path) -> None:
+        """When the dashboard cached the active mind on
+        ``app.state.mind_id`` (the canonical post-T1.2 path), the
+        sentinel resolves to that value. THIS IS THE FIX for the
+        operator running ``sovyx init meu-mind && sovyx start`` and
+        clicking onboarding step 4 — calibration MUST land at
+        ``<data_dir>/meu-mind/`` not ``<data_dir>/default/``.
+        """
+        app = _build_app(tmp_path=tmp_path)
+        # Simulate the dashboard server's startup-time mind cache.
+        app.state.mind_id = "meu-mind"
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.WizardOrchestrator.run",
+            new=AsyncMock(),
+        ):
+            response = _client(app).post(
+                "/api/voice/calibration/start",
+                json={"mind_id": "default"},
+            )
+        assert response.status_code == 202
+        body = response.json()
+        assert body["job_id"] == "meu-mind"
+        assert body["resolved_mind_id"] == "meu-mind"
+        assert body["resolved_mind_id_source"] == "app_state"
+        # Stream URL uses the resolved mind_id, NOT the request body's
+        # "default" — frontend's subsequent /jobs/{job_id}/* calls
+        # operate on the real mind.
+        assert body["stream_url"] == "/api/voice/calibration/jobs/meu-mind/stream"
+
+    def test_sentinel_default_resolves_via_mind_manager(self, tmp_path: Path) -> None:
+        """When no app_state cache but a live MindManager is registered,
+        resolver walks ``MindManager.get_active_minds()``. Source
+        ``mind_manager``.
+        """
+        from unittest.mock import MagicMock
+
+        from sovyx.engine.bootstrap import MindManager
+        from sovyx.engine.registry import ServiceRegistry
+
+        app = _build_app(tmp_path=tmp_path)
+        registry = ServiceRegistry()
+        manager = MagicMock(spec=MindManager)
+        manager.get_active_minds.return_value = ["meu-mind"]
+        registry.register_instance(MindManager, manager)
+        app.state.registry = registry
+        with patch(
+            "sovyx.dashboard.routes.voice_calibration.WizardOrchestrator.run",
+            new=AsyncMock(),
+        ):
+            response = _client(app).post(
+                "/api/voice/calibration/start",
+                json={"mind_id": "default"},
+            )
+        assert response.status_code == 202
+        body = response.json()
+        assert body["job_id"] == "meu-mind"
+        assert body["resolved_mind_id"] == "meu-mind"
+        assert body["resolved_mind_id_source"] == "mind_manager"
+
+    def test_409_message_uses_resolved_mind_id(self, tmp_path: Path) -> None:
+        """The 409 conflict message MUST cite the RESOLVED mind_id so
+        the operator sees the real mind name, not the sentinel
+        ``default`` they never typed.
+        """
+        app = _build_app(tmp_path=tmp_path)
+        app.state.mind_id = "meu-mind"
+        # Seed a non-terminal job for the RESOLVED mind_id.
+        _seed_progress(data_dir=tmp_path, mind_id="meu-mind", status=WizardStatus.PROBING)
+        response = _client(app).post(
+            "/api/voice/calibration/start",
+            json={"mind_id": "default"},
+        )
+        assert response.status_code == 409
+        assert "meu-mind" in response.text
+
+
+# ====================================================================
+# rc.12 — POST /rollback + GET /backups
+# ====================================================================
+
+
+def _seed_persisted_profile(data_dir: Path, mind_id: str, profile_id: str) -> None:
+    """Helper: write a real CalibrationProfile to <data_dir>/<mind_id>/.
+
+    Uses save_calibration_profile so the rotation chain is exercised
+    end-to-end (legacy migration + .bak.N rotation).
+    """
+    from dataclasses import replace
+
+    from sovyx.voice.calibration._persistence import save_calibration_profile
+    from tests.unit.voice.calibration.test_persistence import _profile
+
+    base = _profile(signature=None)
+    save_calibration_profile(
+        replace(base, mind_id=mind_id, profile_id=profile_id),
+        data_dir=data_dir,
+    )
+
+
+class TestRollbackEndpoint:
+    """rc.12 — ``POST /api/voice/calibration/rollback`` walks the
+    multi-generation backup chain. Same sentinel-resolution contract
+    as /start (anti-pattern #35)."""
+
+    def test_rollback_409_when_chain_empty(self, tmp_path: Path) -> None:
+        """No backups: 409 with operator-friendly message."""
+        app = _build_app(tmp_path=tmp_path)
+        # Save only one profile -- no .bak.1 yet (first save doesn't
+        # rotate anything; the chain is built up by subsequent saves).
+        _seed_persisted_profile(tmp_path, "default", "11111111-1111-1111-1111-111111111111")
+        response = _client(app).post(
+            "/api/voice/calibration/rollback",
+            json={"mind_id": "default"},
+        )
+        assert response.status_code == 409
+        assert "exhausted" in response.text.lower() or "nothing" in response.text.lower()
+
+    def test_rollback_succeeds_with_chain(self, tmp_path: Path) -> None:
+        """Two saves → 1 backup → rollback succeeds + remaining = 0."""
+        app = _build_app(tmp_path=tmp_path)
+        _seed_persisted_profile(tmp_path, "default", "11111111-1111-1111-1111-111111111111")
+        _seed_persisted_profile(tmp_path, "default", "22222222-2222-2222-2222-222222222222")
+        response = _client(app).post(
+            "/api/voice/calibration/rollback",
+            json={"mind_id": "default"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["backup_generations_remaining"] == 0
+        assert body["restored_path"].endswith("calibration.json")
+        assert body["resolved_mind_id"] == "default"
+
+    def test_rollback_chain_can_be_consumed_multiple_times(self, tmp_path: Path) -> None:
+        """4 saves → 3 backups → 3 successive rollbacks succeed,
+        4th returns 409."""
+        app = _build_app(tmp_path=tmp_path)
+        for i in range(4):
+            _seed_persisted_profile(tmp_path, "default", f"3333333{i}-3333-3333-3333-333333333333")
+        client = _client(app)
+        for expected_remaining in (2, 1, 0):
+            response = client.post(
+                "/api/voice/calibration/rollback",
+                json={"mind_id": "default"},
+            )
+            assert response.status_code == 200
+            assert response.json()["backup_generations_remaining"] == expected_remaining
+        # 4th call → 409.
+        response = client.post(
+            "/api/voice/calibration/rollback",
+            json={"mind_id": "default"},
+        )
+        assert response.status_code == 409
+
+    def test_rollback_resolves_mind_id_sentinel(self, tmp_path: Path) -> None:
+        """rc.12 + anti-pattern #35: rollback also resolves ``default``
+        sentinel via the active-mind resolver. Frontend's hardcoded
+        ``"default"`` rolls back the operator's actual mind."""
+        app = _build_app(tmp_path=tmp_path)
+        app.state.mind_id = "meu-mind"
+        _seed_persisted_profile(tmp_path, "meu-mind", "44444444-4444-4444-4444-444444444444")
+        _seed_persisted_profile(tmp_path, "meu-mind", "55555555-5555-5555-5555-555555555555")
+        response = _client(app).post(
+            "/api/voice/calibration/rollback",
+            json={"mind_id": "default"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["resolved_mind_id"] == "meu-mind"
+        assert body["resolved_mind_id_source"] == "app_state"
+        assert "meu-mind" in body["restored_path"]
+
+    def test_rollback_default_body_uses_sentinel(self, tmp_path: Path) -> None:
+        """Empty body works because ``mind_id`` defaults to ``default``."""
+        app = _build_app(tmp_path=tmp_path)
+        _seed_persisted_profile(tmp_path, "default", "66666666-6666-6666-6666-666666666666")
+        _seed_persisted_profile(tmp_path, "default", "77777777-7777-7777-7777-777777777777")
+        response = _client(app).post("/api/voice/calibration/rollback", json={})
+        assert response.status_code == 200
+
+    def test_rollback_requires_auth(self, tmp_path: Path) -> None:
+        app = _build_app(tmp_path=tmp_path)
+        client_no_auth = TestClient(app)
+        response = client_no_auth.post(
+            "/api/voice/calibration/rollback", json={"mind_id": "default"}
+        )
+        assert response.status_code == 401
+
+
+class TestBackupsEndpoint:
+    """rc.12 — ``GET /api/voice/calibration/backups`` enumerates the
+    chain so the dashboard's RollbackButton can render
+    enabled/disabled correctly without a wasted POST."""
+
+    def test_backups_empty_on_fresh_install(self, tmp_path: Path) -> None:
+        app = _build_app(tmp_path=tmp_path)
+        response = _client(app).get("/api/voice/calibration/backups")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["generations"] == []
+
+    def test_backups_lists_all_chain_generations(self, tmp_path: Path) -> None:
+        app = _build_app(tmp_path=tmp_path)
+        for i in range(4):  # 1 initial + 3 rotations = chain full at 3 gens
+            _seed_persisted_profile(tmp_path, "default", f"8888888{i}-8888-8888-8888-888888888888")
+        response = _client(app).get("/api/voice/calibration/backups")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["generations"] == [1, 2, 3]
+        assert body["mind_id"] == "default"
+
+    def test_backups_resolves_mind_id_sentinel(self, tmp_path: Path) -> None:
+        app = _build_app(tmp_path=tmp_path)
+        app.state.mind_id = "meu-mind"
+        _seed_persisted_profile(tmp_path, "meu-mind", "99999999-9999-9999-9999-999999999999")
+        _seed_persisted_profile(tmp_path, "meu-mind", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        response = _client(app).get("/api/voice/calibration/backups")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["mind_id"] == "meu-mind"
+        assert body["generations"] == [1]
+
+    def test_backups_requires_auth(self, tmp_path: Path) -> None:
+        app = _build_app(tmp_path=tmp_path)
+        client_no_auth = TestClient(app)
+        response = client_no_auth.get("/api/voice/calibration/backups")
+        assert response.status_code == 401
+
+
+# ====================================================================
 # GET /jobs/{id}
 # ====================================================================
 

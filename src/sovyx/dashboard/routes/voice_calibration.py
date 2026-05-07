@@ -58,6 +58,7 @@ from starlette.status import (
     HTTP_409_CONFLICT,
 )
 
+from sovyx.dashboard._shared import resolve_active_mind_id_for_request
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.engine._lock_dict import LRULockDict
 from sovyx.observability.logging import get_logger
@@ -67,8 +68,13 @@ from sovyx.voice.calibration import (
     WizardOrchestrator,
     WizardProgressTracker,
     capture_fingerprint,
+    rollback_calibration_profile,
 )
 from sovyx.voice.calibration._kb_cache import has_match
+from sovyx.voice.calibration._persistence import (
+    CalibrationProfileRollbackError,
+    list_calibration_backups,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -176,9 +182,9 @@ class StartCalibrationResponse(BaseModel):
     job_id: str = Field(
         ...,
         description=(
-            "Stable identifier; equal to ``mind_id`` for v0.30.16 "
-            "(one calibration in flight per mind). Multi-job per "
-            "mind support lands when the operator-explicit retry "
+            "Stable identifier; equal to the RESOLVED ``mind_id`` "
+            "(v0.30.16: one calibration in flight per mind). Multi-job "
+            "per mind support lands when the operator-explicit retry "
             "pattern wires up."
         ),
     )
@@ -188,6 +194,35 @@ class StartCalibrationResponse(BaseModel):
             "Relative URL of the WebSocket for live progress events. "
             "Frontend MUST append ``?token=<sessionStorage-token>`` "
             "before opening (auth via query-param)."
+        ),
+    )
+    resolved_mind_id: str = Field(
+        ...,
+        description=(
+            "rc.12 (anti-pattern #35): the mind_id the calibration is "
+            "ACTUALLY running under. Frontends that hardcode "
+            '``mind_id="default"`` (e.g. onboarding step 4) get the '
+            "real active mind_id resolved server-side via "
+            "``resolve_active_mind_id_for_request``. Pre-rc.12 the "
+            'frontend\'s ``"default"`` literal would land profile '
+            "writes at ``<data_dir>/default/calibration.json`` even "
+            "when the operator's actual mind was elsewhere — breaking "
+            "the persistence contract because the next ``sovyx start`` "
+            "would not find the calibration. Frontends MAY use this "
+            "field to display the resolved mind name to operators; "
+            "MUST trust this value over the request body for any "
+            "subsequent /jobs/{id}/* call (the job_id IS this value)."
+        ),
+    )
+    resolved_mind_id_source: str = Field(
+        ...,
+        description=(
+            "rc.12: provenance of the resolution. One of ``request_body`` "
+            "(operator passed an explicit non-sentinel value), "
+            "``app_state`` / ``mind_manager`` / ``fallback_default`` "
+            "(values from ``MIND_ID_SOURCE_*`` constants in "
+            "``sovyx.dashboard._shared``). Telemetry hook for grafana "
+            "panels that monitor sentinel-resolution rate."
         ),
     )
 
@@ -299,6 +334,72 @@ class FeatureFlagUpdateRequest(BaseModel):
     )
 
 
+class RollbackCalibrationRequest(BaseModel):
+    """Body for ``POST /api/voice/calibration/rollback`` (rc.12)."""
+
+    mind_id: str = Field(
+        default="default",
+        min_length=1,
+        max_length=64,
+        description=(
+            "Mind whose calibration to roll back. Same sentinel-resolver "
+            'contract as ``/start`` -- ``"default"`` resolves to the '
+            "active mind via ``resolve_active_mind_id_for_request``. "
+            "The dashboard's RollbackButton always passes the "
+            "sentinel; multi-mind operators wanting an explicit target "
+            "may pass the mind name."
+        ),
+    )
+
+
+class RollbackCalibrationResponse(BaseModel):
+    """Response for ``POST /api/voice/calibration/rollback`` (rc.12)."""
+
+    restored_path: str = Field(
+        ...,
+        description=(
+            "Absolute path of the canonical profile after rollback "
+            "(``<data_dir>/<mind_id>/calibration.json``)."
+        ),
+    )
+    backup_generations_remaining: int = Field(
+        ...,
+        ge=0,
+        description=(
+            "How many MORE rollback steps the operator can take "
+            "before the chain exhausts. 0 means the next click will "
+            "return HTTP 409. Frontend uses this to disable the "
+            "Rollback button when the chain is empty."
+        ),
+    )
+    resolved_mind_id: str = Field(
+        ...,
+        description="Same anti-pattern #35 contract as the /start endpoint.",
+    )
+    resolved_mind_id_source: str = Field(
+        ...,
+        description="Same anti-pattern #35 contract as the /start endpoint.",
+    )
+
+
+class CalibrationBackupListResponse(BaseModel):
+    """Response for ``GET /api/voice/calibration/backups`` (rc.12)."""
+
+    mind_id: str = Field(
+        ...,
+        description="Mind whose backups are enumerated (resolved sentinel).",
+    )
+    generations: list[int] = Field(
+        ...,
+        description=(
+            "Generation numbers of every available backup, ascending "
+            "(1 = most-recent prior, MAX = oldest). Empty list means "
+            "no backups exist (fresh install OR chain fully rolled "
+            "back / consumed)."
+        ),
+    )
+
+
 class PreviewFingerprintResponse(BaseModel):
     """Response for ``GET /api/voice/calibration/preview-fingerprint``."""
 
@@ -340,7 +441,41 @@ async def start_calibration_job(
     permitted (operator's intent to recalibrate).
     """
     orch = _resolve_orchestrator(request)
-    job_id = body.mind_id  # v0.30.16: one job per mind, job_id == mind_id
+
+    # rc.12 (anti-pattern #35 reincidente): the frontend hardcodes
+    # ``mind_id="default"`` in two surfaces (onboarding step 4
+    # ``VoiceStep.tsx:226`` and Settings ``RecalibrateButton`` default
+    # prop). Pre-rc.12 ``body.mind_id`` was used cleanly as both job_id
+    # AND on-disk path — meaning the calibration profile landed at
+    # ``<data_dir>/default/calibration.json`` even when the operator
+    # had created a mind named e.g. "meu-mind" (``sovyx init meu-mind``
+    # creates ``<data_dir>/meu-mind/``). The next ``sovyx start`` would
+    # load mind "meu-mind" and the factory would look for the profile
+    # in ``<data_dir>/meu-mind/calibration.json``, NEVER find it, and
+    # silently skip it — operator waited 8-12 min for a calibration
+    # that has zero persistent effect. The fix: when the request body
+    # carries the literal sentinel ``"default"``, resolve via
+    # ``resolve_active_mind_id_for_request`` (the same resolver
+    # ``/api/voice/enable`` uses post-T1.2 of mission
+    # ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``).
+    # When the body carries an explicit non-sentinel value, we trust
+    # the operator (multi-mind future-proofing).
+    if body.mind_id == "default":
+        resolved_mind_id, resolved_source = await resolve_active_mind_id_for_request(
+            request,
+        )
+        if resolved_mind_id != body.mind_id:
+            logger.info(
+                "voice.calibration.mind_id_resolved",
+                requested=body.mind_id,
+                resolved_hash=short_hash(resolved_mind_id),
+                source=resolved_source,
+            )
+    else:
+        resolved_mind_id = body.mind_id
+        resolved_source = "request_body"
+
+    job_id = resolved_mind_id  # v0.30.16: one job per mind, job_id == mind_id
 
     # QA-FIX-5 (v0.31.0-rc.2): per-mind lock around the
     # (in-flight check + task register) atomic. Pre-rc.2 two near-
@@ -358,7 +493,7 @@ async def start_calibration_job(
             raise HTTPException(
                 status_code=HTTP_409_CONFLICT,
                 detail=(
-                    f"A calibration job for mind '{body.mind_id}' is already "
+                    f"A calibration job for mind '{resolved_mind_id}' is already "
                     f"in flight. Cancel it via POST "
                     f"/api/voice/calibration/jobs/{job_id}/cancel before "
                     f"submitting a new one."
@@ -370,7 +505,7 @@ async def start_calibration_job(
         # dashboard only blocks on the spawn call.
         async def _runner() -> None:
             try:
-                await orch.run(job_id=job_id, mind_id=body.mind_id)
+                await orch.run(job_id=job_id, mind_id=resolved_mind_id)
             except asyncio.CancelledError:
                 # Mid-stage cancellation flowed through. The orchestrator's
                 # own CancelledError handler at run()'s top-level emits the
@@ -380,7 +515,7 @@ async def start_calibration_job(
                 logger.exception(
                     "voice.calibration.wizard.runner_failed",
                     job_id_hash=short_hash(job_id),
-                    mind_id_hash=short_hash(body.mind_id),
+                    mind_id_hash=short_hash(resolved_mind_id),
                 )
             finally:
                 # Self-prune from the registry whether we exited by terminal
@@ -395,12 +530,15 @@ async def start_calibration_job(
         logger.info(
             "voice.calibration.wizard.start",
             job_id_hash=short_hash(job_id),
-            mind_id_hash=short_hash(body.mind_id),
+            mind_id_hash=short_hash(resolved_mind_id),
+            mind_id_source=resolved_source,
         )
 
     return StartCalibrationResponse(
         job_id=job_id,
         stream_url=f"/api/voice/calibration/jobs/{job_id}/stream",
+        resolved_mind_id=resolved_mind_id,
+        resolved_mind_id_source=resolved_source,
     )
 
 
@@ -724,3 +862,127 @@ async def stream_calibration_job(
                 "voice.calibration.wizard.subscriber_loop_exited",
                 job_id_hash=short_hash(job_id),
             )
+
+
+# ────────────────────────────────────────────────────────────────────
+# Rollback endpoints (rc.12 — multi-generation backup chain)
+# ────────────────────────────────────────────────────────────────────
+
+
+async def _resolve_mind_id_from_sentinel(request: Request, requested: str) -> tuple[str, str]:
+    """Apply the same sentinel-resolution contract as the /start endpoint.
+
+    rc.12 (anti-pattern #35): when the dashboard hardcodes
+    ``mind_id="default"`` (e.g. RollbackButton's default prop), resolve
+    via :func:`resolve_active_mind_id_for_request`. Explicit non-
+    sentinel mind_ids pass through.
+    """
+    if requested == "default":
+        resolved, source = await resolve_active_mind_id_for_request(request)
+        return resolved, source
+    return requested, "request_body"
+
+
+@router.post(
+    "/rollback",
+    response_model=RollbackCalibrationResponse,
+)
+async def rollback_calibration(
+    request: Request,
+    body: RollbackCalibrationRequest,
+) -> RollbackCalibrationResponse:
+    """Restore the most-recent prior calibration profile (rc.12).
+
+    Walks the rc.12 multi-generation backup chain: ``.bak.1`` becomes
+    the new current profile (consumed), and the chain shifts down
+    (``.bak.2`` → ``.bak.1``, ``.bak.3`` → ``.bak.2``). Operator can
+    repeat up to ``MAX_BACKUP_GENERATIONS`` times before the chain
+    exhausts.
+
+    HTTP semantics:
+
+    * 200 — rollback succeeded; response carries restored path +
+      remaining-generations counter so the dashboard can disable the
+      Rollback button when 0.
+    * 409 — chain exhausted (no .bak.1 to restore). Operator must
+      re-run a calibration to re-populate the chain.
+    * 500 — backup file is corrupt (non-loadable JSON or wrong
+      schema). The operator's voice config is unchanged; they need to
+      either re-calibrate or surgically delete the corrupt .bak.1.
+
+    Idempotency: NOT idempotent — each call consumes one generation.
+    The dashboard SHOULD show a confirm dialog before invoking.
+    """
+    data_dir = _resolve_data_dir(request)
+    resolved_mind_id, resolved_source = await _resolve_mind_id_from_sentinel(request, body.mind_id)
+    if resolved_mind_id != body.mind_id:
+        logger.info(
+            "voice.calibration.rollback.mind_id_resolved",
+            requested=body.mind_id,
+            resolved_hash=short_hash(resolved_mind_id),
+            source=resolved_source,
+        )
+
+    try:
+        restored = rollback_calibration_profile(
+            data_dir=data_dir,
+            mind_id=resolved_mind_id,
+        )
+    except CalibrationProfileRollbackError as exc:
+        # Distinguish chain-exhausted (409 actionable) from corrupt-
+        # backup (500 — operator needs surgical intervention) by
+        # inspecting the message. Both branches log a structured
+        # event so dashboards can display a friendly explanation.
+        message = str(exc)
+        if "exhausted" in message.lower() or "nothing to roll back" in message.lower():
+            logger.info(
+                "voice.calibration.rollback.chain_exhausted",
+                mind_id_hash=short_hash(resolved_mind_id),
+            )
+            raise HTTPException(
+                status_code=HTTP_409_CONFLICT,
+                detail=message,
+            ) from exc
+        logger.warning(
+            "voice.calibration.rollback.backup_corrupt",
+            mind_id_hash=short_hash(resolved_mind_id),
+            reason=message[:200],
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=message,
+        ) from exc
+
+    remaining = len(list_calibration_backups(data_dir=data_dir, mind_id=resolved_mind_id))
+    return RollbackCalibrationResponse(
+        restored_path=str(restored),
+        backup_generations_remaining=remaining,
+        resolved_mind_id=resolved_mind_id,
+        resolved_mind_id_source=resolved_source,
+    )
+
+
+@router.get(
+    "/backups",
+    response_model=CalibrationBackupListResponse,
+)
+async def list_calibration_backups_endpoint(
+    request: Request,
+    mind_id: str = "default",
+) -> CalibrationBackupListResponse:
+    """Enumerate the available backup generations for a mind (rc.12).
+
+    Read-only sibling of ``POST /rollback`` — the dashboard's
+    RollbackButton calls this on mount to decide whether to render
+    enabled (chain has at least 1 backup) or disabled (chain empty).
+    Avoids the operator clicking Rollback only to see a 409.
+
+    Same sentinel-resolution contract as ``/start`` and ``/rollback``.
+    """
+    data_dir = _resolve_data_dir(request)
+    resolved_mind_id, _source = await _resolve_mind_id_from_sentinel(request, mind_id)
+    backups = list_calibration_backups(data_dir=data_dir, mind_id=resolved_mind_id)
+    return CalibrationBackupListResponse(
+        mind_id=resolved_mind_id,
+        generations=[gen for gen, _path in backups],
+    )
