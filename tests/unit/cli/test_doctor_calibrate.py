@@ -378,13 +378,25 @@ class TestRenderCalibrationVerdictSignedStatus:
     """``_render_calibration_verdict`` surfaces signing status from
     ``apply_result.signed`` — the disk-side truth — instead of
     ``profile.signature`` which is always None on the in-memory profile.
+
+    rc.10 (Agent 2 fix #2) refined the semantics: the unsigned banner
+    fires ONLY when ``signed_intent=True AND signed=False`` (operator
+    passed --signing-key but signing failed). The default path
+    (signed_intent=False, signed=False) renders SILENTLY so
+    non-technical operators don't see scary "STRICT rejects; pass
+    --signing-key" hints that punt them at a dev-only flag.
     """
 
     @staticmethod
-    def _capture_render(signed_status: bool | None, *, dry_run: bool = False) -> str:
+    def _capture_render(
+        signed_status: bool | None,
+        *,
+        signed_intent: bool | None = None,
+        dry_run: bool = False,
+    ) -> str:
         """Invoke ``_render_calibration_verdict`` with a synthetic
-        ApplyResult carrying the given signed status; capture rendered
-        text via Rich's Console.capture context manager.
+        ApplyResult carrying the given signed status + intent; capture
+        rendered text via Rich's Console.capture context manager.
         """
         from rich.console import Console
 
@@ -398,6 +410,7 @@ class TestRenderCalibrationVerdictSignedStatus:
             advised_actions=(),
             dry_run=dry_run,
             signed=signed_status,
+            signed_intent=signed_intent,
         )
         profile = _r10_profile()
 
@@ -413,23 +426,41 @@ class TestRenderCalibrationVerdictSignedStatus:
 
     def test_signed_true_renders_green_checkmark_banner(self) -> None:
         """``apply_result.signed = True`` → green ✓ + STRICT mode hint."""
-        rendered = self._capture_render(signed_status=True)
+        rendered = self._capture_render(signed_status=True, signed_intent=True)
         assert "✓" in rendered
         assert "signed" in rendered
         assert "Ed25519" in rendered
         assert "STRICT" in rendered
 
-    def test_signed_false_renders_unsigned_hint(self) -> None:
-        """``apply_result.signed = False`` → dim "unsigned" + --signing-key
-        suggestion. Pre-rc.7 this fired on EVERY clean --calibrate run
-        regardless of the actual signing outcome.
+    def test_signed_false_with_intent_renders_failure_warning(self) -> None:
+        """rc.10: ``signed=False AND signed_intent=True`` → operator
+        passed --signing-key but signing failed mid-write. The yellow
+        warning fires + cites the structured log event for forensics.
         """
-        rendered = self._capture_render(signed_status=False)
-        assert "unsigned" in rendered
-        # Hint to the operator that --signing-key would sign next time.
-        assert "--signing-key" in rendered
+        rendered = self._capture_render(signed_status=False, signed_intent=True)
+        assert "could not be signed" in rendered
+        assert "[!]" in rendered
+        assert "signing_failed" in rendered
         # Critical: must NOT show the "✓ signed" banner.
         assert "✓" not in rendered
+
+    def test_signed_false_default_path_renders_silently(self) -> None:
+        """rc.10 (Agent 2 fix #2) — DEFAULT PATH: ``signed=False AND
+        signed_intent=False`` (operator ran --calibrate without
+        --signing-key, the canonical non-technical user flow). The
+        renderer must NOT show the "Profile is unsigned" banner that
+        punts users at the dev-only --signing-key flag. This is the
+        single most important UX fix in rc.10.
+        """
+        rendered = self._capture_render(signed_status=False, signed_intent=False)
+        # Critical: NEITHER the unsigned hint NOR the signing-failure
+        # warning should fire on the default path.
+        assert "Profile is unsigned" not in rendered
+        assert "--signing-key on next" not in rendered
+        assert "could not be signed" not in rendered
+        assert "STRICT mode rejects" not in rendered
+        # The green ✓ banner also must not fire (we didn't sign).
+        assert "Profile is signed" not in rendered
 
     def test_signed_none_dry_run_renders_no_signing_banner(self) -> None:
         """``apply_result.signed = None`` (dry-run path) → renderer
@@ -437,11 +468,9 @@ class TestRenderCalibrationVerdictSignedStatus:
         nothing to verify.
         """
         rendered = self._capture_render(signed_status=None, dry_run=True)
-        assert "signed" not in rendered.lower() or "unsigned" not in rendered
-        # Most explicit: neither the green checkmark nor the unsigned
-        # hint should fire.
         assert "✓ Profile is" not in rendered
         assert "Profile is unsigned" not in rendered
+        assert "could not be signed" not in rendered
 
 
 # ====================================================================
@@ -795,12 +824,22 @@ class TestSurgicalFlag:
         assert "--only" in result_both
 
     def test_surgical_flag_visible_in_help(self) -> None:
-        """The --surgical flag is documented in --help output."""
+        """The --surgical flag is documented in --help output.
+
+        rc.10 (Agent 2 fix #4): the help text was rewritten in
+        operator-action language — the dev-internal layer codes
+        (`A,C,D,E,J`) were removed because non-technical operators
+        don't know what they mean. The help now describes the
+        operator-facing trade-off ("fast mode ~30s vs 8-12 min full").
+        """
         result = runner.invoke(app, ["doctor", "voice", "--help"])
         assert result.exit_code == 0
         clean = _strip_ansi(result.output)
         assert "--surgical" in clean
-        assert "A,C,D,E,J" in clean
+        # Help describes the operator-facing trade-off, not dev-internal
+        # layer codes. Match against the rewritten help text fragments
+        # that survive Rich's table-column wrapping.
+        assert "fast mode" in clean.lower() or "30s" in clean
 
     def test_surgical_flag_threads_through_run_full_diag(self) -> None:
         """--calibrate --surgical passes --only to run_full_diag."""

@@ -114,6 +114,17 @@ class ApplyResult:
     # signed/unsigned banner instead of the in-memory profile.signature
     # which is always None on frozen profiles.
     signed: bool | None = None
+    # rc.10 (Agent 2 fix #2 — non-technical operator UX): True when the
+    # operator EXPLICITLY passed ``--signing-key`` (signed output was
+    # the operator's intent); False when the operator ran the default
+    # path with no key (unsigned output is the expected normal case);
+    # None on dry_run. The renderer suppresses the "Profile is unsigned
+    # — pass --signing-key" banner from the default path because
+    # non-technical operators interpret it as a partial failure +
+    # follow the dev-only suggestion. The banner now fires ONLY when
+    # ``signed_intent=True and signed=False`` (operator wanted signing
+    # but it failed mid-write — a real signal worth surfacing).
+    signed_intent: bool | None = None
 
 
 class ApplyError(RuntimeError):
@@ -430,6 +441,11 @@ class CalibrationApplier:
         # so the returned ApplyResult.signed surfaces the truth from
         # disk. None on dry_run (we didn't persist).
         signed_status: bool | None = None
+        # rc.10 (Agent 2 fix #2): track operator INTENT to sign so the
+        # renderer can suppress the "unsigned" banner on the default
+        # path (signed_intent=False) and surface it ONLY when the
+        # operator passed --signing-key but signing failed mid-write.
+        signed_intent_status: bool | None = None if dry_run else self._signing_key_path is not None
         if dry_run:
             target_path = profile_path(data_dir=self._data_dir, mind_id=profile.mind_id)
             logger.info(
@@ -468,6 +484,7 @@ class CalibrationApplier:
             confirm_required_decisions=confirm_required,
             dry_run=dry_run,
             signed=signed_status,
+            signed_intent=signed_intent_status,
             rolled_back=rolled_back,
         )
 

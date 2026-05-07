@@ -304,14 +304,11 @@ def doctor_voice(
     calibrate: bool = typer.Option(
         False,
         "--calibrate",
-        help="Run the calibration engine (Layer 2 of the voice "
-        "self-calibrating mission). Captures hardware fingerprint + "
-        "mixer state + (optionally) full diag artifacts, evaluates "
-        "all rules, and persists a CalibrationProfile to "
-        "<data_dir>/<mind_id>/calibration.json. The profile is "
-        "unsigned by default (LENIENT-loadable; STRICT mode rejects); "
-        "pass --signing-key <pem-path> to sign. Linux-only. Mutually "
-        "exclusive with --fix and --full-diag.",
+        help="Run an automatic 8-12 minute hardware tune-up. Detects "
+        "your audio setup, identifies any mic/mixer issues, and applies "
+        "safe fixes. Saves the result so future runs replay the cached "
+        "profile in seconds. Linux-only (uses bash diag tools). "
+        "Mutually exclusive with --fix and --full-diag.",
     ),
     mind_id: str = typer.Option(
         "default",
@@ -323,66 +320,58 @@ def doctor_voice(
     explain: bool = typer.Option(
         False,
         "--explain",
-        help="With --calibrate: render the rule trace (which rules "
-        "fired + matched conditions + produced decisions). Use to "
-        "audit calibration decisions before they apply.",
+        help="With --calibrate: also show WHICH detection rules fired "
+        "and why. Useful to audit calibration decisions; the default "
+        "verdict shows the operator-relevant summary only.",
     ),
     show: bool = typer.Option(
         False,
         "--show",
-        help="With --calibrate: render the LAST persisted calibration "
-        "profile for --mind-id without running a new diag/engine pass. "
-        "Read-only inspection; does not mutate state. Pairs with "
-        "--explain to render the original rule trace.",
+        help="With --calibrate: read-only — display the last saved "
+        "calibration profile for --mind-id without running a new "
+        "tune-up. Pairs with --explain to also show the rule trace.",
     ),
     rollback: bool = typer.Option(
         False,
         "--rollback",
-        help="With --calibrate: restore the prior calibration profile "
-        "from the .bak slot, discarding the current profile. Single-step "
-        "rollback only; the .bak is consumed by the swap. Use to revert a "
-        "calibration whose verdict you disagree with; re-run --calibrate "
-        "afterward to regenerate.",
+        help="With --calibrate: undo the last calibration and restore "
+        "the previous profile. Single-step undo only (one backup slot). "
+        "Use this if a calibration didn't help; you can re-run --calibrate "
+        "afterward.",
     ),
     surgical: bool = typer.Option(
         False,
         "--surgical",
-        help="With --calibrate or --full-diag: cut the bash diag "
-        "runtime from ~10min to ~30s by passing `--only A,C,D,E,J` "
-        "to the diag toolkit (hardware probe + ALSA + PipeWire + "
-        "PortAudio + latency budget only). Trade-off: skips the "
-        "speech-capture windows + Temporal Guardian + operator "
-        "prompts, so the triage's W*/K* hypothesis branches won't "
-        "fire. Use for fast revalidation when you trust the prior "
-        "diagnostic; full diag remains the default.",
+        help="With --calibrate or --full-diag: fast mode (~30s instead of "
+        "8-12min) for re-runs when you've already calibrated once. Skips "
+        "the speech-capture windows + interactive prompts. Use only if "
+        "you're sure your hardware hasn't changed since the prior run; "
+        "full mode is the default and is recommended for first calibration.",
     ),
     signing_key: Path | None = typer.Option(  # noqa: B008 -- typer Options canonical pattern
         None,
         "--signing-key",
-        help="With --calibrate: PEM-encoded Ed25519 private key path "
-        "for signing the persisted calibration profile. When omitted, "
-        "the profile is persisted unsigned (LENIENT-loadable; STRICT "
-        "rejects). Generate via "
-        "`scripts/dev/generate_calibration_signing_key.py` "
-        "(dev-only); production rotation guidance ships in v0.31.0+.",
+        help="ADVANCED (developers only): cryptographically sign the "
+        "persisted calibration profile with an Ed25519 private key. "
+        "Most users do NOT need this — calibration works without it "
+        "in the default LENIENT loader mode. Generate the dev key via "
+        "`scripts/dev/generate_calibration_signing_key.py`.",
     ),
     evaluate_rules: bool = typer.Option(
         False,
         "--evaluate-rules",
-        help="With --calibrate: dry-eval the calibration rules WITHOUT "
-        "running the full diag or applying decisions. Captures the "
-        "fingerprint + measurer (using cached state) + invokes the "
-        "engine to render the rule trace. Operator triages 'would R30 "
-        "fire on this hardware?' without paying the 8-12 min full-diag "
-        "cost. No tarball, no triage, no apply.",
+        help="With --calibrate: preview which detection rules WOULD fire "
+        "on your hardware without running the full 8-12 min tune-up or "
+        "applying any changes. Useful for triage before committing to "
+        "a real calibration run.",
     ),
 ) -> None:
-    """Voice Capture Health Lifecycle diagnostics (ADR §4.8 + v1.3 §4.4).
+    """Voice subsystem health checks + auto-fix tools.
 
-    Without ``--fix`` or ``--full-diag`` the command is diagnostic-only:
-    it runs the standalone subset of L5 pre-flight (PortAudio host-API
-    sanity + Linux ALSA mixer saturation) and returns the count of
-    failing steps so CI pipelines can gate on voice readiness.
+    Without ``--fix`` or ``--full-diag`` the command is read-only:
+    it runs the basic audio pre-flight (PortAudio sanity + Linux mixer
+    saturation check) and returns the count of failing steps so CI
+    pipelines can gate on voice readiness.
 
     With ``--fix`` the command becomes remediating: on a saturated
     Linux mixer it invokes :func:`apply_mixer_reset` to drive the
@@ -1080,36 +1069,41 @@ def _render_calibration_verdict(
             for dec in trace.produced_decisions:
                 console.print(f"    produced: {dec}")
 
-    # rc.7 (Agent 2 NEW.2/NEW.3): read signed status from apply_result.signed,
-    # NOT from profile.signature. The in-memory profile is a frozen
-    # dataclass with signature=None (set unconditionally at engine.py:307);
-    # the actual signature is injected into a JSON-serialized dict copy
-    # at _persistence.py:334 — never mutates the profile object. So a
-    # `getattr(profile, "signature", None)` check is ALWAYS False
-    # post-calibrate, regardless of whether --signing-key worked.
-    # apply_result.signed (rc.7-added) carries the disk-side truth:
-    # True when persisted signed, False when unsigned, None on dry_run.
+    # rc.7 (NEW.2/NEW.3) + rc.10 (Agent 2 fix #2): surface signing
+    # status from apply_result.signed (disk-side truth) + suppress the
+    # unsigned banner from the default path so non-technical operators
+    # don't see scary "(LENIENT-loadable; STRICT rejects); pass
+    # --signing-key" hints that punt them at a dev-only flag.
+    #
+    # Three branches:
+    # * signed=True → green ✓ banner (operator's signing intent worked)
+    # * signed=False AND signed_intent=True → yellow warning (operator
+    #   passed --signing-key but signing failed mid-write — actionable)
+    # * signed=False AND signed_intent=False → SILENT (default path;
+    #   unsigned is the expected normal case for non-technical users)
+    # * signed=None → dry_run; render nothing
     signed_status = getattr(apply_result, "signed", None)
+    signed_intent = getattr(apply_result, "signed_intent", None)
     if signed_status is True:
         console.print(
             "\n[green]✓[/green] Profile is [bold green]signed[/bold green] "
             "(Ed25519). Loadable in STRICT mode."
         )
-    elif signed_status is False:
-        # Persisted unsigned. This is the NORMAL path when --signing-key
-        # is not passed (the dev signing key is dev-only per
-        # docs/contributing/voice-kb-rotation.md). Only surface a hint
-        # when the operator DID pass --signing-key but signing failed
-        # (was_signed=False but key was supplied) — otherwise the
-        # operator who deliberately ran unsigned doesn't need a warning.
-        # We can't know whether the operator passed --signing-key here
-        # (the applier swallows that decision), so we surface a quiet
-        # informational line on every unsigned-but-persisted run.
+    elif signed_status is False and signed_intent is True:
+        # Operator wanted signing but it failed — surface the actionable
+        # warning so they know to investigate. This path is reachable
+        # only when --signing-key was passed AND its load succeeded at
+        # flag-parse (per rc.7 NEW.1 PEM fail-fast) AND signing failed
+        # later in the persistence layer (rare; disk error or race).
         console.print(
-            "\n[dim]Profile is unsigned (LENIENT-loadable). "
-            "Pass --signing-key on next --calibrate to sign.[/dim]"
+            "\n[yellow][!][/yellow] Profile [bold yellow]could not be signed[/bold yellow] "
+            "despite --signing-key being passed. The profile was persisted "
+            "unsigned. Check $data_dir/logs/sovyx.log for "
+            "voice.calibration.profile.signing_failed events."
         )
-    # signed_status is None → dry_run; render nothing (profile not persisted).
+    # All other branches (default unsigned path, dry_run): render nothing.
+    # Non-technical operators on the default path see a clean verdict
+    # without dev-only flag suggestions.
 
     # Profile path footer.
     profile_path_attr = getattr(apply_result, "profile_path", None)

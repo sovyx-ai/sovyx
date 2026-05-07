@@ -309,12 +309,16 @@ class TestStreamWebSocket:
 class TestFeatureFlagEndpoints:
     """GET returns the boot value; POST mutates the in-memory copy."""
 
-    def test_get_returns_default_false(self, tmp_path: Path) -> None:
+    def test_get_returns_default_true(self, tmp_path: Path) -> None:
+        """rc.10 (Agent 2 fix #1): default flipped from False → True per
+        config docstring's own promise. Fresh-user dashboard onboarding
+        now mounts the auto-fix calibration wizard automatically.
+        """
         app = _build_app(tmp_path=tmp_path)
         response = _client(app).get("/api/voice/calibration/feature-flag")
         assert response.status_code == 200
         body = response.json()
-        assert body["enabled"] is False
+        assert body["enabled"] is True
         assert body["runtime_override_active"] is False
 
     def test_get_reflects_engine_config_value(self, tmp_path: Path) -> None:
@@ -333,20 +337,26 @@ class TestFeatureFlagEndpoints:
         assert body["runtime_override_active"] is False
 
     def test_post_flips_in_memory_value(self, tmp_path: Path) -> None:
+        """rc.10: default is now True (Agent 2 fix #1). Test now flips
+        OFF (True → False) to exercise the runtime-override path —
+        matches the operator-realistic case of "I have hardware that
+        doesn't need the wizard, so I'm opting out".
+        """
         app = _build_app(tmp_path=tmp_path)
         client = _client(app)
-        # Initial: disabled
-        client.get("/api/voice/calibration/feature-flag")
-        # POST flips to enabled
-        response = client.post("/api/voice/calibration/feature-flag", json={"enabled": True})
+        # Initial: enabled (rc.10 default)
+        initial = client.get("/api/voice/calibration/feature-flag")
+        assert initial.json()["enabled"] is True
+        # POST flips to disabled
+        response = client.post("/api/voice/calibration/feature-flag", json={"enabled": False})
         assert response.status_code == 200
         body = response.json()
-        assert body["enabled"] is True
+        assert body["enabled"] is False
         assert body["runtime_override_active"] is True
 
         # Subsequent GET reflects the runtime override
         response2 = client.get("/api/voice/calibration/feature-flag")
-        assert response2.json()["enabled"] is True
+        assert response2.json()["enabled"] is False
         assert response2.json()["runtime_override_active"] is True
 
     def test_post_returns_404_when_no_engine_config(self, tmp_path: Path) -> None:

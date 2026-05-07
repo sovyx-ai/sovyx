@@ -2502,11 +2502,11 @@ class VoiceFeaturesConfig(BaseSettings):
     on/off:
 
     * :attr:`calibration_wizard_enabled` -- mounts the dashboard's
-      voice calibration onboarding step (Layer 3 of the voice
-      self-calibrating mission). Default-disabled in v0.30.x while
-      Layer 3 soaks; flip to True (system.yaml or env) to opt in
-      per-deployment. Default flips to True in v0.31.0+ after a
-      minor cycle of telemetry-validated lenient operation.
+      voice calibration onboarding step (the auto-fix flow that
+      detects mic/mixer issues and applies safe fixes). Default
+      flipped to True at v0.31.0 GA after the v0.30.x soak window
+      validated lenient-mode telemetry. Operators on hardware that
+      doesn't need the wizard can opt out via env or system.yaml.
 
     Env prefix ``SOVYX_VOICE__`` mirrors the operator-visible namespace
     (vs ``SOVYX_TUNING__VOICE__`` for tuning). Operators flip via:
@@ -2525,14 +2525,19 @@ class VoiceFeaturesConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="SOVYX_VOICE__", extra="ignore")
 
-    calibration_wizard_enabled: bool = False
+    calibration_wizard_enabled: bool = True
     """Mount the dashboard's voice calibration onboarding step.
 
-    Default False during the v0.30.x soak window. Flip to True via
-    env or system.yaml to opt the deployment in. Operator-visible
-    toggle lives in Settings -> Voice -> Advanced (mutates the
-    in-memory copy on the running daemon; persistent change still
-    requires editing the env / system.yaml).
+    rc.10 (v0.31.0 GA): default flipped from False → True per the
+    docstring's own promise above + the operator's "automatic setup
+    without technical knowledge" directive. The fresh-user dashboard
+    onboarding now mounts the auto-fix calibration wizard by default;
+    deployments that don't need it (e.g. Windows-only hosts, or
+    operators who have already calibrated via CLI) can opt out via
+    env or system.yaml. Operator-visible toggle lives in Settings ->
+    Voice -> Advanced (mutates the in-memory copy on the running
+    daemon; persistent change still requires editing the env /
+    system.yaml).
     """
 
 

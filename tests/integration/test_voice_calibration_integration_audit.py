@@ -128,11 +128,28 @@ class TestEngineConfigFlag:
 
     rc.5 (Agent 2 A.4): integration marker removed — pure pydantic
     instantiation + env round-trip; no IO.
+
+    rc.10: default flipped from False → True per the docstring's own
+    promise + the operator's "automatic setup without technical
+    knowledge" directive. Fresh-user dashboard onboarding now mounts
+    the auto-fix calibration wizard by default.
     """
 
-    def test_default_is_false(self) -> None:
+    def test_default_is_true(self) -> None:
+        """rc.10 flip: default mounts the calibration wizard so
+        non-technical operators get the auto-fix flow without having
+        to discover an env var or dashboard toggle."""
         cfg = EngineConfig(
             voice=VoiceFeaturesConfig(),
+            database=DatabaseConfig(data_dir=Path.home() / ".sovyx"),
+        )
+        assert cfg.voice.calibration_wizard_enabled is True
+
+    def test_explicit_false_is_honoured(self) -> None:
+        """Operators on hardware that doesn't need the wizard can opt
+        out via env or system.yaml."""
+        cfg = EngineConfig(
+            voice=VoiceFeaturesConfig(calibration_wizard_enabled=False),
             database=DatabaseConfig(data_dir=Path.home() / ".sovyx"),
         )
         assert cfg.voice.calibration_wizard_enabled is False
