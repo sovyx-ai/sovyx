@@ -161,6 +161,24 @@ export function VoiceCalibrationStep({
       <div className="flex items-center gap-2">
         <MicIcon className="size-5" />
         <h3 className="text-lg font-semibold">{t("calibration.title")}</h3>
+        {/* rc.15 LOW.3 — display the resolved mind_id when it is not
+            the literal sentinel "default". Pre-rc.15 the operator
+            running ``sovyx init meu-mind`` saw "Calibrating..." with
+            no confirmation that the backend resolved to the right
+            mind (rc.12 fix landed correctness; rc.15 surfaces it
+            visibly). The label is hidden for the default case so the
+            single-mind operator UX stays clean. */}
+        {currentJob !== null && currentJob.mind_id !== "default" && (
+          <span
+            data-testid="voice-calibration-mind-label"
+            className="ml-auto rounded-md bg-muted px-2 py-0.5 text-xs font-mono text-muted-foreground"
+          >
+            {t("calibration.mindLabel", {
+              mind: currentJob.mind_id,
+              defaultValue: "Mind: {{mind}}",
+            })}
+          </span>
+        )}
       </div>
 
       {phase === "idle" && (

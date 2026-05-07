@@ -426,6 +426,15 @@ export const createCalibrationSlice: StateCreator<
         i18n.t("voice:calibration.error.api_rollback_failed"),
       );
       set({ calibrationLoading: false, calibrationError: message });
+      // rc.15 LOW.2 — refresh backup count on failure. Pre-rc.15 a
+      // 409 chain-exhausted left the cached count stale; the
+      // RollbackButton would still render enabled (count > 0) and the
+      // operator could double-click into the same 409. Now: re-fetch
+      // the backup count so the UI reflects ground truth (likely 0,
+      // disabling the button) immediately. Best-effort: if the
+      // refresh ALSO fails, the conservative-gate path leaves the
+      // count null (button disabled) which is the safe fallback.
+      void get().loadCalibrationBackups();
       return null;
     }
   },

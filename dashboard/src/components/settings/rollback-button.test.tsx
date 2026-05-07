@@ -150,4 +150,64 @@ describe("RollbackButton", () => {
       screen.queryByTestId("settings-rollback-confirm"),
     ).not.toBeInTheDocument();
   });
+
+  // ════════════════════════════════════════════════════════════════════
+  // rc.15 polish bundle — auto-refresh + retry behaviour.
+  // ════════════════════════════════════════════════════════════════════
+
+  it("rc.15 LOW.1: re-fetches backups when calibration job reaches terminal", async () => {
+    // Initial mount: 1 backup available.
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ mind_id: "default", generations: [1] }),
+    );
+    // Auto-refresh after terminal: 2 backups (just-completed save).
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ mind_id: "default", generations: [1, 2] }),
+    );
+
+    render(<RollbackButton />);
+    await waitFor(() =>
+      expect(useDashboardStore.getState().calibrationBackupCount).toBe(1),
+    );
+
+    // Simulate the calibration slice receiving a terminal snapshot
+    // (DONE) — this is what subscribeToCalibrationJob does on the
+    // last WS message before unsubscribing.
+    useDashboardStore.setState({
+      currentCalibrationJob: {
+        job_id: "default",
+        mind_id: "default",
+        status: "done",
+        progress: 1.0,
+        current_stage_message: "complete",
+        created_at_utc: "2026-05-07T00:00:00Z",
+        updated_at_utc: "2026-05-07T00:08:00Z",
+        profile_path: "/home/user/.sovyx/default/calibration.json",
+        triage_winner_hid: "H10",
+        error_summary: null,
+        fallback_reason: null,
+        extras: null,
+      },
+    });
+
+    await waitFor(() =>
+      expect(useDashboardStore.getState().calibrationBackupCount).toBe(2),
+    );
+  });
+
+  it("rc.15 LOW.4: retries loadBackups after initial-mount failure (real-time, 1500ms delay)", async () => {
+    // Real timers + real delay (1500ms in production). The test waits
+    // up to 3000ms via waitFor, giving 2x headroom.
+    mockFetch.mockRejectedValueOnce(new Error("network blip"));
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ mind_id: "default", generations: [1] }),
+    );
+
+    render(<RollbackButton />);
+    await waitFor(
+      () =>
+        expect(useDashboardStore.getState().calibrationBackupCount).toBe(1),
+      { timeout: 3000, interval: 100 },
+    );
+  });
 });

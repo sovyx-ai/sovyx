@@ -24,27 +24,66 @@
  * P1 + P3 operator-debt items.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2Icon, RotateCcwIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { useDashboardStore } from "@/stores/dashboard";
+import { isWizardCalibrationTerminal } from "@/types/api";
+
+// rc.15 LOW.4 retry-on-failure delay. Module-level constant so tests
+// can read it (and assert it stays bounded) without monkey-patching.
+const _RETRY_DELAY_MS = 1500;
 
 export function RollbackButton() {
   const { t } = useTranslation(["settings"]);
   const backupCount = useDashboardStore((s) => s.calibrationBackupCount);
+  const currentJob = useDashboardStore((s) => s.currentCalibrationJob);
   const loadBackups = useDashboardStore((s) => s.loadCalibrationBackups);
   const rollbackCalibration = useDashboardStore((s) => s.rollbackCalibration);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const retriedRef = useRef(false);
 
-  // Load backup count on mount + after every rollback. Idempotent +
-  // cheap (read-only enumeration).
+  // Load backup count on mount. Idempotent + cheap (read-only
+  // enumeration).
   useEffect(() => {
     void loadBackups();
   }, [loadBackups]);
+
+  // rc.15 LOW.1 — auto-refresh the backup count when a calibration
+  // run reaches a terminal state. Pre-rc.15 the count loaded only at
+  // mount, so an operator who clicked Recalibrate (8-12 min) and then
+  // came back to the Rollback button saw a stale count (didn't include
+  // the just-created .bak.1 from the new save). Now: when
+  // currentCalibrationJob.status flips to terminal, re-fetch backups.
+  // Only fires on the LEADING edge of terminal status (the dependency
+  // array is the snapshot's job_id + status; identical snapshots
+  // don't re-trigger).
+  useEffect(() => {
+    if (currentJob === null) return;
+    if (!isWizardCalibrationTerminal(currentJob.status)) return;
+    void loadBackups();
+  }, [currentJob?.job_id, currentJob?.status, loadBackups]);
+
+  // rc.15 LOW.4 — single retry on initial-mount load failure. The
+  // api.get layer already retries 429/503/5xx; this catch covers the
+  // dashboard-load-races where the daemon is starting up and returns
+  // 4xx-but-eventually-recovers, OR a brief network blip on first
+  // load. The ref guards against infinite-retry loops on persistent
+  // failure (operator can refresh the page if needed). 1500ms is
+  // long enough to survive transient blips and short enough to feel
+  // responsive on a daemon that comes up cleanly.
+  useEffect(() => {
+    if (backupCount !== null || retriedRef.current) return;
+    const id = setTimeout(() => {
+      retriedRef.current = true;
+      void loadBackups();
+    }, _RETRY_DELAY_MS);
+    return () => clearTimeout(id);
+  }, [backupCount, loadBackups]);
 
   const handleRollback = useCallback(async () => {
     setBusy(true);

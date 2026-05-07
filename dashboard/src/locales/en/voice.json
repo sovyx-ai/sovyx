@@ -434,6 +434,7 @@
   },
   "calibration": {
     "title": "Voice calibration",
+    "mindLabel": "Mind: {{mind}}",
     "subtitle": "Sovyx will tune voice for your specific hardware. Takes 8-12 minutes; please leave the microphone connected.",
     "estimated_duration": "Estimated duration: 8-12 minutes.",
     "detected": {

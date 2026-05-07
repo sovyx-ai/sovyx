@@ -235,3 +235,37 @@ describe("calibration slice — unsubscribeFromCalibrationJob", () => {
     expect(useDashboardStore.getState().calibrationWs).toBeNull();
   });
 });
+
+// ── rc.15 LOW.2 — backup count refresh on rollback failure ──────
+
+describe("calibration slice — rollbackCalibration failure refresh (rc.15 LOW.2)", () => {
+  it("refreshes backup count when rollback returns 409 chain-exhausted", async () => {
+    // Pre-state: count was 1 (cached from earlier load).
+    useDashboardStore.setState({ calibrationBackupCount: 1 });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    // Call 1: POST /rollback → 409 (chain exhausted server-side).
+    const rollbackError = new ApiError(409, "Conflict");
+    rollbackError.body = { detail: "no calibration backup at .bak.1 — chain exhausted" };
+    fetchSpy.mockRejectedValueOnce(rollbackError);
+    // Call 2: GET /backups (the LOW.2 auto-refresh) → 0 backups.
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ mind_id: "default", generations: [] }),
+    } as Response);
+
+    const result = await useDashboardStore.getState().rollbackCalibration();
+
+    // Rollback returned null (failure surface for the component).
+    expect(result).toBeNull();
+    // Backup count was refreshed: now 0 instead of stale 1.
+    // Wait one microtask for the void-fired loadCalibrationBackups
+    // to complete.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useDashboardStore.getState().calibrationBackupCount).toBe(0);
+    // Error string was set so the UI shows a toast.
+    expect(useDashboardStore.getState().calibrationError).toContain(
+      "exhausted",
+    );
+  });
+});

@@ -434,6 +434,7 @@
   },
   "calibration": {
     "title": "Calibración de voz",
+    "mindLabel": "Mind: {{mind}}",
     "subtitle": "Sovyx ajustará la voz para tu hardware específico. Tarda de 8 a 12 minutos; mantén el micrófono conectado.",
     "estimated_duration": "Duración estimada: 8-12 minutos.",
     "detected": {
