@@ -6,7 +6,69 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.7 below)
+(none — every shipped delta is in v0.31.0-rc.8 below)
+
+## [0.31.0-rc.8] — 2026-05-06
+
+Paranoid completion round on top of v0.31.0-rc.7. Four parallel QA
+agents re-validated rc.7; Agent 2's simulated-rendering pass found
+that rc.7's NEW.5 fix was incomplete (closed only one of two
+documentation sites with the same "signed by default" claim) plus 3
+LOW hygiene leaks. rc.8 closes all 4 without paliativos per
+`feedback_enterprise_only`. **Zero production-code behavior changes**;
+docs + i18n + comment cleanup only.
+
+### Fixed
+
+- **`docs/modules/voice-calibration.md` parity gap with rc.7's NEW.5
+  fix (Agent 2 C.2, MEDIUM).** rc.7 updated `docs/getting-started.md:165`
+  + `:197` to honestly say "(unsigned by default)" — but missed
+  `docs/modules/voice-calibration.md:5`, the canonical voice-calibration
+  module spec which carried the SAME "produces a signed CalibrationProfile"
+  claim. Operator who reads the module doc, runs `--calibrate`, then
+  sees the rc.7 verdict say "Profile is unsigned" would hit the same
+  panic that rc.7 prevented in getting-started.md. rc.8 applies the
+  same "(unsigned by default; pass `--signing-key` to sign)" qualifier.
+  Verified by `grep -rn "signed.*CalibrationProfile\|produces a signed" docs/`
+  returning zero hits at HEAD.
+- **Orphan i18n key `calibration.review.rollback` (Agent 2 B.4 + Agent 3 D.2,
+  LOW).** Defined in en/pt-BR/es voice.json:509 with strings
+  ("Roll back this calibration" / equivalents) but `grep -rn
+  "calibration.review.rollback\|review.rollback" dashboard/src/`
+  returned ZERO consumers. Operator never saw it; hygiene leak that
+  could mislead future devs into wiring a UI rollback button against
+  the wrong contract. Removed from all 3 locales.
+- **`_ProfileReview.tsx:12` docstring out-of-sync (Agent 2 LOW).**
+  Docstring claimed the component renders "rollback button reverting
+  the just-applied calibration" but the body (lines 36-62) renders
+  only the confirm button (rc.7 NEW.4 closed the contract by pointing
+  at the CLI command via i18n). Updated the docstring to match: now
+  describes the localized CLI breadcrumb (no in-UI rollback button)
+  + cites rc.7 (Agent 2 NEW.4) as the contract source.
+- **`doctor.py:455-456` lazy-import comment overstated (Agent 2 E.4
+  + Agent 3 C.1, LOW cosmetic).** Pre-rc.8 the comment claimed "Lazy
+  import: avoid loading cryptography at startup for callers who never
+  pass --signing-key" — but `python -c "import sovyx.cli.commands.doctor"`
+  loads 30+ cryptography modules regardless because
+  `sovyx.voice.calibration._persistence` imports cryptography eagerly
+  at top-of-file. The lazy import in this branch is a name-scoping
+  convention, NOT a startup-time deferral. rc.8 rewrites the comment
+  to honestly describe what the construct does + flags the wider-blast
+  radius refactor that would actually defer cryptography (out of scope
+  for v0.31.0).
+
+### Mission
+
+Paranoid completion round; rc.7 archive footer remains accurate.
+rc.8 is a strict docs/i18n/comment hygiene superset of rc.7 with
+**zero production code changes** (zero `src/sovyx/` runtime
+modifications other than the comment text). All 4 fixes close items
+that Agent 2's simulated-rendering pass + Agent 3's segunda-ordem
+pass identified as parity/hygiene gaps that rc.7 left unaddressed.
+The lesson archived from rc.7 stands: simulated end-to-end rendering
+must remain the 4th lens in every paranoid pre-GA round, not just
+operator UX rounds. v0.31.0 GA promotion proceeds once the operator
+confirms rc.8 on the canonical Sony VAIO host.
 
 ## [0.31.0-rc.7] — 2026-05-06
 
