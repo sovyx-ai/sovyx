@@ -157,10 +157,10 @@ Effective retention defaults:
 | Surface | Retention | Source |
 |---|---|---|
 | Console handler (stderr) | None — emitted-then-dropped | structlog default |
-| File handler (`<data_dir>/logs/sovyx.log`) | 14 days × 5MB rotated files | `EngineConfig.logging.file_max_bytes` + `file_backup_count` |
+| File handler (`<data_dir>/logs/sovyx.log`) | 50 MB × 11 rotated files (≈ 550 MB total capacity) | `EngineConfig.observability.file_max_bytes` (default `50 * 1024 * 1024`) + `file_backup_count` (default `10`) |
 | OTel export (when `[otel]` extra installed) | Per upstream collector retention | OTLP exporter |
 
-To override, set `SOVYX_LOG__FILE_MAX_BYTES` / `SOVYX_LOG__FILE_BACKUP_COUNT` in your env or system.yaml. Calibration events carry no PII (mind_id is hashed; profile_id is a UUID; never the raw operator-set mind name) so the policy can be relaxed for telemetry-driven KB development without GDPR / LGPD impact.
+**Rotation is by size, not by time.** Each handler emits to `sovyx.log` until it reaches `file_max_bytes`, at which point it rotates to `sovyx.log.1` (and so on up to `file_backup_count` numbered backups). To override, set `SOVYX_OBSERVABILITY__FILE_MAX_BYTES` / `SOVYX_OBSERVABILITY__FILE_BACKUP_COUNT` in your env or `system.yaml`. Calibration events carry no PII (mind_id is hashed; profile_id is a UUID; never the raw operator-set mind name) so the policy can be relaxed for telemetry-driven KB development without GDPR / LGPD impact.
 
 ### rc.12 additions
 

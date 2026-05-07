@@ -179,15 +179,19 @@ disabled on non-Linux daemons).
 
 Three options, in order of operator-friendliness:
 
-1. **Click "Recalibrate"** in Settings → Voice. Re-runs the auto-fix from
-   scratch. The system saves a single backup automatically; running
-   again creates a fresh calibration.
+1. **Click "Recalibrate"** in Settings → Voice. Re-runs the auto-fix
+   from scratch. The system rotates the previous calibration into a
+   multi-generation backup chain (up to 3 prior calibrations
+   retained), so you can roll back repeatedly if a re-calibration
+   didn't help.
 2. **Run `sovyx doctor voice --calibrate --rollback`** from the CLI to
-   restore the calibration that was active before your last run (single
-   step only — one backup slot).
+   restore the most-recent prior calibration. Each rollback consumes
+   one generation; you can repeat up to 3 times before needing to
+   re-run `--calibrate` to repopulate the chain. The CLI prints how
+   many rollback steps remain after each invocation.
 3. **Switch to the simple device-test wizard** if calibration ended in
-   "fallback" — the dashboard surfaces this option automatically with a
-   "Use simple setup" button when calibration can't proceed.
+   "fallback" — the dashboard surfaces this option automatically with
+   a "Use simple setup" button when calibration can't proceed.
 
 #### Other voice-doctor commands
 
