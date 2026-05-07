@@ -451,18 +451,26 @@
       "suffix": "complete"
     },
     "status": {
-      "pending": "Calibration job created",
-      "probing": "Capturing hardware fingerprint",
-      "fast_path_lookup": "Looking up matching profile",
-      "fast_path_apply": "Applying matched profile",
-      "fast_path_validate": "Validating fast-path apply",
-      "slow_path_diag": "Running forensic diagnostic (8-12 min)",
-      "slow_path_calibrate": "Triaging diagnostic + capturing measurements",
-      "slow_path_apply": "Applying calibration profile",
-      "done": "Calibration complete",
-      "failed": "Calibration failed",
-      "cancelled": "Calibration cancelled",
-      "fallback": "Falling back to simple setup"
+      "pending": "Setup ready to start",
+      "probing": "Detecting your audio hardware",
+      "fast_path_lookup": "Looking up your saved settings",
+      "fast_path_apply": "Applying your saved settings",
+      "fast_path_validate": "Verifying the applied settings",
+      "slow_path_diag": "Running detailed audio test (8-12 min)",
+      "slow_path_calibrate": "Analyzing results and choosing fixes",
+      "slow_path_apply": "Applying the audio fixes",
+      "done": "Setup complete",
+      "failed": "Setup ran into a problem",
+      "cancelled": "Setup cancelled",
+      "fallback": "Switching to the simple setup wizard"
+    },
+    "hypothesis": {
+      "H1": "Audio enhancement was disrupting your microphone",
+      "H4": "An audio filter was breaking microphone capture",
+      "H5": "Microphone permission was blocked",
+      "H6": "Audio diagnostic self-test could not complete",
+      "H9": "No microphone detected on this system",
+      "H10": "Microphone volume was set too low at the system level"
     },
     "terminal": {
       "done": {
@@ -489,17 +497,17 @@
       "subtitle": "Your hardware was previously calibrated. Replaying the cached profile takes about 5 seconds."
     },
     "slow_path": {
-      "title": "Full calibration",
-      "subtitle": "Running the 8-12 minute forensic diagnostic + calibration engine. Please leave the microphone connected and stay nearby for the speech prompts.",
-      "stage_diag": "Running forensic diagnostic (8-12 min)",
-      "stage_triage": "Analyzing the diagnostic + capturing measurements",
-      "stage_apply": "Applying the calibration profile",
+      "title": "Full audio tune-up",
+      "subtitle": "Running a detailed 8-12 minute audio test to detect any issues with your microphone or speakers. Please keep your microphone connected and stay nearby — we'll ask you to speak a few short phrases.",
+      "stage_diag": "Running detailed audio test (8-12 min)",
+      "stage_triage": "Analyzing results and choosing fixes",
+      "stage_apply": "Applying the audio fixes",
       "prompt_speak": "Say \"{{phrase}}\" clearly",
       "prompt_silence": "Stay silent for {{seconds}} seconds"
     },
     "review": {
       "title": "Calibration applied",
-      "decision_explanation": "The persisted profile (path above) contains the full rule trace + applied decisions. Run `sovyx doctor voice --calibrate --show` from the CLI to inspect the decision details, or click confirm to continue. If the calibration didn't help, run `sovyx doctor voice --calibrate --rollback` from the CLI to restore the prior profile.",
+      "decision_explanation": "Sovyx detected your hardware setup and applied the matching audio fix automatically. Click confirm to continue. If voice still doesn't work as expected, you can re-run the calibration any time from Settings → Voice.",
       "confirm": "Confirm and continue"
     },
     "cancel": {

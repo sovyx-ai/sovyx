@@ -39,6 +39,14 @@ export function ProfileReview({
   onCompleted,
 }: ProfileReviewProps) {
   const { t } = useTranslation("voice");
+  // rc.10 (Agent 2 fix #5): map raw HypothesisId enum value (H1, H10,
+  // etc.) to a friendly localized description so non-technical
+  // operators see "Microphone volume was too low" instead of "H10".
+  // Falls back to the raw hid if no label is registered (defensive
+  // for future H-IDs not yet localized).
+  const friendlyHypothesisLabel = triageWinnerHid
+    ? t(`calibration.hypothesis.${triageWinnerHid}`, { defaultValue: triageWinnerHid })
+    : null;
   return (
     <div className="space-y-4" data-testid="voice-calibration-profile-review">
       <div className="flex items-start gap-2 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-900">
@@ -47,7 +55,7 @@ export function ProfileReview({
           <p className="font-medium">{t("calibration.terminal.done.title")}</p>
           {triageWinnerHid !== null && (
             <p className="text-xs">
-              {t("calibration.terminal.done.winner", { hid: triageWinnerHid })}
+              {t("calibration.terminal.done.winner", { hid: friendlyHypothesisLabel })}
             </p>
           )}
           {profilePath !== null && (

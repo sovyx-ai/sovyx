@@ -150,7 +150,13 @@ describe("ProfileReview", () => {
     expect(
       screen.getByTestId("voice-calibration-profile-review"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/H10/)).toBeInTheDocument();
+    // rc.10 fix #5: HID is mapped to a friendly label via
+    // `calibration.hypothesis.H10` instead of being shown raw, so
+    // non-technical operators see "Microphone volume was set too low
+    // at the system level" instead of "H10".
+    expect(
+      screen.getByText(/Microphone volume was set too low/i),
+    ).toBeInTheDocument();
     expect(screen.getByText(/calibration.json/)).toBeInTheDocument();
   });
 

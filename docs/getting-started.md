@@ -149,109 +149,56 @@ configuration (offline), plus database, brain, LLM connectivity, channels, and
 cost budget (online, requires the daemon). Use `sovyx doctor --json` for
 machine-readable output.
 
-### Voice diagnostics + calibration (Linux)
+### Voice not working? Auto-fix it (Linux)
 
-If voice capture isn't working, the same `doctor` command has a voice subsurface:
-
-```bash
-sovyx doctor voice                       # quick health check (cross-platform)
-sovyx doctor voice --full-diag           # 8-12 min forensic diag + triage (Linux)
-sovyx doctor voice --fix --yes           # apply known mixer remediation
-sovyx doctor voice --calibrate           # full pipeline: fingerprint + diag + rules
-sovyx doctor voice --calibrate --show    # render last persisted profile (read-only)
-sovyx doctor voice --calibrate --rollback  # restore prior profile from .bak slot
-```
-
-`--calibrate` produces a `CalibrationProfile` at
-`<data_dir>/<mind_id>/calibration.json` recording every applicable decision
-(set / advise / preserve) with full provenance. By default the profile
-is **unsigned** (LENIENT-loadable; STRICT mode rejects); pass
-`--signing-key <pem-path>` to sign with an Ed25519 private key. The
-verdict renderer surfaces signed/unsigned status so you know at a glance.
-See [modules/voice-calibration.md](modules/voice-calibration.md) for the
-rule registry, profile schema, telemetry namespace, signing model, and
-rollback semantics.
-
-The dashboard onboarding wizard can host the calibration step. The mount is
-gated by `EngineConfig.voice.calibration_wizard_enabled` (default `False`
-during the v0.30.x soak). To opt in:
+If your microphone is silent or voice capture isn't working, run:
 
 ```bash
-SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED=true sovyx start
+sovyx doctor voice --calibrate --non-interactive
 ```
 
-Or in `system.yaml`:
+This is an automatic 8-12 minute hardware tune-up. It detects mic/mixer
+issues, applies safe fixes, and saves the result so the next run replays
+the cached profile in ~5 seconds. **You don't need any technical
+knowledge to run it** — the dashboard's onboarding flow surfaces it
+automatically; the CLI command above is a manual entry point for the
+same flow. Linux only (uses bundled bash diag tools).
 
-```yaml
-voice:
-  calibration_wizard_enabled: true
+The dashboard's Settings → Voice section also has a "Recalibrate" button
+that re-runs the same flow any time without leaving the UI.
+
+#### What if the auto-fix didn't help?
+
+Three options, in order of operator-friendliness:
+
+1. **Click "Recalibrate"** in Settings → Voice. Re-runs the auto-fix from
+   scratch. The system saves a single backup automatically; running
+   again creates a fresh calibration.
+2. **Run `sovyx doctor voice --calibrate --rollback`** from the CLI to
+   restore the calibration that was active before your last run (single
+   step only — one backup slot).
+3. **Switch to the simple device-test wizard** if calibration ended in
+   "fallback" — the dashboard surfaces this option automatically with a
+   "Use simple setup" button when calibration can't proceed.
+
+#### Other voice-doctor commands
+
+```bash
+sovyx doctor voice                       # quick read-only health check (cross-platform)
+sovyx doctor voice --full-diag           # detailed audio test only, no auto-fix
+sovyx doctor voice --calibrate --show    # show what was applied (read-only)
+sovyx doctor voice --calibrate --explain # also list which detection rules fired
 ```
 
-The Settings → Voice → Advanced section also exposes a runtime toggle that
-flips the in-memory copy on the running daemon (the env / yaml change is
-still required for the value to survive a daemon restart).
+#### For developers + power users
 
-#### Calibration FAQ
-
-**Q: How long does the first calibration take?**
-
-8–12 minutes on first run. The pipeline captures a hardware fingerprint
-(~1 s), runs the bundled forensic diagnostic (8–12 min, includes 3 short
-speech windows), triages the result, evaluates the rule engine, and
-persists a `CalibrationProfile` (unsigned by default; pass
-`--signing-key` to sign). Subsequent runs on the same hardware replay
-the cached profile in ~5 seconds via the fast path.
-
-**Q: My calibration ended in `fallback`. What happened?**
-
-The orchestrator hit a precondition it can't satisfy: missing `bash 4+`,
-non-Linux platform, the diag selftest aborted, or the hypothesis triage
-couldn't crown a winner with confidence ≥ 0.7. The dashboard renders the
-specific reason in the FALLBACK banner; common values are
-`diag_prerequisite_unmet`, `diag_run_failed`, `triage_failed`. Click
-"Use simple setup" to fall back to the v0.30.x device-test wizard.
-
-**Q: Can I roll back a calibration I disagree with?**
-
-Yes — `sovyx doctor voice --calibrate --rollback` restores the prior
-profile from `<data_dir>/<mind_id>/calibration.json.bak`. Single-step
-only; the .bak slot is consumed by the swap. To regenerate, re-run
-`--calibrate` after rollback.
-
-**Q: How do I see what the engine decided without applying anything?**
-
-`sovyx doctor voice --calibrate --dry-run` runs the full pipeline but
-skips persistence + state mutation. Pair with `--explain` to render the
-rule trace (which rules fired, what conditions matched, what they
-produced).
-
-**Q: Where do `voice.diagnostics.*` and `voice.calibration.*` events go?**
-
-To `<data_dir>/logs/sovyx.log` (file handler always JSON) and to the
-configured OTel collector if observability is enabled. Closed-enum
-fields keep the cardinality bounded: `mode ∈ {full, skip_captures,
-surgical}`, `path ∈ {fast, slow, fallback, unknown}`, `step ∈ {probe,
-fast_path, slow_path, review, fallback, unknown}`.
-
-#### Calibration data flow
-
-```text
-operator                bash diag                triage             engine             applier
-   │                        │                       │                  │                  │
-   ├─ --calibrate ─────────▶│                       │                  │                  │
-   │                        │── 8-12min (W1..W3) ──▶│                  │                  │
-   │                        │  result.tar.gz ──────▶│                  │                  │
-   │                        │                       │── HypothesisVerdict ───────────────▶│
-   │ ◀────────────────────────────────────── voice.calibration.*       │                  │
-   │                                              ▲                    │                  │
-   │                                              │                    ▼                  │
-   │                                              │           CalibrationProfile          │
-   │                                              │     (frozen, unsigned by default)     │
-   │                                              │                    │                  │
-   │                                              │                    ▼                  │
-   │                                              │     <data_dir>/<mind_id>/calibration.json
-   │ ◀──────────────── advised_actions [ "sovyx doctor voice --fix --yes" ] ──────────────│
-```
+The calibration system is documented in depth at
+[modules/voice-calibration.md](modules/voice-calibration.md): rule
+registry, profile schema, signing model (LENIENT default / STRICT
+opt-in via Ed25519), telemetry namespace, fallback reasons, and the
+data flow between bash diag → triage → rule engine → applier. Most
+users never need to read this; it's reference for contributors and
+ops teams running Sovyx in regulated environments.
 
 ## Common Commands
 

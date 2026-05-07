@@ -451,18 +451,26 @@
       "suffix": "completado"
     },
     "status": {
-      "pending": "Trabajo de calibración creado",
-      "probing": "Capturando huella del hardware",
-      "fast_path_lookup": "Buscando perfil compatible",
-      "fast_path_apply": "Aplicando perfil compatible",
-      "fast_path_validate": "Validando aplicación rápida",
-      "slow_path_diag": "Ejecutando diagnóstico forense (8-12 min)",
-      "slow_path_calibrate": "Triaje del diagnóstico + capturando mediciones",
-      "slow_path_apply": "Aplicando perfil de calibración",
-      "done": "Calibración completa",
-      "failed": "La calibración falló",
-      "cancelled": "Calibración cancelada",
-      "fallback": "Volviendo a configuración simple"
+      "pending": "Configuración lista para comenzar",
+      "probing": "Detectando tu hardware de audio",
+      "fast_path_lookup": "Buscando tus ajustes guardados",
+      "fast_path_apply": "Aplicando tus ajustes guardados",
+      "fast_path_validate": "Verificando los ajustes aplicados",
+      "slow_path_diag": "Ejecutando prueba detallada de audio (8-12 min)",
+      "slow_path_calibrate": "Analizando resultados y eligiendo ajustes",
+      "slow_path_apply": "Aplicando los ajustes de audio",
+      "done": "Configuración completa",
+      "failed": "La configuración tuvo un problema",
+      "cancelled": "Configuración cancelada",
+      "fallback": "Cambiando al asistente simple"
+    },
+    "hypothesis": {
+      "H1": "La mejora de audio estaba interfiriendo con tu micrófono",
+      "H4": "Un filtro de audio estaba bloqueando la captura del micrófono",
+      "H5": "El permiso del micrófono estaba bloqueado",
+      "H6": "El autotest de diagnóstico de audio no pudo completarse",
+      "H9": "Ningún micrófono detectado en este sistema",
+      "H10": "El volumen del micrófono estaba demasiado bajo a nivel del sistema"
     },
     "terminal": {
       "done": {
@@ -489,17 +497,17 @@
       "subtitle": "Tu hardware ya fue calibrado antes. Reproducir el perfil en caché toma aproximadamente 5 segundos."
     },
     "slow_path": {
-      "title": "Calibración completa",
-      "subtitle": "Ejecutando el diagnóstico forense (8-12 min) + motor de calibración. Mantén el micrófono conectado y permanece cerca para los avisos de habla.",
-      "stage_diag": "Ejecutando diagnóstico forense (8-12 min)",
-      "stage_triage": "Analizando el diagnóstico + capturando mediciones",
-      "stage_apply": "Aplicando el perfil de calibración",
+      "title": "Ajuste completo de audio",
+      "subtitle": "Ejecutando una prueba detallada de audio (8-12 minutos) para detectar problemas con tu micrófono o altavoces. Por favor mantén el micrófono conectado y permanece cerca — te pediremos que digas algunas frases cortas.",
+      "stage_diag": "Ejecutando prueba detallada de audio (8-12 min)",
+      "stage_triage": "Analizando resultados y eligiendo ajustes",
+      "stage_apply": "Aplicando los ajustes de audio",
       "prompt_speak": "Di \"{{phrase}}\" claramente",
       "prompt_silence": "Permanece en silencio durante {{seconds}} segundos"
     },
     "review": {
       "title": "Calibración aplicada",
-      "decision_explanation": "El perfil persistido (ruta arriba) contiene el rastro completo de reglas + decisiones aplicadas. Ejecuta `sovyx doctor voice --calibrate --show` en la CLI para inspeccionar los detalles, o haz clic en confirmar para continuar. Si la calibración no ayudó, ejecuta `sovyx doctor voice --calibrate --rollback` en la CLI para restaurar el perfil anterior.",
+      "decision_explanation": "Sovyx detectó tu hardware y aplicó el ajuste de audio correspondiente automáticamente. Haz clic en confirmar para continuar. Si la voz aún no funciona como se espera, puedes ejecutar la calibración de nuevo en Ajustes → Voz.",
       "confirm": "Confirmar y continuar"
     },
     "cancel": {
