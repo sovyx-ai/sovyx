@@ -6,7 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.12 below)
+(none — every shipped delta is in v0.31.0-rc.13 below)
+
+## [0.31.0-rc.13] — 2026-05-07
+
+Single-fix release closing a bug-class miss from rc.11's EIXO 2 fix.
+A self-audit after the rc.12 closure surfaced one remaining surface
+on which the cross-platform gate was missing: the Settings →
+Recalibrate button gated only on ``flag.enabled`` and ignored
+``platform_supported``. Operator on Windows / macOS with the
+(default-ON) flag could see the button enabled, click it, and land
+in a silent FALLBACK from ``DiagPrerequisiteError`` — the exact
+"dor de cabeça" pattern rc.11 EIXO 2 had supposedly fixed for
+``VoiceStep.tsx``, missed on this sibling surface.
+
+### Fixed
+
+- **rc.13 single fix — RecalibrateButton platform_supported
+  gate.** ``dashboard/src/components/settings/recalibrate-button.tsx``
+  now gates on the conjunction ``enabled AND platform_supported``
+  (mirrors the rc.11 contract on the onboarding wizard surface).
+  Pre-rc.12 daemons that don't ship the field default to True via
+  the zod schema, preserving the legacy single-platform behaviour.
+  Tooltip on the disabled button differentiates the two cases:
+  flag-off ("Enable the calibration wizard above first.") vs
+  platform-unsupported ("Auto-fix calibration is Linux-only on
+  this host."). Card body note also distinguishes the two cases
+  with operator-friendly explanations. 2 new tests in
+  ``recalibrate-button.test.tsx``: ``platform_supported=false``
+  disables the button + tooltip cites Linux + missing-field
+  back-compat. i18n: ``settings:recalibrate.platformUnsupportedTooltip``
+  + ``platformUnsupportedNote`` in en, pt-BR, es.
+
+### Quality gates
+
+- ``uv lock --check`` — clean.
+- ``uv run ruff check src/ tests/`` — clean.
+- ``uv run ruff format --check src/ tests/`` — clean (1099 files).
+- ``uv run mypy src/`` — Success: no issues found in 512 source
+  files.
+- ``uv run bandit -r src/sovyx/`` — zero LOW/MEDIUM/HIGH.
+- ``uv run python -m pytest tests/ --ignore=tests/smoke
+  --timeout=30`` — green (no Python changes; identical to rc.12's
+  14540 passed).
+- ``cd dashboard && npx tsc -b tsconfig.app.json`` — clean.
+- ``cd dashboard && npx vitest run`` — 1227 passed (+2 from rc.12's
+  1225).
+
+### Anti-patterns reinforced
+
+Same lesson as rc.9 / rc.10 / rc.12: **"fix the bug class, not
+where the brief surfaces it."** rc.11 EIXO 2 closed the gate on
+``VoiceStep.tsx`` (the onboarding surface the audit explicitly
+flagged) but I did not grep ALL surfaces gated on ``feature-flag``
+state. The miss was caught only by the rc.12 self-audit. The fix
+adds the same ``platform_supported`` gate to the sibling button
++ a regression test that would have caught the miss earlier.
+
+### Decision: rc.13, not GA
+
+Tiny single-fix RC. Per ``feedback_staged_adoption``, even a
+mechanical 30 LOC fix gets one validation pass before tag. After
+rc.13 stabilises and the operator validates the canonical jornada
+(Win/macOS Settings → Voice → Recalibrate is now disabled with the
+Linux-only tooltip), v0.31.0 GA is unblocked.
 
 ## [0.31.0-rc.12] — 2026-05-07
 
