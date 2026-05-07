@@ -6,7 +6,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.0-rc.8 below)
+(none — every shipped delta is in v0.31.0-rc.9 below)
+
+## [0.31.0-rc.9] — 2026-05-06
+
+Systematic bug-class sweep on top of v0.31.0-rc.8. The rc.8 round
+framed itself under "fix the bug class, not where the brief says" but
+violated that contract — its CHANGELOG self-verification grep was
+scoped to `docs/` only, missing `src/` sites of the same NEW.5 bug
+class. The rc.8 audit caught 17 unfixed sites across 4 bug classes:
+4 unqualified "signed CalibrationProfile" claims (1 docs ASCII diagram
++ 2 package docstring + 1 CLI --help), 11 orphan i18n keys × 3 locales,
+1 stale component docstring, 1 misattributed comment cite. rc.9 closes
+all 17 systematically per `feedback_enterprise_only`. **Zero
+production-code behavior changes** (text/i18n/docstring/comment only).
+
+### Fixed
+
+- **Bug Class A — 4 unqualified "signed CalibrationProfile" claims (Agent 2 + Agent 4).**
+  rc.7 NEW.5 fixed `docs/getting-started.md:165 + :197` prose; rc.8 fixed
+  `docs/modules/voice-calibration.md:5`. rc.9 closes the remaining 4
+  sites of the same bug class:
+  - `docs/getting-started.md:249` ASCII data-flow diagram annotated
+    `(frozen + signed)` → `(frozen, unsigned by default)`.
+  - `src/sovyx/voice/calibration/__init__.py:7` package docstring
+    "produces a signed CalibrationProfile" → adds the unsigned-by-default
+    qualifier (visible via `help()` + Sphinx + IDE autodoc).
+  - `src/sovyx/voice/calibration/__init__.py:20` "complete signed
+    verdict" → "complete verdict (unsigned by default)".
+  - `src/sovyx/cli/commands/doctor.py:310` `--calibrate` Typer `--help`
+    text — **the highest-traffic operator-facing surface** ("persists
+    a signed CalibrationProfile" → adds "(unsigned by default;
+    LENIENT-loadable; STRICT mode rejects); pass --signing-key
+    <pem-path> to sign"). Per Agent 4 verdict, this was a GA-blocker.
+  Verified at HEAD: `grep -rn --include='*.py' --include='*.md'
+  --include='*.tsx' --include='*.ts' --include='*.json'
+  "signed.*CalibrationProfile\|produces a signed" src/ docs/ README.md
+  dashboard/src/` returns zero hits.
+- **Bug Class B — 11 orphan i18n keys × 3 locales = 33 dead strings (Agent 2 B + Agent 3 D.2).**
+  rc.8 closed `calibration.review.rollback` but didn't audit the rest
+  of the namespace. Agent 2 enumeration found 11 orphan keys in
+  `dashboard/src/locales/{en,pt-BR,es}/voice.json` with zero consumers
+  in `dashboard/src/`:
+  - `calibration.button.continue`
+  - `calibration.fast_path.{progress, success}`
+  - `calibration.slow_path.{success, fallback}`
+  - `calibration.error.{generic, bash_unavailable, selftest_failed,
+    hardware_gap, timeout, permission_denied}` (6 error keys; the
+    feature "localized error remediation hints" was shipped half-wired
+    — operator hits `bash_unavailable` and gets raw daemon string
+    instead of localized hint). rc.9 removes all 11; the
+    "localized error remediation" feature can be re-introduced in
+    v0.31.x with proper consumer wiring.
+  Verified: zero consumers in `dashboard/src/` for any of the 11 keys.
+- **Bug Class C — `_CapturePrompt.tsx:13-17` stale docstring (Agent 2 C.1).**
+  Docstring claimed "v0.30.25 alpha as a render-only surface ...
+  Wire-up to a dedicated `voice.calibration.wizard.prompt` event lands
+  when the bash diag emits structured prompts upstream
+  (post-v0.30.25)" — but the wire-up SHIPPED in P3 v0.30.31 (4 RCs
+  ago). Sibling `_SlowPathProgress.tsx:32-37` correctly documents the
+  v0.30.31 wire-up; rc.9 syncs `_CapturePrompt`'s docstring to match.
+- **Bug Class D — `doctor.py:455-466` comment cite correction (Agent 2 D.1 + Agent 3 C.1).**
+  rc.8's comment cited `_persistence.py top-of-file imports (lines 43-51)`
+  as the cryptography-loading trigger. Agent 2 empirical trace via
+  `python -c "import sovyx.cli.commands.doctor"` showed the FIRST
+  trigger is actually `sovyx.voice.health._mixer_kb._signing` (mixer
+  KB profile signing). The conclusion (lazy import is name-scoping,
+  not deferral) holds; rc.9 corrects the file attribution.
+
+### Mission
+
+Systematic bug-class sweep round; rc.8 archive footer remains accurate
+but its closure contract was demonstrably parcial. rc.9 closes the bug
+classes end-to-end via repo-wide grep verification (zero hits at HEAD
+across `src/` + `docs/` + `dashboard/src/` for the signed-claims;
+zero consumers for the removed i18n keys). Per `feedback_enterprise_only`:
+the lesson "fix the bug class, not where the brief says" is now
+verifiable by grep, not just declared in CHANGELOG. **Zero
+production-code behavior changes** — strict text/i18n/docstring/comment
+hygiene superset of rc.8. Operator validation gate steps unchanged.
 
 ## [0.31.0-rc.8] — 2026-05-06
 
