@@ -1156,15 +1156,44 @@ class TestPlatformListenerFactory:
         )
         assert isinstance(listener, NoopHotplugListener)
 
-    def test_macos_returns_noop_in_sprint_2(self) -> None:
-        # Sprint 2: macOS backend is a NoopHotplugListener stub per the
-        # ADR. Sprint 4 (Task #28) replaces it with a CoreAudio-backed
-        # implementation.
-        listener = build_platform_hotplug_listener(
-            platform_key="darwin",
-            runtime_resilience_enabled=True,
-        )
-        assert isinstance(listener, NoopHotplugListener)
+    def test_macos_returns_subprocess_adapter_post_v0_32_0(self) -> None:
+        # v0.32.0 HIGH-1 closure: pre-v0.32.0 macOS returned
+        # NoopHotplugListener (Sprint 2 stub). Sprint 4 native
+        # AudioObjectAddPropertyListener (Task #28) is still deferred,
+        # but the existing system_profiler polling watchdog
+        # (Sprint 2 step 6.a) is now wired by default for darwin via
+        # the platform-conditional Field default on
+        # ``voice_macos_hotplug_subprocess_enabled``. The factory
+        # returns the subprocess-backed adapter (NOT Noop) so AirPods/
+        # USB hot-unplug events are observable.
+        #
+        # NOTE: the platform-conditional default is keyed on the HOST
+        # ``sys.platform`` (not on the ``platform_key`` test override),
+        # so on non-darwin CI cells the runtime-resolved config has
+        # ``voice_macos_hotplug_subprocess_enabled=False`` and the
+        # factory returns Noop. We mock the config to True here so the
+        # test exercises the post-v0.32.0 contract uniformly across
+        # host platforms (Windows + Linux + macOS CI cells).
+        from unittest.mock import patch
+
+        from sovyx.engine import config as _engine_config
+
+        # Build a fresh tuning instance with the flag forced ON.
+        # The factory does a LAZY ``from sovyx.engine.config import
+        # VoiceTuningConfig`` (anti-pattern #38), so we patch the
+        # SOURCE module's symbol — patching the lazy-import site
+        # would be a silent no-op.
+        class _ForceEnabledTuning:
+            voice_macos_hotplug_subprocess_enabled = True
+            voice_macos_hotplug_subprocess_interval_s = 30.0
+
+        with patch.object(_engine_config, "VoiceTuningConfig", _ForceEnabledTuning):
+            listener = build_platform_hotplug_listener(
+                platform_key="darwin",
+                runtime_resilience_enabled=True,
+            )
+        # NOT Noop — adapter wraps MacosHotplugSubprocessWatchdog.
+        assert not isinstance(listener, NoopHotplugListener)
 
 
 # ---------------------------------------------------------------------------

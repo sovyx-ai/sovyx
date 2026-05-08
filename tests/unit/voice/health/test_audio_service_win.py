@@ -259,20 +259,45 @@ async def _drive_polls(
     *,
     expected_calls: int,
     query: _StateSequence,
+    expected_events: int = 0,
 ) -> None:
-    """Run the monitor until ``query`` has been called ``expected_calls`` times.
+    """Run the monitor until query+events conditions are both satisfied.
 
-    The monitor's ``_run`` sleeps for ``poll_interval_s`` between
-    polls; tests use a tiny interval so the loop iterates quickly.
+    The monitor's ``_run`` sleeps for ``poll_interval_s`` between polls;
+    tests use a tiny interval so the loop iterates quickly.
+
+    Race fix (CI-flake on Windows): pre-fix this helper waited only on
+    ``query.calls >= expected_calls``. The query counter increments
+    SYNCHRONOUSLY when ``query()`` is called, but event emission goes
+    through ``await handler(event)`` which is async + scheduled on the
+    event loop. On slow CI cells, the test could observe
+    ``calls=expected`` BEFORE the handler dispatch completed, then
+    call ``monitor.stop()`` which cancelled the in-flight handler.
+    Result: ``capture.events`` empty despite the transition having
+    occurred — flake-class ``assert 0 == 1`` failure.
+
+    Fix: tests that EXPECT events pass ``expected_events>0``; the
+    helper waits on BOTH counters being satisfied. Tests that expect
+    ZERO events keep the legacy ``query.calls`` wait.
     """
+    capture = handler if isinstance(handler, _EventCapture) else None
     await monitor.start(handler)
-    # Spin until enough polls land OR a 2 s deadline hits (would
-    # indicate a regression — should never trigger in healthy runs).
     deadline = asyncio.get_event_loop().time() + 2.0
-    while query.calls < expected_calls:
+    while True:
+        calls_satisfied = query.calls >= expected_calls
+        events_satisfied = expected_events == 0 or (
+            capture is not None and len(capture.events) >= expected_events
+        )
+        if calls_satisfied and events_satisfied:
+            break
         if asyncio.get_event_loop().time() > deadline:
             await monitor.stop()
-            msg = f"Monitor did not poll {expected_calls} times in 2 s (observed {query.calls})"
+            observed_events = len(capture.events) if capture is not None else 0
+            msg = (
+                f"Monitor did not satisfy gate in 2 s — "
+                f"calls observed={query.calls}/{expected_calls}, "
+                f"events observed={observed_events}/{expected_events}"
+            )
             raise AssertionError(msg)
         await asyncio.sleep(0.005)
     await monitor.stop()
@@ -300,7 +325,7 @@ class TestTransitions:
             poll_interval_s=0.001,
             query=query,
         )
-        await _drive_polls(monitor, capture, expected_calls=2, query=query)
+        await _drive_polls(monitor, capture, expected_calls=2, query=query, expected_events=1)
         # Filter to events emitted by the loop (capture.events list).
         assert len(capture.events) == 1
         assert capture.events[0].kind is AudioServiceEventKind.DOWN
@@ -313,7 +338,7 @@ class TestTransitions:
             poll_interval_s=0.001,
             query=query,
         )
-        await _drive_polls(monitor, capture, expected_calls=2, query=query)
+        await _drive_polls(monitor, capture, expected_calls=2, query=query, expected_events=1)
         assert len(capture.events) == 1
         assert capture.events[0].kind is AudioServiceEventKind.UP
 
@@ -338,7 +363,7 @@ class TestTransitions:
             poll_interval_s=0.001,
             query=query,
         )
-        await _drive_polls(monitor, capture, expected_calls=3, query=query)
+        await _drive_polls(monitor, capture, expected_calls=3, query=query, expected_events=2)
         assert [e.kind for e in capture.events] == [
             AudioServiceEventKind.DOWN,
             AudioServiceEventKind.UP,
