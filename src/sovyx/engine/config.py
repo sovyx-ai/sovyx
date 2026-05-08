@@ -1551,6 +1551,22 @@ class VoiceTuningConfig(BaseSettings):
     # Disabled by default: the rebind requires a full stream reopen and
     # on some distros the raw hw: path introduces audible latency
     # spikes. Enable per-stack once validated.
+    #
+    # v0.32.3 Phase 3.B.2.a clarification: this DELIBERATELY remains
+    # default-OFF unlike the other Linux bypass strategies that flipped
+    # default-ON in commit ``1e1edb81`` (v0.30.13 — wireplumber default
+    # source, alsa capture switch). The pipewire_direct rebind is more
+    # disruptive (full stream reopen + raw hw: path) and the historical
+    # latency-spike reports on certain distros (Ubuntu 22.04 + USB DACs
+    # in particular) are not bounded by simple revert paths the way the
+    # mixer-only strategies are. A future fleet-telemetry-validated flip
+    # is conditional on operator opt-in success rates, not on a fixed
+    # version target. Operators on PipeWire/PulseAudio that need this
+    # bypass can opt in via:
+    #     SOVYX_TUNING__VOICE__LINUX_PIPEWIRE_DIRECT_BYPASS_ENABLED=1
+    # The Phase 1 inventory (``inventory-04-health.md`` line 587)
+    # claimed v0.30.13 flipped this — that was inventory drift. Source
+    # is the authoritative state.
     linux_pipewire_direct_bypass_enabled: bool = False
     # Hard wall-clock cap for each ``amixer`` / ``alsactl`` / ``pactl``
     # invocation originating from the Linux bypass strategies. Mirrors
