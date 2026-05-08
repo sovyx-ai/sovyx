@@ -239,13 +239,50 @@ export function VoiceSetupWizard({
     }
   };
 
-  const handleSave = (): void => {
-    // Save selection — for v0.30.0 the wizard's selection is
-    // application-scope (not yet persisted to mind.yaml; that wire-up
-    // is left for v0.30.x patches once the wizard's ratification UX
-    // is validated by D22 browser pilot).
-    dispatch({ type: "advanceToDone" });
-    onComplete?.(state.selectedDeviceId);
+  const handleSave = async (): Promise<void> => {
+    // v0.31.4 GAP 1 closure: pre-v0.31.4 this was a documented stub
+    // that ONLY dispatched ``advanceToDone`` locally — operator saw
+    // "All set!" but voice was never enabled. The contract is now
+    // honored: handleSave POSTs to ``/api/voice/enable`` with the
+    // operator's mic selection. UI advances to "done" only on 200;
+    // on error, surfaces the failure as a state.error banner so the
+    // operator never sees "Done" while voice is actually off.
+    //
+    // Discovered 2026-05-08 during operator's production test on Sony
+    // VAIO + Razer USB headset. Gap map at
+    // ``docs-internal/GAP-MAP-voice-onboarding-broken-2026-05-08.md``.
+    if (state.selectedDeviceId === null) {
+      dispatch({ type: "error", message: "No device selected" });
+      return;
+    }
+    dispatch({ type: "loading", on: true });
+    try {
+      // The selectedDeviceId is the wizard's device_id string. The
+      // /api/voice/enable backend accepts an integer input_device
+      // index. The wizard's WizardDeviceInfo.device_id IS the integer
+      // index serialised as a string (see wizard backend route).
+      const inputDevice = Number.parseInt(state.selectedDeviceId, 10);
+      const body: Record<string, unknown> = {
+        input_device: Number.isFinite(inputDevice) ? inputDevice : null,
+      };
+      const result = await api.post<{ ok: boolean; error?: string }>(
+        "/api/voice/enable",
+        body,
+      );
+      if (result.ok) {
+        dispatch({ type: "advanceToDone" });
+        onComplete?.(state.selectedDeviceId);
+      } else {
+        dispatch({
+          type: "error",
+          message: result.error ?? "Failed to enable voice",
+        });
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to enable voice";
+      dispatch({ type: "error", message });
+    }
   };
 
   return (
@@ -314,7 +351,8 @@ export function VoiceSetupWizard({
       {state.step === "save" && (
         <_SaveStep
           deviceId={state.selectedDeviceId}
-          onSave={handleSave}
+          loading={state.loading}
+          onSave={() => void handleSave()}
           t={t}
         />
       )}
@@ -494,10 +532,12 @@ function _ResultsStep({
 
 function _SaveStep({
   deviceId,
+  loading,
   onSave,
   t,
 }: {
   deviceId: string | null;
+  loading: boolean;
   onSave: () => void;
   t: TFunction;
 }): JSX.Element {
@@ -514,9 +554,10 @@ function _SaveStep({
       <button
         type="button"
         onClick={onSave}
-        className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-accent)] px-3 py-1.5 text-sm font-medium text-white"
+        disabled={loading}
+        className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
       >
-        {t("wizard.save.button")}
+        {loading ? t("wizard.save.saving", { defaultValue: "Saving..." }) : t("wizard.save.button")}
       </button>
     </div>
   );

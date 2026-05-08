@@ -75,6 +75,7 @@ def capture_measurements(
     triage_result: TriageResult | None = None,
     captured_at_utc: str | None = None,
     duration_s: float = 0.0,
+    active_mic_card_index: int | None = None,
 ) -> MeasurementSnapshot:
     """Build a MeasurementSnapshot for calibration.
 
@@ -89,6 +90,16 @@ def capture_measurements(
         captured_at_utc: Override the capture timestamp (testability).
         duration_s: Wall-clock duration of the source diag run, if
             known. Defaults to 0.0 (caller didn't time it).
+        active_mic_card_index: ALSA card index of the operator's
+            ACTIVE mic (resolved from
+            ``MindConfig.voice_input_device_name``). When set, the
+            measurer probes that specific card instead of the
+            historical hardcoded ``card 0``. v0.31.4 GAP 5 closure —
+            pre-v0.31.4 the measurer always probed card 0 even when
+            the operator was using a USB headset on card 2, so R10's
+            input data was about the wrong physical hardware.
+            Defaults to None (legacy card-0 behaviour preserved for
+            back-compat with callers that haven't migrated yet).
 
     Returns:
         A frozen :class:`MeasurementSnapshot`. Fields the local
@@ -99,7 +110,7 @@ def capture_measurements(
         implementation. See module docstring for the L4-J extraction
         roadmap.
     """
-    mixer = _read_mixer_state()
+    mixer = _read_mixer_state(card_index=active_mic_card_index)
     rms_per_capture, vad_max, vad_p99 = _extract_capture_metrics(diag_tarball_root)
     triage_hid: str | None = None
     triage_conf: float | None = None
@@ -142,13 +153,23 @@ def capture_measurements(
 # ====================================================================
 
 
-def _read_mixer_state() -> dict[str, int | None]:
+def _read_mixer_state(*, card_index: int | None = None) -> dict[str, int | None]:
     """Parse ``amixer scontents`` for Capture + Mic Boost + Internal Mic Boost.
 
-    Returns a dict with keys ``card_index``, ``capture_pct``,
-    ``boost_pct``, ``internal_mic_boost_pct``. Missing controls are
-    reported as ``None`` so the regime classifier can distinguish
-    "not present" from "0%".
+    Args:
+        card_index: ALSA card index to probe. When ``None``, falls
+            back to card 0 (legacy v0.31.3 behaviour). When set,
+            probes that specific card — this is how
+            :func:`capture_measurements` propagates the operator's
+            active mic card from
+            ``MindConfig.voice_input_device_name`` resolution
+            (v0.31.4 GAP 5 closure).
+
+    Returns:
+        A dict with keys ``card_index``, ``capture_pct``,
+        ``boost_pct``, ``internal_mic_boost_pct``. Missing controls
+        are reported as ``None`` so the regime classifier can
+        distinguish "not present" from "0%".
     """
     if shutil.which("amixer") is None:
         return {
@@ -157,7 +178,8 @@ def _read_mixer_state() -> dict[str, int | None]:
             "boost_pct": None,
             "internal_mic_boost_pct": None,
         }
-    output = _safe_amixer(["amixer", "-c", "0", "scontents"])
+    target_card = 0 if card_index is None else card_index
+    output = _safe_amixer(["amixer", "-c", str(target_card), "scontents"])
     if not output:
         return {
             "card_index": None,
@@ -166,7 +188,7 @@ def _read_mixer_state() -> dict[str, int | None]:
             "internal_mic_boost_pct": None,
         }
     return {
-        "card_index": 0,
+        "card_index": target_card,
         "capture_pct": _extract_first_pct(output, _CAPTURE_PATTERNS),
         "boost_pct": _extract_first_pct(output, _BOOST_PATTERNS),
         "internal_mic_boost_pct": _extract_first_pct(output, _INTERNAL_MIC_BOOST_PATTERNS),

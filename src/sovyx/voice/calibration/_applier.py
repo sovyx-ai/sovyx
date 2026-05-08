@@ -336,9 +336,25 @@ class CalibrationApplier:
             (P4 v0.30.32). ``None`` (default) writes unsigned profiles
             which the loader treats as ``REJECTED_NO_SIGNATURE``
             (LENIENT-accepted, STRICT-rejected).
+        active_mic_card_index: ALSA card index of the operator's
+            ACTIVE mic, resolved from
+            ``MindConfig.voice_input_device_name``. v0.31.4 GAP 5
+            closure: when set, the ``LinuxMixerApply`` handler picks
+            the candidate matching this card index instead of the
+            historical ``candidates[0]`` first-match. Pre-v0.31.4 the
+            applier silently boosted the wrong card when an operator
+            with a USB headset on card 2 had the laptop internal mic
+            on card 1 attenuated. Defaults to None for back-compat
+            (legacy first-match behaviour preserved).
     """
 
-    __slots__ = ("_data_dir", "_mind_yaml_path", "_signing_key_path", "_tuning")
+    __slots__ = (
+        "_active_mic_card_index",
+        "_data_dir",
+        "_mind_yaml_path",
+        "_signing_key_path",
+        "_tuning",
+    )
 
     def __init__(
         self,
@@ -347,11 +363,13 @@ class CalibrationApplier:
         mind_yaml_path: Path | None = None,
         tuning: Any = None,  # noqa: ANN401 -- VoiceTuningConfig (lazy-imported to avoid pydantic circular)
         signing_key_path: Path | None = None,
+        active_mic_card_index: int | None = None,
     ) -> None:
         self._data_dir = data_dir
         self._mind_yaml_path = mind_yaml_path
         self._tuning = tuning
         self._signing_key_path = signing_key_path
+        self._active_mic_card_index = active_mic_card_index
 
     # ────────────────────────────────────────────────────────────────
     # Public API
@@ -744,7 +762,38 @@ async def _apply_linux_mixer(
             decision=decision,
         )
 
-    card_snapshot = candidates[0]
+    # v0.31.4 GAP 5 closure: prefer the card matching the operator's
+    # active mic (resolved from MindConfig.voice_input_device_name +
+    # arecord -l mapping) over the historical ``candidates[0]`` first-
+    # match. Pre-v0.31.4 the applier always picked the first attenuated
+    # card it found, ignoring which mic the operator was actually
+    # using — operator with a USB headset on card 2 + attenuated
+    # internal mic on card 1 had R10 boost the WRONG physical mic
+    # (operator's report 2026-05-08).
+    #
+    # The applier reads ``applier._active_mic_card_index`` (set by the
+    # caller via ``CalibrationApplier(active_mic_card_index=...)``) +
+    # falls back to ``candidates[0]`` defensively when (a) no active
+    # mic was provided, OR (b) the resolved card isn't in the
+    # attenuated set (operator's mic isn't the problem; some other
+    # card is).
+    preferred_card_index = getattr(applier, "_active_mic_card_index", None)
+    if preferred_card_index is not None:
+        for snapshot in candidates:
+            if snapshot.card_index == preferred_card_index:
+                card_snapshot = snapshot
+                break
+        else:
+            # Active mic isn't in the attenuated set — fall through
+            # to candidates[0]. Log so operators can correlate.
+            logger.info(
+                "voice.calibration.applier.active_mic_not_in_candidates",
+                preferred_card_index=preferred_card_index,
+                candidate_card_indices=[s.card_index for s in candidates],
+            )
+            card_snapshot = candidates[0]
+    else:
+        card_snapshot = candidates[0]
     tuning = applier._resolve_tuning()
     try:
         if intent == "boost_up":

@@ -64,6 +64,65 @@ class TestCaptureMeasurements:
         assert result.mixer_boost_pct == 0
 
 
+class TestActiveMicCardIndexPlumbing:
+    """v0.31.4 GAP 5 closure: ``capture_measurements`` propagates the
+    ``active_mic_card_index`` arg into ``_read_mixer_state(card_index=...)``
+    so R10 sees data from the operator's actual mic, not hardcoded
+    card 0."""
+
+    def test_active_mic_card_index_passed_to_read_mixer_state(self) -> None:
+        with patch.object(
+            m,
+            "_read_mixer_state",
+            return_value={
+                "card_index": 2,
+                "capture_pct": 5,
+                "boost_pct": 0,
+                "internal_mic_boost_pct": None,
+            },
+        ) as mock_read:
+            capture_measurements(
+                captured_at_utc="2026-05-05T18:00:00Z",
+                active_mic_card_index=2,
+            )
+        # The mocked _read_mixer_state must have been called with card_index=2.
+        mock_read.assert_called_once_with(card_index=2)
+
+    def test_active_mic_card_index_default_none_preserves_legacy(self) -> None:
+        """Pre-v0.31.4 callers (no kwarg) get the historical card-0
+        probe — back-compat preserved."""
+        with patch.object(m, "_read_mixer_state") as mock_read:
+            mock_read.return_value = {
+                "card_index": 0,
+                "capture_pct": None,
+                "boost_pct": None,
+                "internal_mic_boost_pct": None,
+            }
+            capture_measurements(captured_at_utc="2026-05-05T18:00:00Z")
+        mock_read.assert_called_once_with(card_index=None)
+
+    def test_read_mixer_state_card_index_arg_uses_amixer_c_n(self) -> None:
+        """``_read_mixer_state(card_index=2)`` invokes
+        ``amixer -c 2 scontents``, not ``amixer -c 0``."""
+        with (
+            patch.object(m.shutil, "which", return_value="/usr/bin/amixer"),
+            patch.object(m, "_safe_amixer", return_value="") as mock_amixer,
+        ):
+            m._read_mixer_state(card_index=2)
+        # Even if amixer returns empty (no controls), the cmdline args
+        # should reflect card 2.
+        mock_amixer.assert_called_once_with(["amixer", "-c", "2", "scontents"])
+
+    def test_read_mixer_state_card_index_none_falls_back_to_zero(self) -> None:
+        """Default (no card_index arg) preserves card-0 behaviour."""
+        with (
+            patch.object(m.shutil, "which", return_value="/usr/bin/amixer"),
+            patch.object(m, "_safe_amixer", return_value="") as mock_amixer,
+        ):
+            m._read_mixer_state()
+        mock_amixer.assert_called_once_with(["amixer", "-c", "0", "scontents"])
+
+
 # ====================================================================
 # _classify_mixer_regime
 # ====================================================================

@@ -21,6 +21,11 @@ def app():
     registry = MagicMock()
     registry.is_registered.return_value = False
     registry.resolve = AsyncMock()
+    # v0.31.4 GAP 3 closure: voice enable now calls
+    # ``await registry.replace_instance(...)`` to avoid zombie tasks.
+    # Mock as AsyncMock so existing tests don't blow up on
+    # ``TypeError: MagicMock can't be used in 'await'``.
+    registry.replace_instance = AsyncMock()
     application.state.registry = registry
     application.state.mind_yaml_path = None
     application.state.mind_id = "test-mind"
@@ -210,7 +215,7 @@ class TestEnableVoiceCaptureWiring:
         capture.start.assert_awaited_once()
         # Pipeline + capture + sub-components registered for status cards.
         registered = [
-            call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
+            call.args[0].__name__ for call in app.state.registry.replace_instance.mock_calls
         ]
         assert "VoicePipeline" in registered
         assert "AudioCaptureTask" in registered
@@ -264,7 +269,7 @@ class TestEnableVoiceCaptureWiring:
 
         assert resp.status_code == 200  # noqa: PLR2004
         registered = [
-            call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
+            call.args[0].__name__ for call in app.state.registry.replace_instance.mock_calls
         ]
         assert "WakeWordDetector" in registered
 
@@ -309,7 +314,7 @@ class TestEnableVoiceCaptureWiring:
         assert resp.status_code == 500  # noqa: PLR2004
         pipeline.stop.assert_awaited_once()
         # Nothing got registered when capture failed to start.
-        app.state.registry.register_instance.assert_not_called()
+        app.state.registry.replace_instance.assert_not_called()
 
     def test_enable_returns_503_when_cascade_declares_inoperative(
         self, app, client: TestClient
@@ -369,7 +374,7 @@ class TestEnableVoiceCaptureWiring:
         assert body["attempts"] == 5  # noqa: PLR2004
         # Cascade failure happens BEFORE bundle exists, so no registry
         # writes and no pipeline tear-down.
-        app.state.registry.register_instance.assert_not_called()
+        app.state.registry.replace_instance.assert_not_called()
 
     def test_enable_closes_live_voice_test_sessions_before_factory(
         self, app, client: TestClient
@@ -778,7 +783,7 @@ class TestEnableVoiceCognitiveWiring:
         assert callable(kwargs["on_perception"])
         # VoiceCognitiveBridge was registered
         registered = [
-            call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
+            call.args[0].__name__ for call in app.state.registry.replace_instance.mock_calls
         ]
         assert "VoiceCognitiveBridge" in registered
 
@@ -823,7 +828,7 @@ class TestEnableVoiceCognitiveWiring:
         assert resp.status_code == 200  # noqa: PLR2004
         assert factory_mock.call_args.kwargs["on_perception"] is None
         registered = [
-            call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
+            call.args[0].__name__ for call in app.state.registry.replace_instance.mock_calls
         ]
         assert "VoiceCognitiveBridge" not in registered
 
@@ -850,6 +855,7 @@ class TestOnPerceptionCallback:
         cog_loop = MagicMock(spec=CognitiveLoop)
         registry.is_registered.side_effect = lambda cls: cls is CognitiveLoop
         registry.resolve = AsyncMock(return_value=cog_loop)
+        registry.replace_instance = AsyncMock()
         application.state.registry = registry
         application.state.mind_yaml_path = None
         application.state.mind_id = "demo-mind"
@@ -935,6 +941,7 @@ class TestOnPerceptionCallback:
         cog_loop = MagicMock(spec=CognitiveLoop)
         registry.is_registered.side_effect = lambda cls: cls is CognitiveLoop
         registry.resolve = AsyncMock(return_value=cog_loop)
+        registry.replace_instance = AsyncMock()
         application.state.registry = registry
         application.state.mind_yaml_path = None
         application.state.mind_id = "demo-mind"
@@ -1691,6 +1698,7 @@ class TestEnableVoiceMindIdResolution:
         registry = MagicMock()
         registry.is_registered.return_value = False
         registry.resolve = AsyncMock()
+        registry.replace_instance = AsyncMock()
         application.state.registry = registry
         application.state.mind_yaml_path = None
         # Intentionally do NOT set application.state.mind_id.

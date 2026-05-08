@@ -38,6 +38,19 @@ class ServiceNotRegisteredError(EngineError):
     """Requested service not found in the service registry."""
 
 
+class ServiceAlreadyRegisteredError(EngineError):
+    """Service already registered; pass replace_existing=True to override.
+
+    v0.31.4 GAP 3 closure: pre-v0.31.4 ``register_instance`` silently
+    overwrote any existing instance, leaking the old instance as a
+    zombie if it had a running asyncio task (observed in the operator's
+    dual-spawn ``audio-capture-consumer`` bug). The new contract:
+    duplicate registration raises by default + must be explicitly
+    requested via ``replace_existing=True``, which awaits any teardown
+    method on the old instance before overwriting.
+    """
+
+
 class LifecycleError(EngineError):
     """Error in daemon lifecycle management (PID lock, signals)."""
 

@@ -1966,17 +1966,28 @@ async def enable_voice(request: Request) -> JSONResponse:
         from sovyx.voice.vad import SileroVAD
         from sovyx.voice.wake_word import WakeWordDetector
 
-        registry.register_instance(VoicePipeline, bundle.pipeline)
-        registry.register_instance(AudioCaptureTask, bundle.capture_task)
+        # v0.31.4 GAP 3 closure: use ``replace_instance`` (async — awaits
+        # teardown method on the OLD instance before overwriting). Pre-
+        # v0.31.4 ``register_instance`` overwrote silently, leaking the
+        # old ``AudioCaptureTask`` as a zombie when the operator clicked
+        # "Set up Voice" twice (or hit /api/voice/enable twice from
+        # parallel UI surfaces). Direct evidence in operator's
+        # ``menu_teste.txt`` log: 2 ``audio-capture-consumer`` tasks
+        # ran in parallel feeding the same orchestrator queue,
+        # producing 4× frame drops + chaotic VAD. The new contract
+        # awaits ``stop()``/``cancel()``/``aclose()`` on the old
+        # instance before swap.
+        await registry.replace_instance(VoicePipeline, bundle.pipeline)
+        await registry.replace_instance(AudioCaptureTask, bundle.capture_task)
         # Register each sub-component so /api/voice/status can report real
         # engine names instead of "No engine configured".
-        registry.register_instance(SileroVAD, bundle.pipeline.vad)
-        registry.register_instance(STTEngine, bundle.pipeline.stt)
-        registry.register_instance(TTSEngine, bundle.pipeline.tts)
+        await registry.replace_instance(SileroVAD, bundle.pipeline.vad)
+        await registry.replace_instance(STTEngine, bundle.pipeline.stt)
+        await registry.replace_instance(TTSEngine, bundle.pipeline.tts)
         if bundle.pipeline.config.wake_word_enabled:
-            registry.register_instance(WakeWordDetector, bundle.pipeline.wake_word)
+            await registry.replace_instance(WakeWordDetector, bundle.pipeline.wake_word)
         if bridge_ref[0] is not None:
-            registry.register_instance(VoiceCognitiveBridge, bridge_ref[0])
+            await registry.replace_instance(VoiceCognitiveBridge, bridge_ref[0])
 
         # v1.3 §4.6 L6 — publish the factory's boot preflight warnings
         # through a ``BootPreflightWarningsStore`` service. Callers

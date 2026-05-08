@@ -254,10 +254,14 @@ class TestRegistryCoverageGaps:
         assert result is result2
 
     def test_init_order_no_duplicates(self) -> None:
-        """Re-registering instance doesn't duplicate init_order."""
+        """Re-registering instance via ``replace_existing=True``
+        doesn't duplicate init_order. Post-v0.31.4 GAP 3 closure,
+        re-registration without ``replace_existing`` raises (see
+        ``TestRegisterInstanceTeardownContract`` for the new contract);
+        this test pins the deduplication invariant of init_order."""
         reg = ServiceRegistry()
         reg.register_instance(str, "a")
-        reg.register_instance(str, "b")
+        reg.register_instance(str, "b", replace_existing=True)
         str_key = "builtins.str"
         assert reg._init_order.count(str_key) == 1  # noqa: SLF001
 
@@ -286,3 +290,131 @@ class TestRegistryCoverageGaps:
         reg.register_instance(FakeService, svc)
         # Should not raise — skips non-callable
         await reg.shutdown_all()
+
+
+class TestRegisterInstanceTeardownContract:
+    """v0.31.4 GAP 3 closure: ``register_instance`` raises on duplicate
+    instance + ``replace_instance`` awaits teardown.
+
+    Pre-v0.31.4: ``register_instance`` silently overwrote, leaking
+    the old instance as a zombie when it owned a running asyncio task
+    (operator's dual-spawn ``audio-capture-consumer`` was the
+    canonical case — two capture tasks fed the orchestrator
+    simultaneously, producing 4× frame drops).
+    """
+
+    def test_duplicate_instance_raises_by_default(self) -> None:
+        from sovyx.engine.errors import ServiceAlreadyRegisteredError
+
+        reg = ServiceRegistry()
+        reg.register_instance(DummyService, DummyService(1))
+        with pytest.raises(ServiceAlreadyRegisteredError, match="DummyService"):
+            reg.register_instance(DummyService, DummyService(2))
+
+    def test_duplicate_instance_with_replace_existing_overwrites(self) -> None:
+        reg = ServiceRegistry()
+        reg.register_instance(DummyService, DummyService(1))
+        new = DummyService(2)
+        reg.register_instance(DummyService, new, replace_existing=True)
+        # Async resolve in a sync test — use the public sync access via _instances
+        assert reg._instances["tests.unit.engine.test_registry.DummyService"] is new  # noqa: SLF001
+
+    def test_factory_then_instance_does_not_raise(self) -> None:
+        """Factory-first-then-instance is the canonical priority
+        pattern — instance wins. Must NOT raise."""
+        reg = ServiceRegistry()
+        reg.register_singleton(DummyService, lambda: DummyService(1))
+        # Should not raise; instance simply takes priority.
+        reg.register_instance(DummyService, DummyService(2))
+
+    @pytest.mark.asyncio()
+    async def test_replace_instance_awaits_async_stop(self) -> None:
+        """``replace_instance`` calls + awaits async stop() on the old."""
+        teardown_log: list[str] = []
+
+        class TornDownService:
+            def __init__(self, label: str) -> None:
+                self.label = label
+
+            async def stop(self) -> None:
+                teardown_log.append(f"stopped:{self.label}")
+
+        reg = ServiceRegistry()
+        old = TornDownService("old")
+        new = TornDownService("new")
+        reg.register_instance(TornDownService, old)
+        await reg.replace_instance(TornDownService, new)
+        assert teardown_log == ["stopped:old"]
+        resolved = await reg.resolve(TornDownService)
+        assert resolved is new
+
+    @pytest.mark.asyncio()
+    async def test_replace_instance_calls_sync_stop_too(self) -> None:
+        """``replace_instance`` calls + handles sync stop() (rare but
+        defensive). Some teardown methods are synchronous."""
+        teardown_log: list[str] = []
+
+        class SyncTornDownService:
+            def stop(self) -> None:
+                teardown_log.append("stopped")
+
+        reg = ServiceRegistry()
+        reg.register_instance(SyncTornDownService, SyncTornDownService())
+        new = SyncTornDownService()
+        await reg.replace_instance(SyncTornDownService, new)
+        assert teardown_log == ["stopped"]
+
+    @pytest.mark.asyncio()
+    async def test_replace_instance_no_teardown_method_silent(self) -> None:
+        """``replace_instance`` with no stop/cancel/aclose just overwrites
+        cleanly (no error)."""
+
+        class NoTeardownService:
+            pass
+
+        reg = ServiceRegistry()
+        reg.register_instance(NoTeardownService, NoTeardownService())
+        new = NoTeardownService()
+        # Must not raise.
+        await reg.replace_instance(NoTeardownService, new)
+        assert (await reg.resolve(NoTeardownService)) is new
+
+    @pytest.mark.asyncio()
+    async def test_replace_instance_swallows_teardown_failure(self) -> None:
+        """Teardown failure on the OLD instance must not block the new
+        registration — the operator's enable flow always produces a
+        working pipeline."""
+        teardown_log: list[str] = []
+
+        class ExplodingTeardownService:
+            async def stop(self) -> None:
+                teardown_log.append("attempted")
+                raise RuntimeError("teardown blew up")
+
+        reg = ServiceRegistry()
+        reg.register_instance(ExplodingTeardownService, ExplodingTeardownService())
+        new = ExplodingTeardownService()
+        await reg.replace_instance(ExplodingTeardownService, new)
+        # Old's stop was attempted; new still landed.
+        assert teardown_log == ["attempted"]
+        assert (await reg.resolve(ExplodingTeardownService)) is new
+
+    @pytest.mark.asyncio()
+    async def test_replace_instance_prefers_stop_over_cancel(self) -> None:
+        """Order is stop → cancel → aclose. First match wins."""
+        called: list[str] = []
+
+        class MultiTeardownService:
+            async def stop(self) -> None:
+                called.append("stop")
+
+            async def cancel(self) -> None:
+                called.append("cancel")
+
+            async def aclose(self) -> None:
+                called.append("aclose")
+
+        reg = ServiceRegistry()
+        reg.register_instance(MultiTeardownService, MultiTeardownService())
+        await reg.replace_instance(MultiTeardownService, MultiTeardownService())
+        assert called == ["stop"]  # stop fired; cancel/aclose did NOT

@@ -305,6 +305,13 @@ describe("VoiceSetupWizard — A/B telemetry (Mission v0.30.1 §T1.2)", () => {
       if (path === "/api/voice/wizard/test-record") {
         return Promise.resolve(TEST_RESULT_OK);
       }
+      if (path === "/api/voice/enable") {
+        // v0.31.4 GAP 1: Save now POSTs /api/voice/enable; this test
+        // exercises the completion-telemetry path so it must mock the
+        // enable endpoint as success. Pre-v0.31.4 Save was a stub
+        // (no enable call), so this mock didn't exist.
+        return Promise.resolve({ ok: true });
+      }
       return Promise.resolve({});
     });
 
@@ -334,17 +341,26 @@ describe("VoiceSetupWizard — A/B telemetry (Mission v0.30.1 §T1.2)", () => {
 });
 
 describe("VoiceSetupWizard — save + done", () => {
-  it("save → done + onComplete fires with deviceId", async () => {
+  // v0.31.4 GAP 1 closure: pre-v0.31.4 ``handleSave`` was a stub —
+  // it dispatched ``advanceToDone`` locally without calling
+  // ``/api/voice/enable``. The fix wires it to the real persist
+  // endpoint. Tests below verify:
+  //   1. happy path: 200 OK from ``/api/voice/enable`` → advance + onComplete
+  //   2. error path: ``ok: false`` response → error banner, NO advance
+  //   3. exception path: rejected promise → error banner, NO advance
+
+  it("save → POSTs /api/voice/enable + advances on 200", async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === "/api/voice/wizard/devices") return Promise.resolve(DEVICES_RESPONSE);
       if (path === "/api/voice/wizard/diagnostic") return Promise.resolve(DIAGNOSTIC_RESPONSE);
       return Promise.reject(new Error("unknown path"));
     });
-    // Discriminate by URL — telemetry POSTs (Mission v0.30.1 §T1.2)
-    // share the mock with /test-record, so a once-pin would race.
     mockPost.mockImplementation((path: string) => {
       if (path === "/api/voice/wizard/test-record") {
         return Promise.resolve(TEST_RESULT_OK);
+      }
+      if (path === "/api/voice/enable") {
+        return Promise.resolve({ ok: true });
       }
       return Promise.resolve({});
     });
@@ -360,9 +376,63 @@ describe("VoiceSetupWizard — save + done", () => {
       expect(screen.getByText("Save selection")).toBeInTheDocument();
     });
     fireEvent.click(screen.getByText("Save selection"));
-    expect(screen.getByText("Save")).toBeInTheDocument(); // step 4
+    expect(screen.getByText("Save")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Save"));
-    expect(screen.getByText(/All set/)).toBeInTheDocument();
+
+    await waitFor(() => {
+      // The handleSave POST to /api/voice/enable must have fired.
+      const enableCalls = mockPost.mock.calls.filter(
+        ([path]) => path === "/api/voice/enable",
+      );
+      expect(enableCalls.length).toBe(1);
+      // Body carries the operator's mic selection (input_device).
+      // The fixture uses ``"dev-1"`` (non-numeric); parseInt returns
+      // NaN; impl emits ``null``. Production device_ids are numeric
+      // strings (e.g. ``"5"`` for PortAudio device 5) and would parse
+      // to the int. The null fallback lets the backend resolver pick.
+      expect(enableCalls[0][1]).toEqual({ input_device: null });
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/All set/)).toBeInTheDocument();
+    });
     expect(onComplete).toHaveBeenCalledWith("dev-1");
+  });
+
+  it("save → error response does NOT advance + shows error banner", async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/devices") return Promise.resolve(DEVICES_RESPONSE);
+      if (path === "/api/voice/wizard/diagnostic") return Promise.resolve(DIAGNOSTIC_RESPONSE);
+      return Promise.reject(new Error("unknown path"));
+    });
+    mockPost.mockImplementation((path: string) => {
+      if (path === "/api/voice/wizard/test-record") {
+        return Promise.resolve(TEST_RESULT_OK);
+      }
+      if (path === "/api/voice/enable") {
+        return Promise.resolve({ ok: false, error: "missing_deps" });
+      }
+      return Promise.resolve({});
+    });
+
+    const onComplete = vi.fn();
+    render(<VoiceSetupWizard onComplete={onComplete} />);
+    await waitFor(() => {
+      expect(screen.getByText("Built-in Microphone")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Built-in Microphone"));
+    fireEvent.click(screen.getByText("Start 3-second recording"));
+    await waitFor(() => {
+      expect(screen.getByText("Save selection")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Save selection"));
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => {
+      // Error banner from the dispatched ``error`` action surfaces.
+      expect(screen.getByText(/missing_deps/)).toBeInTheDocument();
+    });
+    // Must NOT have advanced to "done" — onComplete unchanged.
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.queryByText(/All set/)).not.toBeInTheDocument();
   });
 });
