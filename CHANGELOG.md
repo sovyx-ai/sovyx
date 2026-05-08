@@ -6,7 +6,138 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.5 below)
+(none — every shipped delta is in v0.31.6 below)
+
+## [0.31.6] — 2026-05-08
+
+Paranoid-audit closure of the v0.31.5 ship. A 4-agent paranoid
+audit at HEAD `6b5e60b` returned NO-GO with 2 CRITICAL + 6 MEDIUM
+findings forming two correlated bug classes — most notably,
+v0.31.5 LE-1's PipeWire path didn't actually engage on the
+operator's canonical hardware (Sony VAIO + Mint = PipeWire) because
+sounddevice persists Pulse profile names while `arecord -l` reports
+shorter ALSA names that don't substring-match. v0.31.6 closes all
+8 findings across 3 phases.
+
+Mission spec: ``docs-internal/missions/MISSION-voice-v0_31_6-paranoid-closure-2026-05-08.md``.
+
+### Fixed (Phase 1 — CRITICAL)
+
+- **C2 (T1.2) — Auto-resume zombie pipeline.**
+  ``_auto_resume_voice_pipeline`` ran ``replace_instance`` BEFORE
+  ``capture_task.start()``. If start() raised (USB unplugged
+  between probe and stream open, OOM during model load), the
+  registry slots were already overwritten with an unstarted
+  pipeline. New order: build → start → ON SUCCESS register, ON
+  FAILURE best-effort tear down (capture_task.stop then
+  pipeline.stop, both wrapped in ``contextlib.suppress`` per
+  anti-pattern #27) before re-raising. Registry is now an atomic
+  boundary.
+
+- **C1 (T1.1) — Hardcoded ``mindId="default"`` in onboarding.**
+  Anti-pattern #35 reincidente — same bug class fixed in
+  v0.31.0-rc.12. ``VoiceStep.tsx:226`` literal regressed in a
+  later refactor. Backend ``GET /api/onboarding/state`` now
+  returns ``mind_id`` field; frontend reads it via zod-validated
+  ``OnboardingStateSchema`` and threads through to
+  ``VoiceCalibrationStep mindId={resolveMindId(mindId)}``.
+  Falls back to "default" with ``console.warn`` only when the
+  resolver fails (operator breadcrumb).
+
+- **M2 (T1.3) — Wizard never sent ``input_device_name``.**
+  ``handleEnable`` called ``enableWithDevices(devices)`` with no
+  second arg → backend skipped persistence → mind.yaml shipped
+  without ``voice_input_device_name`` → next calibration's
+  ``resolve_active_mic_card`` returned None. ``HardwareDetection``
+  now caches device names via useRef and emits them on
+  ``onDeviceChange``; ``VoiceStep`` tracks ``selectedDeviceName``
+  parallel state and passes to ``enableWithDevices(devices,
+  selectedDeviceName)``.
+
+### Fixed (Phase 2 — PipeWire matching)
+
+- **M1 (T2.1) — Resolver only consulted ``arecord``.**
+  v0.31.5 LE-1's substring matcher couldn't bridge sounddevice's
+  Pulse-formatted names ("Razer BlackShark V2 Pro Wireless Analog
+  Stereo") and ``arecord -l``'s short names ("[Razer BlackShark
+  V2 Pro]"). New ``_resolve_via_pactl`` path queries ``pactl list
+  sources`` (works on PulseAudio AND PipeWire via pipewire-pulse),
+  parses each source's ``Description:`` + ``alsa.card="N"``
+  property. New ``_normalize_device_name`` strips Pulse suffixes
+  iteratively (`` Analog Stereo``, `` Mono``, `` Stereo``,
+  `` Wireless``, `` : USB Audio (hw:N,M)``) before substring
+  matching. New closed-enum reasons: ``pactl_unavailable``,
+  ``pactl_failed``, ``pactl_no_match``. New SUCCESS event
+  ``voice.calibration.active_mic_resolved{backend, card_index}``
+  for telemetry on which path engaged. arecord path retained as
+  fallback.
+
+### Fixed (Phase 3 — Bug class closure)
+
+- **M3.a/b + M5 (T3.1+T3.5) — Bug class "UI says ok, backend
+  isn't verified".** v0.31.4 GAP 7 hardened ONE surface
+  (_ProfileReview); 3 sibling surfaces (VoiceSetupModal,
+  VoiceStep::enableWithDevices, the original swallow-all-errors
+  in _ProfileReview) remained open. New shared helper
+  ``hooks/use-voice-running-verification.ts`` exports
+  ``verifyVoiceRunning(opts?)`` returning a discriminated union
+  ``VerificationResult``: ``running | not_running | auth_failure
+  | endpoint_missing | transient_failure``. Auth (401/403) +
+  endpoint-missing (404) bail immediately per anti-pattern #37.
+  All 3 surfaces port the receipt-check pattern; differentiated
+  i18n banners (auth_failed, endpoint_missing, transient_failure,
+  verification_failed) replace the catch-all "verification failed"
+  forever-loop.
+
+- **M3.c (T3.2) — Frontend ignored ``voice_configured``.**
+  v0.31.4 GAP 8 added the field to ``/onboarding/complete``
+  response, but frontend's ``handleComplete`` discarded it.
+  New zod schema + ``setVoiceWarning`` action on the onboarding
+  Zustand slice + dismissible yellow banner on the overview page
+  (role="alert", CTA to /voice).
+
+- **M3.d (T3.3) — Wizard error path leaked raw JSON.**
+  ``VoiceSetupWizard.handleSave`` catch block now JSON.parses
+  ApiError.message; structured i18n keys for ``missing_deps``
+  (with deps interpolation), ``capture_silence``,
+  ``capture_device_contended``. Unknown / non-JSON falls back to
+  raw message (operator can copy/paste for support).
+
+- **M4 (T3.4) — ``/api/voice/enable`` race window.**
+  ~330 LOC between idempotent check and replace_instance allowed
+  2 concurrent POSTs to both pass the check before either
+  registered → zombie state. New ``_ENABLE_LOCKS: LRULockDict[str]``
+  keyed by RESOLVED mind_id (post-sentinel resolution); body
+  extracted to ``_enable_voice_locked`` coroutine inside
+  ``async with _ENABLE_LOCKS.acquire(...)``. Idempotent re-check
+  moved INSIDE the lock so the second contender returns
+  ``already_active``. Mirrors ``_START_LOCKS`` from
+  voice_calibration.py.
+
+- **M6 (T3.6) — PII allowlist gap on device names.**
+  PII redactor's allowlist only included pre-hashed forms
+  (mind_id_hash, profile_id_hash). Raw ``voice_input_device_name``
+  ("Razer BlackShark V2 Pro") leaked verbatim through logs because
+  the regex sweep finds no PII pattern. New ``_HASH_REDACT_KEYS``
+  frozenset hash-redacts ``voice_input_device_name``,
+  ``voice_input_device_host_api``, plus dotted variants — replaced
+  with deterministic ``sha256:<12hex>`` prefix (correlation
+  preserved, label irreversible).
+
+### Notes
+
+This release is **strictly behaviour-preserving on the success
+paths** (every addition is a check-or-error path). The 8
+correlated findings closed in v0.31.6 spanned 5 source files +
+6 frontend components + 3 i18n bundles + 4 test files. Operator
+validation gate: re-run on canonical Sony VAIO + Linux Mint +
+Razer USB to confirm (a) calibration profile lands at
+``<data_dir>/<real-mind-id>/calibration.json``, NOT
+``default/``; (b) auto-resume after restart works without manual
+``/api/voice/enable``; (c) ``arecord -l`` substring miss falls
+through to ``pactl`` and resolves the right card index;
+(d) onboarding completion banner appears when voice silently
+failed.
 
 ## [0.31.5] — 2026-05-08
 
