@@ -364,8 +364,33 @@ def _snapshot_current_endpoint(capture_task: Any) -> tuple[str, str]:  # noqa: A
 
 
 def _safe_mind_id(pipeline: Any) -> str:  # noqa: ANN401
-    """Read ``pipeline._config.mind_id`` with best-effort fallback."""
+    """Read the per-turn authoritative mind id with best-effort fallback.
+
+    v0.32.5 Phase 4.D Finding 2 closure: anti-pattern #35 reincidence
+    sibling. Pre-fix this read ``pipeline._config.mind_id`` directly.
+    Phase 3.A Layer C (commit ``c9487639``) explicitly fixed the
+    perception-dispatch site at ``_orchestrator.py:2199`` from
+    ``_config.mind_id`` to ``_current_mind_id`` because the orchestrator
+    owns a per-turn authoritative ``_current_mind_id`` (set at
+    ``_orchestrator.py:1740`` via the wake-word router match) and the
+    configured-at-startup ``_config.mind_id`` is the sentinel-default
+    case anti-pattern #35 warns about.
+
+    Failover events emitted during a router-matched non-default mind's
+    turn (``voice.failover.attempted`` / ``voice.failover.selection_failed``)
+    were misattributed to the configured-at-startup mind. This site is
+    a sibling of the cluster Phase 3.A closed; the deeper sweep at
+    Phase 4.D PHASE-4-D-AUDIT.md Finding 2 surfaced it.
+
+    Resolution order:
+      1. ``pipeline._current_mind_id`` — per-turn authoritative.
+      2. ``pipeline._config.mind_id`` — configured-at-startup fallback.
+      3. ``"default"`` — final sentinel.
+    """
     try:
+        current = getattr(pipeline, "_current_mind_id", None)
+        if isinstance(current, str) and current:
+            return current
         config = getattr(pipeline, "_config", None)
         if config is not None:
             return str(getattr(config, "mind_id", "default"))

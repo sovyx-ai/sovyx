@@ -33,9 +33,9 @@ from __future__ import annotations
 
 import json
 import time
-from typing import TYPE_CHECKING
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.status import (
     HTTP_201_CREATED,
@@ -45,9 +45,6 @@ from starlette.status import (
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = get_logger(__name__)
 
@@ -180,22 +177,50 @@ class ContributionResponse(BaseModel):
     )
 
 
-def _resolve_artefact_dir() -> Path:
+def _resolve_artefact_dir(request: Request | None = None) -> Path:
     """Compute the destination directory for saved contributions.
 
     Falls back to ``<data_dir>/voice/contributed_profiles/`` relative
     to ``EngineConfig.data_dir`` (which itself resolves to
     ``~/.sovyx`` by default).
+
+    v0.32.5 Phase 4.D Finding 4 closure: anti-pattern #5 + #23.
+    Pre-fix this function instantiated ``EngineConfig()`` directly,
+    triggering the bootstrap auto-detect loop (``bootstrap.py:118-127``)
+    which re-seeds 9 cloud-LLM API keys from ``~/.sovyx/secrets.env``
+    into ``os.environ`` on every call — and silently ignored any test-
+    harness override of ``request.app.state.engine_config``.
+
+    Resolution order (mirrors the canonical pattern in
+    ``voice_test.py:104-124``):
+      1. ``request.app.state.engine_config`` if set (registry-resolved
+         instance — the canonical reference).
+      2. ``EngineConfig()`` direct instantiation as a fallback for the
+         legacy callers (e.g. ``_store_artefact`` invoked from a path
+         that doesn't carry a Request).
     """
+    if request is not None:
+        cached = getattr(request.app.state, "engine_config", None)
+        if cached is not None:
+            return Path(cached.data_dir) / "voice" / "contributed_profiles"
     from sovyx.engine.config import EngineConfig
 
     engine_config = EngineConfig()
     return engine_config.data_dir / "voice" / "contributed_profiles"
 
 
-def _store_artefact(payload: ContributionRequest) -> Path:
-    """Write the contribution payload to disk + return the path."""
-    artefact_dir = _resolve_artefact_dir()
+def _store_artefact(
+    payload: ContributionRequest,
+    *,
+    request: Request | None = None,
+) -> Path:
+    """Write the contribution payload to disk + return the path.
+
+    v0.32.5 Phase 4.D Finding 4: ``request`` threaded through so the
+    artefact lands under the per-request ``EngineConfig.data_dir`` when
+    an override is in place (test isolation + multi-data_dir setups).
+    """
+    artefact_dir = _resolve_artefact_dir(request=request)
     artefact_dir.mkdir(parents=True, exist_ok=True)
     timestamp = int(time.time())
     artefact_path = artefact_dir / f"{payload.profile_id_candidate}-{timestamp}.json"
@@ -218,7 +243,9 @@ def _store_artefact(payload: ContributionRequest) -> Path:
     status_code=HTTP_201_CREATED,
     summary="Submit a community KB profile contribution",
 )
-async def contribute_profile(payload: ContributionRequest) -> ContributionResponse:
+async def contribute_profile(
+    request: Request, payload: ContributionRequest
+) -> ContributionResponse:
     """Accept a community profile contribution.
 
     Side-effects:
@@ -245,7 +272,7 @@ async def contribute_profile(payload: ContributionRequest) -> ContributionRespon
         )
 
     try:
-        artefact_path = _store_artefact(payload)
+        artefact_path = _store_artefact(payload, request=request)
     except OSError as exc:
         logger.warning(
             "voice.kb_contribute.store_failed",

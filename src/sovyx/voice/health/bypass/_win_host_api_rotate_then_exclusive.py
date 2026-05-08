@@ -393,5 +393,16 @@ class WindowsHostApiRotateThenExclusiveBypass:
                 source_host_api=self._source_host_api,
             )
 
+        # v0.32.5 Phase 4.D Finding 3 closure: notify the bypass-tier
+        # mirror that Tier 2 has reverted so the dashboard's
+        # ``GET /api/voice/bypass-tier-status`` endpoint stops showing
+        # a stale "tier 2 engaged" badge. Best-effort; the per-step
+        # warns above already surfaced any underlying revert problem.
+        from sovyx.voice.health._bypass_tier_state import (  # noqa: PLC0415
+            mark_tier_disengaged,
+        )
+
+        mark_tier_disengaged()
+
 
 __all__ = ["WindowsHostApiRotateThenExclusiveBypass"]

@@ -273,6 +273,19 @@ class WindowsRawCommunicationsBypass:
         # v0.24.0 placeholder: apply never engages, so revert is a
         # no-op. Idempotent per the PlatformBypassStrategy contract.
         del context  # intentionally unused in v0.24.0
+        # v0.32.5 Phase 4.D Finding 3 forward-wire: even though apply()
+        # raises ``strategy_disabled`` in this placeholder, a future
+        # patch that ships Tier 1 RAW + Communications real engagement
+        # needs the bypass-tier mirror notified on revert. Pre-wire
+        # ``mark_tier_disengaged()`` here (idempotent — safe when
+        # current_bypass_tier is already None) so when the placeholder
+        # is replaced the engaged-tier badge contract is already
+        # satisfied. PHASE-4-D-AUDIT.md Finding 3.
+        from sovyx.voice.health._bypass_tier_state import (  # noqa: PLC0415
+            mark_tier_disengaged,
+        )
+
+        mark_tier_disengaged()
 
 
 __all__ = ["WindowsRawCommunicationsBypass"]

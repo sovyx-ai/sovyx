@@ -390,7 +390,20 @@ async def _run_probe(
         )
 
     assert vad is not None  # enforced by the outer probe() guard
-    vad_max_prob, vad_mean_prob = _analyse_vad(
+    # v0.32.5 Phase 4.D Finding 1 closure: ``_analyse_vad`` runs synchronous
+    # Silero VAD ONNX inference in a tight loop (~46 inferences for a
+    # 1500 ms / 16 kHz / 512-sample warm probe → ~150-200 ms wall on a
+    # typical CPU). Pre-fix this ran on the event-loop thread and
+    # stalled dashboard websocket / conversation runtime / hotplug
+    # listeners / bridge channels for the duration. Counterpart
+    # ``capture_integrity.py:241`` correctly wraps the sibling
+    # ``_analyse_sync`` in ``asyncio.to_thread``; this site missed the
+    # migration because the call chain ``_run_probe → _analyse_vad →
+    # vad.process_frame → self._session.run`` crosses three modules.
+    # Anti-pattern #14 (sync ONNX in async). Captured by Phase 4.D
+    # PHASE-4-D-AUDIT.md Finding 1.
+    vad_max_prob, vad_mean_prob = await asyncio.to_thread(
+        _analyse_vad,
         collected,
         combo=combo,
         vad=vad,

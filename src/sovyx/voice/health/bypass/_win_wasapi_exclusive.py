@@ -183,6 +183,19 @@ class WindowsWASAPIExclusiveBypass:
     ) -> None:
         result = await context.capture_task.request_shared_restart()
         if result.verdict is SharedRestartVerdict.SHARED_ENGAGED:
+            # v0.32.5 Phase 4.D Finding 3 closure: notify the bypass-tier
+            # mirror that the engaged tier (Tier 3 — WASAPI exclusive)
+            # has reverted so the dashboard's
+            # ``GET /api/voice/bypass-tier-status`` endpoint stops showing
+            # a stale "tier 3 engaged" badge. Phase 3.B.2.c shipped the
+            # ``mark_tier_disengaged`` helper but the strategy revert
+            # paths never called it; PHASE-4-D-AUDIT.md Finding 3
+            # surfaced the half-shipped state.
+            from sovyx.voice.health._bypass_tier_state import (  # noqa: PLC0415
+                mark_tier_disengaged,
+            )
+
+            mark_tier_disengaged()
             logger.info(
                 "bypass_strategy_revert_ok",
                 strategy=_STRATEGY_NAME,
