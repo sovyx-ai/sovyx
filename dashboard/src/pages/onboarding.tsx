@@ -23,13 +23,23 @@ import {
   FirstChatStep,
 } from "@/components/onboarding";
 import type { OnboardingState } from "@/types/api";
-import { OnboardingStateSchema } from "@/types/schemas";
+import {
+  OnboardingCompleteResponseSchema,
+  OnboardingStateSchema,
+} from "@/types/schemas";
+import { useDashboardStore } from "@/stores/dashboard";
 
 const TOTAL_STEPS = 5;
 
 export default function OnboardingPage() {
   const { t } = useTranslation("onboarding");
   const navigate = useNavigate();
+  // v0.31.6 T3.2 (M3.c): surface backend's defensive ``voice_configured: false``
+  // signal as a post-onboarding banner on the home page. Without this wire-up
+  // the daemon's defense (added in v0.31.4 GAP 8) was a tree-falls-in-the-forest
+  // signal — the operator landed on the dashboard with onboarding marked
+  // complete but voice silently disabled and zero indication something failed.
+  const setVoiceWarning = useDashboardStore((s) => s.setVoiceWarning);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState("");
@@ -92,21 +102,45 @@ export default function OnboardingPage() {
 
   const handleComplete = useCallback(async () => {
     try {
-      await api.post("/api/onboarding/complete", {});
+      const result = await api.post<{
+        ok: boolean;
+        voice_configured?: boolean;
+      }>(
+        "/api/onboarding/complete",
+        {},
+        { schema: OnboardingCompleteResponseSchema },
+      );
+      // ``voice_configured: false`` is the daemon's defensive signal that
+      // mind.yaml requested voice but the runtime didn't bring it up.
+      // ``true`` (or missing — pre-v0.31.4 daemons) means "no warning".
+      if (result?.voice_configured === false) {
+        setVoiceWarning({ kind: "voice_not_configured" });
+      }
     } catch {
-      // Best effort
+      // Best effort — navigation still happens; a network failure here
+      // shouldn't trap the operator on the onboarding page.
     }
     navigate("/", { replace: true });
-  }, [navigate]);
+  }, [navigate, setVoiceWarning]);
 
   const handleSkipAll = useCallback(async () => {
     try {
-      await api.post("/api/onboarding/complete", {});
+      const result = await api.post<{
+        ok: boolean;
+        voice_configured?: boolean;
+      }>(
+        "/api/onboarding/complete",
+        {},
+        { schema: OnboardingCompleteResponseSchema },
+      );
+      if (result?.voice_configured === false) {
+        setVoiceWarning({ kind: "voice_not_configured" });
+      }
     } catch {
       // Best effort
     }
     navigate("/", { replace: true });
-  }, [navigate]);
+  }, [navigate, setVoiceWarning]);
 
   if (loading) {
     return (

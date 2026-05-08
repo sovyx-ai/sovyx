@@ -137,5 +137,11 @@
     "title": "Unable to connect",
     "subtitle": "The dashboard cannot reach the Sovyx engine. Make sure it is running.",
     "retry": "Retry connection"
+  },
+  "voice_warning": {
+    "title": "Voice setup didn't complete",
+    "body": "You enabled voice during onboarding, but the voice pipeline isn't running. Your mind is otherwise active — you can still chat and use other features. Open the Voice page to troubleshoot.",
+    "troubleshoot_cta": "Open voice troubleshooting",
+    "dismiss": "Dismiss warning"
   }
 }

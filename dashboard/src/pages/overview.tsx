@@ -1,7 +1,16 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
-import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon, WifiOffIcon, RefreshCwIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  DollarSignIcon,
+  BrainIcon,
+  MessageSquareIcon,
+  ActivityIcon,
+  WifiOffIcon,
+  RefreshCwIcon,
+  XIcon,
+} from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart, CognitiveTimeline } from "@/components/dashboard";
 import { UsageCard } from "@/components/dashboard/usage-card";
@@ -38,6 +47,11 @@ export default function OverviewPage() {
   const connected = useDashboardStore((s) => s.connected);
   const recentEvents = useDashboardStore((s) => s.recentEvents);
   const costData = useDashboardStore((s) => s.costData);
+  // v0.31.6 T3.2 (M3.c): voice-configuration warning surfaced when the
+  // daemon's defensive ``voice_configured: false`` signal landed during
+  // /api/onboarding/complete. ``null`` when no warning is pending.
+  const voiceWarning = useDashboardStore((s) => s.voiceWarning);
+  const clearVoiceWarning = useDashboardStore((s) => s.clearVoiceWarning);
   const {
     step1, step2, step3, completedCount, allDone,
     showBanner, showAliveCard, setDismissed,
@@ -134,6 +148,42 @@ export default function OverviewPage() {
               : t("subtitleProgress")}
         </p>
       </div>
+
+      {/* Voice-not-configured warning — surfaced from POST /api/onboarding/complete
+        * when the daemon reports voice was requested but the pipeline is not
+        * registered. Operator-actionable; links to /voice for troubleshooting. */}
+      {voiceWarning?.kind === "voice_not_configured" && (
+        <div
+          role="alert"
+          data-testid="voice-warning-banner"
+          className="flex items-start gap-3 rounded-[var(--svx-radius-lg)] border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-[var(--svx-color-text-primary)]"
+        >
+          <AlertTriangleIcon
+            aria-hidden="true"
+            className="mt-0.5 size-4 shrink-0 text-yellow-600 dark:text-yellow-500"
+          />
+          <div className="flex-1 space-y-1">
+            <div className="font-medium">{t("voice_warning.title")}</div>
+            <div className="text-[var(--svx-color-text-secondary)]">
+              {t("voice_warning.body")}
+            </div>
+            <Link
+              to="/voice"
+              className="inline-block pt-1 text-xs font-medium text-[var(--svx-color-brand-primary)] hover:underline"
+            >
+              {t("voice_warning.troubleshoot_cta")}
+            </Link>
+          </div>
+          <button
+            type="button"
+            onClick={clearVoiceWarning}
+            aria-label={t("voice_warning.dismiss")}
+            className="rounded p-1 text-[var(--svx-color-text-tertiary)] transition-colors hover:bg-[var(--svx-color-bg-surface-hover)] hover:text-[var(--svx-color-text-primary)]"
+          >
+            <XIcon aria-hidden="true" className="size-4" />
+          </button>
+        </div>
+      )}
 
       {/* Onboarding slot — WelcomeBanner or MindAliveCard with animated transition */}
       {showBannerNow && connected && (

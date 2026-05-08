@@ -4,6 +4,7 @@ import {
   CaptureRestartFrameSchema,
   CaptureRestartReasonSchema,
   ForgetMindResponseSchema,
+  OnboardingCompleteResponseSchema,
   PruneRetentionResponseSchema,
   StartTrainingRequestSchema,
   StartTrainingResponseSchema,
@@ -1039,6 +1040,61 @@ describe("TrainingJobStreamMessageSchema", () => {
   it("rejects snapshot without state field", () => {
     expect(() =>
       TrainingJobStreamMessageSchema.parse({ type: "snapshot" }),
+    ).toThrow();
+  });
+});
+
+// v0.31.6 T3.2 (M3.c) — pin the POST /api/onboarding/complete contract
+// so the daemon's defensive ``voice_configured: false`` signal cannot
+// silently regress to discarded.
+
+describe("OnboardingCompleteResponseSchema", () => {
+  it("accepts the v0.31.4 shape with voice_configured: true", () => {
+    const result = OnboardingCompleteResponseSchema.parse({
+      ok: true,
+      voice_configured: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.voice_configured).toBe(true);
+  });
+
+  it("accepts the v0.31.4 shape with voice_configured: false", () => {
+    const result = OnboardingCompleteResponseSchema.parse({
+      ok: true,
+      voice_configured: false,
+    });
+    expect(result.voice_configured).toBe(false);
+  });
+
+  it("accepts pre-v0.31.4 shape without voice_configured", () => {
+    const result = OnboardingCompleteResponseSchema.parse({ ok: true });
+    expect(result.ok).toBe(true);
+    expect(result.voice_configured).toBeUndefined();
+  });
+
+  it("forwards extra fields via passthrough()", () => {
+    const result = OnboardingCompleteResponseSchema.parse({
+      ok: true,
+      voice_configured: true,
+      future_field: "hello",
+    });
+    expect(result.ok).toBe(true);
+    // passthrough() retains unknown keys for forward-compat
+    expect((result as { future_field?: string }).future_field).toBe("hello");
+  });
+
+  it("rejects when ok is missing", () => {
+    expect(() =>
+      OnboardingCompleteResponseSchema.parse({ voice_configured: false }),
+    ).toThrow();
+  });
+
+  it("rejects when voice_configured has wrong type", () => {
+    expect(() =>
+      OnboardingCompleteResponseSchema.parse({
+        ok: true,
+        voice_configured: "false",
+      }),
     ).toThrow();
   });
 });

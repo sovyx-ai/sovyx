@@ -137,5 +137,11 @@
     "title": "Não foi possível conectar",
     "subtitle": "O painel não consegue alcançar o engine Sovyx. Confirme que ele está em execução.",
     "retry": "Tentar conexão novamente"
+  },
+  "voice_warning": {
+    "title": "A configuração de voz não foi concluída",
+    "body": "Você ativou a voz durante o onboarding, mas o pipeline de voz não está em execução. Sua mente continua ativa — você pode conversar e usar os outros recursos normalmente. Abra a página de Voz para investigar.",
+    "troubleshoot_cta": "Abrir solução de problemas de voz",
+    "dismiss": "Dispensar aviso"
   }
 }

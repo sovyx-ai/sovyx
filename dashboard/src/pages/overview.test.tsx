@@ -5,7 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen } from "@/test/test-utils";
+import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor } from "@/test/test-utils";
 import OverviewPage from "./overview";
 import { useDashboardStore } from "@/stores/dashboard";
 
@@ -95,5 +96,75 @@ describe("OverviewPage", () => {
     render(<OverviewPage />);
     const skeletons = screen.getAllByRole("group", { name: "Loading" });
     expect(skeletons).toHaveLength(4);
+  });
+});
+
+// v0.31.6 T3.2 (M3.c) — voice-not-configured banner surfaced from
+// the post-onboarding warning channel. Tests pin the render +
+// dismiss contract.
+describe("OverviewPage — voice warning banner", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ voiceWarning: null });
+  });
+
+  it("does not render the banner when voiceWarning is null", () => {
+    useDashboardStore.setState({ voiceWarning: null });
+    render(<OverviewPage />);
+    expect(
+      screen.queryByTestId("voice-warning-banner"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the banner when voiceWarning is voice_not_configured", () => {
+    useDashboardStore.setState({
+      voiceWarning: { kind: "voice_not_configured" },
+    });
+    render(<OverviewPage />);
+    const banner = screen.getByTestId("voice-warning-banner");
+    expect(banner).toBeInTheDocument();
+    // Title + body i18n keys are surfaced (en locale).
+    expect(
+      screen.getByText(/Voice setup didn't complete/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/voice pipeline isn't running/i),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a troubleshoot CTA linking to /voice", () => {
+    useDashboardStore.setState({
+      voiceWarning: { kind: "voice_not_configured" },
+    });
+    render(<OverviewPage />);
+    const cta = screen.getByText(/Open voice troubleshooting/i);
+    expect(cta).toBeInTheDocument();
+    expect(cta.closest("a")).toHaveAttribute("href", "/voice");
+  });
+
+  it("Dismiss button clears the warning", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      voiceWarning: { kind: "voice_not_configured" },
+    });
+    render(<OverviewPage />);
+    expect(screen.getByTestId("voice-warning-banner")).toBeInTheDocument();
+
+    const dismissButton = screen.getByLabelText(/Dismiss warning/i);
+    await user.click(dismissButton);
+
+    await waitFor(() =>
+      expect(useDashboardStore.getState().voiceWarning).toBeNull(),
+    );
+    expect(
+      screen.queryByTestId("voice-warning-banner"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("banner has role=alert for accessibility", () => {
+    useDashboardStore.setState({
+      voiceWarning: { kind: "voice_not_configured" },
+    });
+    render(<OverviewPage />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 });

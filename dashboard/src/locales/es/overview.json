@@ -137,5 +137,11 @@
     "title": "No se pudo conectar",
     "subtitle": "El panel no puede alcanzar el engine Sovyx. Confirma que esté en ejecución.",
     "retry": "Reintentar conexión"
+  },
+  "voice_warning": {
+    "title": "La configuración de voz no se completó",
+    "body": "Activaste la voz durante el onboarding, pero el pipeline de voz no está en ejecución. Tu mente sigue activa — puedes chatear y usar las demás funciones con normalidad. Abre la página de Voz para investigar.",
+    "troubleshoot_cta": "Abrir solución de problemas de voz",
+    "dismiss": "Descartar aviso"
   }
 }
