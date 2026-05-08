@@ -352,7 +352,20 @@ class TestJSONOutput:
         event: str,
         **kw: str,
     ) -> dict[str, Any]:
-        """Capture a single log line as parsed JSON."""
+        """Capture a log line as parsed JSON, filtering by ``event`` name.
+
+        Pre-fix this assumed exactly ONE log line landed in the capture
+        window. macOS CI flake observed 2026-05-08: a long-lived task
+        from a prior test (voice pipeline heartbeat, watchdog, etc.)
+        could emit to the same root handler during the capture window,
+        producing a buffer with TWO JSON documents — ``json.loads(line)``
+        then raised ``json.decoder.JSONDecodeError: Extra data``.
+
+        Fix: parse buffer line-by-line + pick the line whose ``event``
+        field matches the test's expected event name. Robust against
+        cross-test log noise without changing the test's contract
+        (we still assert the captured event has the right payload).
+        """
         buf = io.StringIO()
         root = logging.getLogger()
         handler = root.handlers[0]
@@ -362,9 +375,21 @@ class TestJSONOutput:
             getattr(logger, level)(event, **kw)
         finally:
             handler.stream = old_stream  # type: ignore[assignment]
-        line = buf.getvalue().strip()
-        assert line, "No log output captured"
-        return json.loads(line)
+        captured = buf.getvalue().strip()
+        assert captured, "No log output captured"
+        # Multi-line tolerant parse: each JSON document on its own line.
+        for raw_line in captured.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and parsed.get("event") == event:
+                return parsed
+        msg = f"No log line with event={event!r} in capture: {captured!r}"
+        raise AssertionError(msg)
 
     def test_context_fields_in_json(self) -> None:
         bind_request_context(
