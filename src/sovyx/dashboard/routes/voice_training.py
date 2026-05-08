@@ -412,6 +412,43 @@ async def start_training_job(
     Raises:
         HTTPException: see failure modes above.
     """
+    # ── 0. Resolve mind_id (anti-pattern #35 — closes audit gap P0.C4).
+    #
+    # v0.32.4 Phase 3.C.4: pre-fix this route accepted ``body.mind_id``
+    # verbatim. A frontend that hardcodes ``"default"`` (the sentinel)
+    # caused hot-reload ``register_mind("default")`` to bind the trained
+    # ONNX to a phantom mind. The trained .onnx file landed in the
+    # right place (pretrained pool is host-scoped, not mind-scoped),
+    # but the in-memory router never associated it with the operator's
+    # active mind — wake word silently never fired post-train.
+    #
+    # Fix: when the body carries the sentinel ``"default"`` OR an empty
+    # string, resolve via the canonical
+    # :func:`sovyx.dashboard._shared.resolve_active_mind_id_for_request`
+    # (the same resolver used by ``/api/voice/enable`` / calibration
+    # endpoints). Explicit non-sentinel mind_ids are honoured verbatim
+    # so multi-mind operators can target a specific non-active mind
+    # for training.
+    from sovyx.dashboard._shared import (  # noqa: PLC0415
+        resolve_active_mind_id_for_request,
+    )
+
+    if not body.mind_id or body.mind_id == "default":
+        resolved_mind_id, mind_id_source = await resolve_active_mind_id_for_request(
+            request,
+        )
+    else:
+        resolved_mind_id = body.mind_id
+        mind_id_source = "explicit_request"
+    logger.info(
+        "voice.training.start.mind_id_resolved",
+        **{
+            "voice.training.mind_id": resolved_mind_id,
+            "voice.training.mind_id_source": mind_id_source,
+            "voice.training.body_mind_id": body.mind_id,
+        },
+    )
+
     # ── 1. Resolve trainer backend (fail-fast UX — same as CLI 384-389)
     try:
         from sovyx.voice.wake_word_training import (  # noqa: PLC0415
@@ -495,7 +532,7 @@ async def start_training_job(
 
     training_req = TrainingRequest(
         wake_word=body.wake_word,
-        mind_id=body.mind_id,
+        mind_id=resolved_mind_id,
         language=body.language,
         target_positive_samples=body.target_samples,
         synthesizer_voices=voice_tuple,
@@ -549,7 +586,7 @@ async def start_training_job(
         **{
             "voice.training.job_id": job_id,
             "voice.training.wake_word": body.wake_word,
-            "voice.training.mind_id": body.mind_id,
+            "voice.training.mind_id": resolved_mind_id,
             "voice.training.language": body.language,
             "voice.training.target_samples": body.target_samples,
             "voice.training.backend": backend.name,
