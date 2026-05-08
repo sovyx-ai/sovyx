@@ -19,7 +19,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -73,6 +73,34 @@ _DEFAULT_RATE_LIMIT = 10  # requests per minute
 _DEFAULT_TIMEOUT_S = 10.0
 _DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5MB
 _RATE_WINDOW_S = 60.0
+
+# SSRF hardening (Plugin Sandbox C1, Round 3 paranoid audit, v0.32.0):
+# httpx ``follow_redirects=True`` would walk a 30x ``Location`` to ANY URL
+# without re-entering ``_validate_url`` — an attacker-controlled allowlisted
+# domain could 302-redirect to ``http://169.254.169.254/`` (AWS metadata),
+# ``http://127.0.0.1:8080/`` (sidecar), or any internal IP. We disable
+# httpx's auto-follow and walk redirects manually via
+# :meth:`SandboxedHttpClient._request_with_redirect_validation`, validating
+# every hop's URL through the same allowlist + local-IP + DNS-rebinding
+# checks. Cap hops at this constant.
+_MAX_REDIRECTS = 5
+
+# Status codes that trigger a redirect. Per RFC 7231 + RFC 7538.
+# 301/302/303 → method downgraded to GET (matches Python ``requests``
+# library + browser behavior; defends against POST-then-302 SSRF where
+# an attacker chains an allowlisted POST to an internal GET).
+# 307/308 → method + body preserved.
+_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+_METHOD_DOWNGRADE_STATUS = frozenset({301, 302, 303})
+
+# Header keys that must be stripped when method downgrades to GET on
+# redirect (the body is dropped — these headers describe a body that no
+# longer exists). httpx accepts case-insensitive header dicts but plugin
+# kwargs may pass a plain ``dict`` with mixed case; strip case-insensitively.
+_BODY_HEADER_KEYS = frozenset({"content-length", "content-type", "transfer-encoding"})
+
+# httpx kwargs that carry a request body. Stripped when downgrading to GET.
+_BODY_KWARGS = ("content", "data", "json", "files")
 
 
 # ── Local Network Detection ─────────────────────────────────────────
@@ -271,10 +299,15 @@ class SandboxedHttpClient:
         self._timeout = timeout_s
         self._max_bytes = max_response_bytes
         self._limiter = _RateLimiter(max_calls=rate_limit)
+        # SSRF hardening: ``follow_redirects=False`` is mandatory — see the
+        # ``_MAX_REDIRECTS`` docstring. Redirect handling lives in
+        # :meth:`_request_with_redirect_validation`, which validates every
+        # hop's URL through ``_validate_url`` BEFORE issuing the next
+        # request. Re-enabling ``follow_redirects=True`` reintroduces the
+        # SSRF bypass closed in v0.32.0.
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
-            follow_redirects=True,
-            max_redirects=5,
+            follow_redirects=False,
         )
 
     def _validate_url(self, url: str) -> str:
@@ -439,7 +472,7 @@ class SandboxedHttpClient:
         )
 
         started = time.monotonic()
-        response = await self._client.request(method, url, **kwargs)  # type: ignore[arg-type]
+        response = await self._request_with_redirect_validation(method, url, **kwargs)
         latency_ms = (time.monotonic() - started) * 1000.0
 
         # Check response size
@@ -479,6 +512,121 @@ class SandboxedHttpClient:
         )
 
         return response
+
+    async def _request_with_redirect_validation(
+        self,
+        method: str,
+        url: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        """Issue an HTTP request and walk redirects with per-hop validation.
+
+        SSRF hardening (Plugin Sandbox C1, Round 3 paranoid audit, v0.32.0):
+        ``httpx.AsyncClient`` is constructed with ``follow_redirects=False``
+        so a malicious server cannot 302-bypass the sandbox URL guard. This
+        method walks the redirect chain manually, calling
+        :meth:`_validate_url` on EVERY hop's ``Location`` BEFORE issuing the
+        next request. A redirect to a private IP, a non-allowlisted domain
+        (when not in ``allow_any_domain`` mode), or a DNS-rebinding host
+        raises :class:`PermissionDeniedError` — the unsafe request is never
+        sent.
+
+        Method semantics on redirect match Python's ``requests`` library
+        (also browser behavior):
+
+        * 301 / 302 / 303 → method downgraded to GET; body + body-related
+          headers (``Content-Length``, ``Content-Type``, ``Transfer-Encoding``)
+          stripped. This defends against the POST-allowlisted-then-302
+          attack pattern where an attacker chains a permitted POST to an
+          internal GET.
+        * 307 / 308 → method + body preserved per RFC 7538.
+
+        Hop count is bounded by :data:`_MAX_REDIRECTS` (default 5).
+        """
+        # Initial URL was already validated in ``_request``. Re-validate
+        # defensively so future direct callers don't bypass the check.
+        self._validate_url(url)
+
+        current_method = method
+        current_url = url
+        current_kwargs: dict[str, object] = dict(kwargs)
+
+        for hop in range(_MAX_REDIRECTS + 1):
+            response = await self._client.request(current_method, current_url, **current_kwargs)  # type: ignore[arg-type]
+
+            if response.status_code not in _REDIRECT_STATUS_CODES:
+                return response
+
+            location = response.headers.get("location")
+            if not location:
+                # 3xx without Location — return as-is, nothing to follow.
+                return response
+
+            if hop >= _MAX_REDIRECTS:
+                logger.warning(
+                    "plugin.http.violation",
+                    **{
+                        "plugin_id": self._plugin,
+                        "plugin.http.method": current_method,
+                        "plugin.http.url_host_only": (urlparse(current_url).hostname or ""),
+                        "plugin.http.violation_kind": "max_redirects",
+                        "plugin.http.hops": hop + 1,
+                    },
+                )
+                raise PermissionDeniedError(
+                    self._plugin,
+                    f"Exceeded max redirects ({_MAX_REDIRECTS}) at {current_url}",
+                )
+
+            # Resolve relative redirects against the URL of the request that
+            # produced this response (NOT the original URL — a chain like
+            # https://a/ → https://b/x → /y must resolve /y against b/x).
+            next_url = urljoin(current_url, location)
+
+            # Per-hop validation: SSRF closure. Any failure here raises
+            # before the next request fires.
+            try:
+                self._validate_url(next_url)
+            except PermissionDeniedError as exc:
+                logger.warning(
+                    "plugin.http.violation",
+                    **{
+                        "plugin_id": self._plugin,
+                        "plugin.http.method": current_method,
+                        "plugin.http.url_host_only": (urlparse(current_url).hostname or ""),
+                        "plugin.http.violation_kind": "redirect_to_unsafe_url",
+                        "plugin.http.redirect_status": response.status_code,
+                        "plugin.http.redirect_target_host": (urlparse(next_url).hostname or ""),
+                        "plugin.http.reason": str(exc),
+                    },
+                )
+                raise PermissionDeniedError(
+                    self._plugin,
+                    f"redirect to unsafe URL '{next_url}': {exc}",
+                ) from exc
+
+            # Method + body handling per RFC 7231 / 7538 + ``requests``.
+            if response.status_code in _METHOD_DOWNGRADE_STATUS and current_method.upper() not in {
+                "GET",
+                "HEAD",
+            }:
+                current_method = "GET"
+                # Strip body kwargs.
+                for body_key in _BODY_KWARGS:
+                    current_kwargs.pop(body_key, None)
+                # Strip body-describing headers (case-insensitive).
+                headers = current_kwargs.get("headers")
+                if isinstance(headers, dict):
+                    current_kwargs["headers"] = {
+                        k: v for k, v in headers.items() if str(k).lower() not in _BODY_HEADER_KEYS
+                    }
+
+            current_url = next_url
+
+        # Unreachable: the loop either returns a non-3xx response, returns
+        # a 3xx without Location, or raises on max-redirects. Defensive
+        # fall-through preserves type-checker happiness.
+        return response  # pragma: no cover
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
