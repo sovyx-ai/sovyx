@@ -6,7 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.4 below)
+(none — every shipped delta is in v0.31.5 below)
+
+## [0.31.5] — 2026-05-08
+
+Loose-ends closure for the v0.31.4 voice-onboarding bug class.
+v0.31.4 added the ``active_mic_card_index`` parameter to
+``CalibrationApplier`` and ``capture_measurements`` (GAP 5) but no
+production caller passed it; in production every site got ``None``
+→ fallback ``candidates[0]`` → R10 still boosted the wrong physical
+mic on multi-mic homes. v0.31.5 closes that loose end + pins the
+auto-resume kwarg contract.
+
+Mission spec: ``docs-internal/missions/MISSION-voice-v0_31_5-loose-ends-2026-05-08.md``.
+
+### Fixed
+
+- **LE-1 — GAP 5 wire-up.** New helper
+  ``sovyx.voice.calibration.resolve_active_mic_card`` parses
+  ``arecord -l`` output and substring-matches against the operator's
+  persisted ``MindConfig.voice_input_device_name`` to return the
+  ALSA card index that owns the active mic. All five production
+  callers (``cli.commands.doctor`` × 2 — calibrate + dry-eval —
+  plus ``voice.calibration._wizard_orchestrator`` × 2 — slow path +
+  fast path) now pass that resolved value instead of ``None``.
+  Defensive: ``None`` fallback at every site preserves the
+  pre-v0.31.4 first-attenuated-card behaviour when the resolver
+  cannot establish a mapping (no mind config / no persisted name /
+  ``arecord`` unavailable / no match). Each fallback path emits a
+  structured ``voice.calibration.active_mic_unresolved`` log with a
+  closed-enum ``reason`` field for operator triage.
+
+- **LE-3 — auto-resume kwarg contract.** New integration test
+  ``tests/integration/test_voice_auto_resume.py`` verifies every
+  kwarg ``_auto_resume_voice_pipeline`` passes to
+  ``create_voice_pipeline`` exists on the factory signature. Future
+  factory renames now break at CI time, not in production at the
+  operator's first restart.
+
+- **Coarse-clock test stability (anti-pattern #22).** Three perf
+  tests in ``tests/unit/cognitive/test_output_guard.py`` migrated
+  from ``time.monotonic`` to ``time.perf_counter`` after
+  ``test_none_near_zero`` failed on Windows CI with "16.0ms" — the
+  ~15.6ms tick of Windows ``time.monotonic`` is too coarse for
+  sub-5ms perf assertions.
+
+### Notes
+
+This release is **strictly behaviour-preserving when the resolver
+returns ``None``** — that path matches v0.31.4 exactly. The new
+behaviour activates only on Linux hosts with ``arecord`` installed
+where the operator's persisted device name matches an ALSA card
+display name. v0.31.5 ships the wire-up + the safety net at the
+same time.
 
 ## [0.31.4] — 2026-05-08
 
