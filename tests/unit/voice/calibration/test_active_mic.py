@@ -121,3 +121,142 @@ class TestResolveActiveMicCard:
     def test_missing_attr_returns_none(self) -> None:
         mind_config = SimpleNamespace()
         assert resolve_active_mic_card(mind_config=mind_config) is None
+
+
+_PACTL_LIST_SOURCES_OUTPUT = """Source #46
+\tState: SUSPENDED
+\tName: alsa_input.pci-0000_00_1f.3.analog-stereo
+\tDescription: Built-in Audio Analog Stereo
+\tDriver: PipeWire
+\tProperties:
+\t\talsa.card = "0"
+\t\talsa.card_name = "HDA Intel PCH"
+\t\tdevice.api = "alsa"
+
+Source #47
+\tState: IDLE
+\tName: alsa_input.usb-Razer_Razer_BlackShark_V2_Pro-00.analog-stereo
+\tDescription: Razer BlackShark V2 Pro Wireless Analog Stereo
+\tDriver: PipeWire
+\tProperties:
+\t\talsa.card = "2"
+\t\talsa.card_name = "Pro"
+\t\tdevice.api = "alsa"
+"""
+
+
+def _pactl_completed(stdout: str, returncode: int = 0) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        args=["pactl", "list", "sources"],
+        returncode=returncode,
+        stdout=stdout,
+        stderr="",
+    )
+
+
+def _which_only(*available: str) -> object:
+    """Return a ``shutil.which`` stub that resolves only the given names."""
+
+    def _which(cmd: str) -> str | None:
+        return f"/usr/bin/{cmd}" if cmd in available else None
+
+    return _which
+
+
+class TestResolveActiveMicCardPactl:
+    """v0.31.6 T2.1: pactl path runs before the arecord fallback."""
+
+    def test_pactl_match_returns_card_from_alsa_card_property(self) -> None:
+        mind_config = SimpleNamespace(
+            voice_input_device_name="Razer BlackShark V2 Pro Wireless Analog Stereo"
+        )
+        with (
+            patch.object(_active_mic.shutil, "which", side_effect=_which_only("pactl")),
+            patch.object(
+                _active_mic.subprocess,
+                "run",
+                return_value=_pactl_completed(_PACTL_LIST_SOURCES_OUTPUT),
+            ),
+        ):
+            assert resolve_active_mic_card(mind_config=mind_config) == 2
+
+    def test_pactl_unavailable_falls_through_to_arecord(self) -> None:
+        mind_config = SimpleNamespace(voice_input_device_name="Razer BlackShark V2 Pro")
+        # ``pactl`` missing → fall through; ``arecord`` matches.
+        with (
+            patch.object(_active_mic.shutil, "which", side_effect=_which_only("arecord")),
+            patch.object(
+                _active_mic.subprocess,
+                "run",
+                return_value=_completed(_ARECORD_L_OUTPUT),
+            ),
+        ):
+            assert resolve_active_mic_card(mind_config=mind_config) == 2
+
+    def test_pactl_no_match_falls_through_to_arecord(self) -> None:
+        mind_config = SimpleNamespace(voice_input_device_name="Razer BlackShark V2 Pro")
+        # pactl runs but lists only an unrelated source; arecord then matches.
+        unrelated_pactl = """Source #46
+\tName: alsa_input.foo
+\tDescription: Some Other Mic Analog Stereo
+\tProperties:
+\t\talsa.card = "9"
+"""
+        responses = [
+            _pactl_completed(unrelated_pactl),
+            _completed(_ARECORD_L_OUTPUT),
+        ]
+        with (
+            patch.object(_active_mic.shutil, "which", side_effect=_which_only("pactl", "arecord")),
+            patch.object(_active_mic.subprocess, "run", side_effect=responses),
+        ):
+            assert resolve_active_mic_card(mind_config=mind_config) == 2
+
+    def test_pactl_timeout_falls_through_to_arecord(self) -> None:
+        mind_config = SimpleNamespace(voice_input_device_name="Razer BlackShark V2 Pro")
+        responses: list[object] = [
+            subprocess.TimeoutExpired(cmd="pactl", timeout=5),
+            _completed(_ARECORD_L_OUTPUT),
+        ]
+        with (
+            patch.object(_active_mic.shutil, "which", side_effect=_which_only("pactl", "arecord")),
+            patch.object(_active_mic.subprocess, "run", side_effect=responses),
+        ):
+            assert resolve_active_mic_card(mind_config=mind_config) == 2
+
+    def test_pactl_nonzero_exit_falls_through_to_arecord(self) -> None:
+        mind_config = SimpleNamespace(voice_input_device_name="Razer BlackShark V2 Pro")
+        responses = [
+            _pactl_completed("", returncode=1),
+            _completed(_ARECORD_L_OUTPUT),
+        ]
+        with (
+            patch.object(_active_mic.shutil, "which", side_effect=_which_only("pactl", "arecord")),
+            patch.object(_active_mic.subprocess, "run", side_effect=responses),
+        ):
+            assert resolve_active_mic_card(mind_config=mind_config) == 2
+
+    def test_normalize_device_name_strips_pulse_suffixes(self) -> None:
+        normalised = _active_mic._normalize_device_name(
+            "Razer BlackShark V2 Pro Wireless Analog Stereo"
+        )
+        assert "razer blackshark v2 pro" in normalised
+        assert "analog stereo" not in normalised
+
+    def test_normalize_strips_hw_suffix(self) -> None:
+        normalised = _active_mic._normalize_device_name("Razer: USB Audio (hw:2,0)")
+        assert normalised == "razer"
+
+    def test_pactl_partial_match_via_normalised_substring(self) -> None:
+        # pactl Description has the long Pulse name; persisted is the shorter
+        # operator wizard pick. Forward substring after normalise must match.
+        mind_config = SimpleNamespace(voice_input_device_name="Razer BlackShark V2 Pro")
+        with (
+            patch.object(_active_mic.shutil, "which", side_effect=_which_only("pactl")),
+            patch.object(
+                _active_mic.subprocess,
+                "run",
+                return_value=_pactl_completed(_PACTL_LIST_SOURCES_OUTPUT),
+            ),
+        ):
+            assert resolve_active_mic_card(mind_config=mind_config) == 2
