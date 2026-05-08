@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { AlertTriangleIcon, SpeakerIcon } from "lucide-react";
 
 import type { z } from "zod";
@@ -41,14 +42,16 @@ interface DeviceContentionBannerProps {
  *   them that way already).
  * * The ``suggested_actions`` tokens get rendered as an advice
  *   line beneath the chips for users with no enumerated alternative.
- * * No i18n yet — matches the rest of ``VoiceStep`` which is still
- *   English-only in the onboarding path. Will be migrated wholesale
- *   when the onboarding page picks up ``useTranslation``.
+ * * v0.32.5 Phase 4.B.2: i18n migrated. Strings live under
+ *   ``voice.deviceContention.*`` (en/pt-BR/es). The body uses
+ *   ``<Trans>`` for the inline ``font-mono`` spans on processHint +
+ *   hostApi so per-locale phrasing keeps the typography intact.
  */
 export function DeviceContentionBanner({
   payload,
   onSelectAlternative,
 }: DeviceContentionBannerProps) {
+  const { t } = useTranslation("voice");
   const [retryingIndex, setRetryingIndex] = useState<number | null>(null);
 
   const handleSelect = useCallback(
@@ -62,6 +65,8 @@ export function DeviceContentionBanner({
 
   const disabled = onSelectAlternative === null;
   const { alternative_devices: alternatives, contending_process_hint, host_api } = payload;
+  const hostApiLabel =
+    host_api ?? t("deviceContention.selectedDeviceFallback");
 
   return (
     <div
@@ -70,24 +75,26 @@ export function DeviceContentionBanner({
     >
       <div className="flex items-center gap-2 text-xs font-medium text-[var(--svx-color-text-primary)]">
         <AlertTriangleIcon className="size-4 text-[var(--svx-color-warning)]" />
-        Microphone is held by another audio client
+        {t("deviceContention.title")}
       </div>
       <p className="text-[11px] text-[var(--svx-color-text-secondary)]">
         {contending_process_hint ? (
-          <>
-            <span className="font-mono">{contending_process_hint}</span> is
-            currently capturing on{" "}
-            <span className="font-mono">{host_api ?? "the selected device"}</span>
-            . Sovyx can try a session-manager virtual device instead.
-          </>
+          <Trans
+            i18nKey="deviceContention.namedBody"
+            ns="voice"
+            values={{ processHint: contending_process_hint, hostApi: hostApiLabel }}
+            components={[
+              <span className="font-mono" key="proc" />,
+              <span className="font-mono" key="api" />,
+            ]}
+          />
         ) : (
-          <>
-            Another audio app (usually PipeWire, PulseAudio, or a videoconf
-            client) is capturing on{" "}
-            <span className="font-mono">{host_api ?? "the selected device"}</span>
-            . Sovyx can switch to a session-manager virtual device instead —
-            pick one below to retry.
-          </>
+          <Trans
+            i18nKey="deviceContention.anonymousBody"
+            ns="voice"
+            values={{ hostApi: hostApiLabel }}
+            components={[<span className="font-mono" key="api" />]}
+          />
         )}
       </p>
 
@@ -113,7 +120,9 @@ export function DeviceContentionBanner({
                     ? "opacity-60 cursor-not-allowed"
                     : "hover:border-[var(--svx-color-warning)] hover:text-[var(--svx-color-warning)]",
                 ].join(" ")}
-                aria-label={`Retry with ${device.name}`}
+                aria-label={t("deviceContention.retryWith", {
+                  deviceName: device.name,
+                })}
                 data-testid={`device-contention-chip-${device.index}`}
               >
                 <SpeakerIcon className="size-3" />
@@ -125,7 +134,7 @@ export function DeviceContentionBanner({
                 </span>
                 {isRetrying ? (
                   <span className="text-[10px] text-[var(--svx-color-info)]">
-                    retrying…
+                    {t("deviceContention.retrying")}
                   </span>
                 ) : null}
               </button>
@@ -134,8 +143,7 @@ export function DeviceContentionBanner({
         </div>
       ) : (
         <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
-          No enumerated alternatives — try closing the app that is holding the
-          mic (commonly a videoconference client) and retry.
+          {t("deviceContention.noAlternatives")}
         </p>
       )}
     </div>

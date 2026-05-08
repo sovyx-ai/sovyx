@@ -18,6 +18,7 @@
  */
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   CheckCircle2Icon,
   DownloadIcon,
@@ -58,39 +59,51 @@ type ButtonState =
   | { kind: "success"; result: VoiceTestOutputResult }
   | { kind: "error"; code: VoiceTestErrorCode | null; message: string };
 
-function formatPeakDb(peak: number | null | undefined): string | null {
+function formatPeakDb(
+  peak: number | null | undefined,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string | null {
   if (peak === null || peak === undefined) return null;
-  return `${peak.toFixed(1)} dBFS peak`;
+  return t("ttsTest.peakLabel", { peak: peak.toFixed(1) });
 }
 
-function messageForCode(code: VoiceTestErrorCode | null): string {
+/**
+ * Map a server-side ``VoiceTestErrorCode`` to the matching i18n key
+ * under ``voice:ttsTest.errorCodes``. Pre-v0.32.4 this returned
+ * hardcoded English strings; the translation now happens at the
+ * component boundary via ``t()`` so pt-BR + es operators get their
+ * locale's copy. The error codes themselves are STABLE backend
+ * contract identifiers — never translated; only the operator-facing
+ * messages are.
+ */
+function i18nKeyForCode(code: VoiceTestErrorCode | null): string {
   switch (code) {
     case "disabled":
-      return "Voice device test is disabled by configuration.";
+      return "ttsTest.errorCodes.disabled";
     case "pipeline_active":
-      return "Voice pipeline is running — disable it to run the test.";
+      return "ttsTest.errorCodes.pipelineActive";
     case "tts_unavailable":
-      return "No TTS Python package installed. Run pip install sovyx[voice].";
+      return "ttsTest.errorCodes.ttsUnavailable";
     case "models_not_downloaded":
-      return "TTS model files are not on disk. Download them to continue.";
+      return "ttsTest.errorCodes.modelsNotDownloaded";
     case "device_not_found":
-      return "Output device not found.";
+      return "ttsTest.errorCodes.deviceNotFound";
     case "device_busy":
-      return "Output device is in use by another app.";
+      return "ttsTest.errorCodes.deviceBusy";
     case "permission_denied":
-      return "Permission denied for output device.";
+      return "ttsTest.errorCodes.permissionDenied";
     case "unsupported_samplerate":
-      return "This device rejected the synthesis sample rate.";
+      return "ttsTest.errorCodes.unsupportedSamplerate";
     case "unsupported_channels":
-      return "This device rejected the requested channel layout.";
+      return "ttsTest.errorCodes.unsupportedChannels";
     case "unsupported_format":
-      return "Windows mixer format conflict — change the device format in Windows Sound settings.";
+      return "ttsTest.errorCodes.unsupportedFormat";
     case "buffer_size_invalid":
-      return "Device buffer size rejected — try a different device or restart the audio service.";
+      return "ttsTest.errorCodes.bufferSizeInvalid";
     case "invalid_request":
-      return "Request rejected by the server.";
+      return "ttsTest.errorCodes.invalidRequest";
     default:
-      return "Playback failed.";
+      return "ttsTest.errorCodes.fallback";
   }
 }
 
@@ -100,45 +113,48 @@ function TtsTestButtonImpl({
   voice,
   disabled,
 }: TtsTestButtonProps) {
+  const { t } = useTranslation("voice");
   const [state, setState] = useState<ButtonState>({ kind: "idle" });
   const cancelRef = useRef(false);
 
-  const poll = useCallback(async (jobId: string): Promise<void> => {
-    const start = performance.now();
-    while (!cancelRef.current) {
-      if (performance.now() - start > POLL_TIMEOUT_MS) {
-        setState({
-          kind: "error",
-          code: "internal_error",
-          message: "Timed out waiting for playback to finish.",
-        });
-        return;
-      }
-      try {
-        const result = await api.get<VoiceTestOutputResult>(
-          `/api/voice/test/output/${jobId}`,
-          { schema: VoiceTestOutputResultSchema },
-        );
-        if (result.status === "done") {
-          setState({ kind: "success", result });
-          return;
-        }
-        if (result.status === "error") {
+  const poll = useCallback(
+    async (jobId: string): Promise<void> => {
+      const start = performance.now();
+      while (!cancelRef.current) {
+        if (performance.now() - start > POLL_TIMEOUT_MS) {
           setState({
             kind: "error",
-            code: (result.code ?? null) as VoiceTestErrorCode | null,
-            message:
-              result.detail ||
-              messageForCode((result.code ?? null) as VoiceTestErrorCode | null),
+            code: "internal_error",
+            message: t("ttsTest.timeoutMessage"),
           });
           return;
         }
-      } catch {
-        // Transient GET failure — retry on next tick.
+        try {
+          const result = await api.get<VoiceTestOutputResult>(
+            `/api/voice/test/output/${jobId}`,
+            { schema: VoiceTestOutputResultSchema },
+          );
+          if (result.status === "done") {
+            setState({ kind: "success", result });
+            return;
+          }
+          if (result.status === "error") {
+            const errorCode = (result.code ?? null) as VoiceTestErrorCode | null;
+            setState({
+              kind: "error",
+              code: errorCode,
+              message: result.detail || t(i18nKeyForCode(errorCode)),
+            });
+            return;
+          }
+        } catch {
+          // Transient GET failure — retry on next tick.
+        }
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    }
-  }, []);
+    },
+    [t],
+  );
 
   const onClick = useCallback(async () => {
     cancelRef.current = false;
@@ -156,12 +172,13 @@ function TtsTestButtonImpl({
       );
       await poll(job.job_id);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Network error";
+      const fallbackMsg =
+        err instanceof Error ? err.message : t("ttsTest.networkError");
       // Try to pull the server's machine-readable code AND human-readable
       // detail from the body. Prefer ``detail`` over the canned message
       // whenever the backend attached one — it's the only place a device-
       // specific error (e.g. "Output device 7 busy") actually reaches the
-      // UI, so collapsing it to messageForCode(code) would hide real info.
+      // UI, so collapsing it to t(i18nKeyForCode(code)) would hide real info.
       let code: VoiceTestErrorCode | null = null;
       let detail: string | null = null;
       if (err instanceof ApiError && err.body) {
@@ -169,10 +186,10 @@ function TtsTestButtonImpl({
         if (typeof raw.code === "string") code = raw.code as VoiceTestErrorCode;
         if (typeof raw.detail === "string" && raw.detail) detail = raw.detail;
       }
-      const message = detail ?? (code ? messageForCode(code) : msg);
+      const message = detail ?? (code ? t(i18nKeyForCode(code)) : fallbackMsg);
       setState({ kind: "error", code, message });
     }
-  }, [deviceId, language, voice, poll]);
+  }, [deviceId, language, voice, poll, t]);
 
   // Signal the poll loop to bail if the component unmounts mid-test —
   // otherwise the interval keeps firing, setState fires on a dead tree,
@@ -196,12 +213,12 @@ function TtsTestButtonImpl({
         {isRunning ? (
           <>
             <LoaderIcon className="mr-2 size-3.5 animate-spin" />
-            Playing test…
+            {t("ttsTest.playing")}
           </>
         ) : (
           <>
             <VolumeXIcon className="mr-2 size-3.5" />
-            Test speakers
+            {t("ttsTest.testSpeakers")}
           </>
         )}
       </Button>
@@ -213,10 +230,12 @@ function TtsTestButtonImpl({
         >
           <CheckCircle2Icon className="size-3.5 shrink-0" />
           <span>
-            Played successfully
-            {formatPeakDb(state.result.peak_db)
-              ? ` — ${formatPeakDb(state.result.peak_db)}`
-              : ""}
+            {(() => {
+              const peakLabel = formatPeakDb(state.result.peak_db, t);
+              return peakLabel
+                ? t("ttsTest.successWithPeak", { peak: peakLabel })
+                : t("ttsTest.success");
+            })()}
           </span>
         </div>
       )}
@@ -245,6 +264,7 @@ function TtsTestButtonImpl({
  * every Test-Speakers render (the hook lives under an error branch).
  */
 function MissingModelsCTA() {
+  const { t } = useTranslation("voice");
   const { startDownload, downloading, download } = useVoiceModels();
   return (
     <Button
@@ -261,12 +281,14 @@ function MissingModelsCTA() {
       {downloading ? (
         <>
           <LoaderIcon className="mr-2 size-3.5 animate-spin" />
-          Downloading{download?.current_model ? ` ${download.current_model}` : "…"}
+          {download?.current_model
+            ? t("ttsTest.downloading", { model: download.current_model })
+            : t("ttsTest.downloadingNoModel")}
         </>
       ) : (
         <>
           <DownloadIcon className="mr-2 size-3.5" />
-          Download voice models
+          {t("ttsTest.downloadCta")}
         </>
       )}
     </Button>

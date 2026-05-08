@@ -547,5 +547,41 @@
       "api_rollback_failed": "Failed to roll back calibration",
       "ws_connection_error": "Calibration WebSocket connection error"
     }
+  },
+  "deviceContention": {
+    "title": "Microphone is held by another audio client",
+    "namedBody": "<0>{{processHint}}</0> is currently capturing on <1>{{hostApi}}</1>. Sovyx can try a session-manager virtual device instead.",
+    "anonymousBody": "Another audio app (usually PipeWire, PulseAudio, or a videoconf client) is capturing on <0>{{hostApi}}</0>. Sovyx can switch to a session-manager virtual device instead — pick one below to retry.",
+    "selectedDeviceFallback": "the selected device",
+    "retryWith": "Retry with {{deviceName}}",
+    "retrying": "retrying…",
+    "noAlternatives": "No enumerated alternatives — try closing the app that is holding the mic (commonly a videoconference client) and retry."
+  },
+  "ttsTest": {
+    "playing": "Playing test…",
+    "testSpeakers": "Test speakers",
+    "success": "Played successfully",
+    "successWithPeak": "Played successfully — {{peak}}",
+    "peakLabel": "{{peak}} dBFS peak",
+    "downloading": "Downloading {{model}}",
+    "downloadingNoModel": "Downloading…",
+    "downloadCta": "Download voice models",
+    "timeoutMessage": "Timed out waiting for playback to finish.",
+    "networkError": "Network error",
+    "errorCodes": {
+      "disabled": "Voice device test is disabled by configuration.",
+      "pipelineActive": "Voice pipeline is running — disable it to run the test.",
+      "ttsUnavailable": "No TTS Python package installed. Run pip install sovyx[voice].",
+      "modelsNotDownloaded": "TTS model files are not on disk. Download them to continue.",
+      "deviceNotFound": "Output device not found.",
+      "deviceBusy": "Output device is in use by another app.",
+      "permissionDenied": "Permission denied for output device.",
+      "unsupportedSamplerate": "This device rejected the synthesis sample rate.",
+      "unsupportedChannels": "This device rejected the requested channel layout.",
+      "unsupportedFormat": "Windows mixer format conflict — change the device format in Windows Sound settings.",
+      "bufferSizeInvalid": "Device buffer size rejected — try a different device or restart the audio service.",
+      "invalidRequest": "Request rejected by the server.",
+      "fallback": "Playback failed."
+    }
   }
 }

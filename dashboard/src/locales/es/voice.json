@@ -547,5 +547,41 @@
       "api_rollback_failed": "Error al retroceder calibración",
       "ws_connection_error": "Error de conexión WebSocket de calibración"
     }
+  },
+  "deviceContention": {
+    "title": "El micrófono está siendo usado por otro cliente de audio",
+    "namedBody": "<0>{{processHint}}</0> está capturando en <1>{{hostApi}}</1>. Sovyx puede probar un dispositivo virtual del gestor de sesión.",
+    "anonymousBody": "Otra app de audio (generalmente PipeWire, PulseAudio o un cliente de videoconferencia) está capturando en <0>{{hostApi}}</0>. Sovyx puede cambiar a un dispositivo virtual del gestor de sesión — elige uno abajo para reintentar.",
+    "selectedDeviceFallback": "el dispositivo seleccionado",
+    "retryWith": "Reintentar con {{deviceName}}",
+    "retrying": "reintentando…",
+    "noAlternatives": "Sin alternativas enumeradas — prueba cerrar la app que está usando el micrófono (generalmente un cliente de videoconferencia) y reintenta."
+  },
+  "ttsTest": {
+    "playing": "Reproduciendo prueba…",
+    "testSpeakers": "Probar altavoces",
+    "success": "Reproducido correctamente",
+    "successWithPeak": "Reproducido correctamente — {{peak}}",
+    "peakLabel": "pico {{peak}} dBFS",
+    "downloading": "Descargando {{model}}",
+    "downloadingNoModel": "Descargando…",
+    "downloadCta": "Descargar modelos de voz",
+    "timeoutMessage": "Tiempo agotado esperando que termine la reproducción.",
+    "networkError": "Error de red",
+    "errorCodes": {
+      "disabled": "Prueba del dispositivo de voz deshabilitada por la configuración.",
+      "pipelineActive": "El pipeline de voz está en ejecución — desactívalo para ejecutar la prueba.",
+      "ttsUnavailable": "Paquete Python de TTS no instalado. Ejecuta pip install sovyx[voice].",
+      "modelsNotDownloaded": "Los modelos de TTS no están en disco. Descárgalos para continuar.",
+      "deviceNotFound": "Dispositivo de salida no encontrado.",
+      "deviceBusy": "El dispositivo de salida está en uso por otra aplicación.",
+      "permissionDenied": "Permiso denegado para el dispositivo de salida.",
+      "unsupportedSamplerate": "Este dispositivo rechazó la frecuencia de muestreo de la síntesis.",
+      "unsupportedChannels": "Este dispositivo rechazó el diseño de canales solicitado.",
+      "unsupportedFormat": "Conflicto de formato del mezclador de Windows — cambia el formato del dispositivo en Configuración de Sonido.",
+      "bufferSizeInvalid": "Tamaño de búfer rechazado por el dispositivo — prueba otro dispositivo o reinicia el servicio de audio.",
+      "invalidRequest": "Solicitud rechazada por el servidor.",
+      "fallback": "Falló la reproducción."
+    }
   }
 }

@@ -7,6 +7,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+// v0.32.5 Phase 4.B.2 — initialise i18n synchronously so the
+// component's ``useTranslation("voice")`` resolves the ``ttsTest.*``
+// keys instead of returning the bare key strings.
+import "@/lib/i18n";
 import { TtsTestButton } from "./TtsTestButton";
 import { ApiError } from "@/lib/api";
 
