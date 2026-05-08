@@ -2129,6 +2129,51 @@ export interface CalibrationFeatureFlagUpdateRequest {
 }
 
 /**
+ * BT.B.3 (v0.32.0) — response for ``GET /api/voice/calibration/signing-key``.
+ *
+ * Read-only probe used by the dashboard's "Voice signing key" section
+ * to render status (Generated / Not yet generated) + the public-key
+ * fingerprint.
+ */
+export interface SigningKeyStatusResponse {
+  exists: boolean;
+  /** First 8 hex chars of SHA-256 over public key PEM. Null when missing/unreadable. */
+  fingerprint_short: string | null;
+  public_key_path: string | null;
+  resolved_mind_id: string;
+}
+
+/**
+ * BT.B.3 — body for ``POST /api/voice/calibration/generate-signing-key``.
+ */
+export interface GenerateSigningKeyRequest {
+  /** Overwrite an existing keypair. Default false → 409 on conflict. */
+  force?: boolean;
+  /** Sentinel-resolvable mind id; ``"default"`` resolves to active mind. */
+  mind_id?: string;
+}
+
+/**
+ * BT.B.3 — response for ``POST /api/voice/calibration/generate-signing-key``.
+ *
+ * Carries the public key half only. The private key NEVER leaves the
+ * daemon — it lives at
+ * ``<data_dir>/<mind_id>/calibration.signing-key.priv`` (POSIX
+ * ``0o600`` / Windows inherited NTFS ACL) and is read by the signer
+ * at calibration time via ``--signing-key <path>``.
+ */
+export interface GenerateSigningKeyResponse {
+  ok: boolean;
+  public_key_pem: string;
+  public_key_path: string;
+  private_key_path: string;
+  fingerprint_short: string;
+  /** ``"created"`` (no prior key) or ``"forced"`` (overwrote existing). */
+  mode: string;
+  resolved_mind_id: string;
+}
+
+/**
  * Returns true when the wizard status accepts no further transitions
  * (the WS server has closed after sending this snapshot).
  */

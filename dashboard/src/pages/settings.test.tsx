@@ -12,6 +12,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@/test/test-utils";
 import SettingsPage from "./settings";
+// v0.32.0 BT.B.1: the page now reads /api/onboarding/state via the
+// shared module-level singleton in ``useResolvedMindId``. Tests that
+// don't care about specific mind_id resolution can pre-seed the
+// singleton via ``__seedResolvedMindIdForTests`` so the hook's own
+// ``api.get`` never fires (preserves the chained
+// ``mockResolvedValueOnce`` ordering for the page's settings/config
+// /safety calls). Tests that DO care about the resolution path
+// reset the singleton + assert the hook fetched its own data.
+import {
+  __resetResolvedMindIdCacheForTests,
+  __seedResolvedMindIdForTests,
+} from "@/hooks/use-resolved-mind-id";
+import type { OnboardingState } from "@/types/api";
 
 vi.mock("@/lib/api", () => ({
   api: {
@@ -73,8 +86,30 @@ const mockMindConfig = {
   },
 };
 
+// v0.32.0 BT.B.1 — default seed for the singleton hook, so the
+// hook's own ``api.get`` never fires during page render. This
+// preserves the chained-mockResolvedValueOnce ordering for the page's
+// settings/config/safety calls (which would otherwise be disrupted
+// by the hook racing its own fetch through the shared queue).
+const DEFAULT_ONBOARDING_STATE: OnboardingState = {
+  complete: true,
+  mind_name: "TestMind",
+  mind_id: "test-mind",
+  provider_configured: true,
+  default_provider: "anthropic",
+  default_model: "claude-3",
+  ollama_available: false,
+  ollama_models: [],
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetResolvedMindIdCacheForTests();
+  // Pre-seed the singleton so the hook resolves synchronously to a
+  // sane default. Tests that need to drive the hook's resolution
+  // path explicitly call ``__resetResolvedMindIdCacheForTests`` then
+  // stage the /api/onboarding/state response on the FIFO queue.
+  __seedResolvedMindIdForTests(DEFAULT_ONBOARDING_STATE);
 });
 
 describe("SettingsPage", () => {
@@ -222,7 +257,20 @@ describe("SettingsPage", () => {
   // should never need to fire.
 
   it("threads resolved mindId from /api/onboarding/state to RecalibrateButton", async () => {
-    // Sequence: settings, config, safety, onboarding-state.
+    // v0.32.0 BT.B.1: pre-seed the singleton with a real mind_id so
+    // the hook resolves to ``meu-mind`` synchronously. The page
+    // itself no longer fetches /api/onboarding/state — the hook does.
+    __resetResolvedMindIdCacheForTests();
+    __seedResolvedMindIdForTests({
+      complete: true,
+      mind_name: "Real Mind",
+      mind_id: "meu-mind",
+      provider_configured: true,
+      default_provider: "anthropic",
+      default_model: "claude-3",
+      ollama_available: false,
+      ollama_models: [],
+    });
     mockApi.get
       .mockResolvedValueOnce(mockSettings)
       .mockResolvedValueOnce(mockMindConfig)
@@ -230,16 +278,6 @@ describe("SettingsPage", () => {
         confirmation_method: "inline",
         confirmation_channels: [],
         classification_fallback: "ask",
-      })
-      .mockResolvedValueOnce({
-        complete: true,
-        mind_name: "Real Mind",
-        mind_id: "meu-mind",
-        provider_configured: true,
-        default_provider: "anthropic",
-        default_model: "claude-3",
-        ollama_available: false,
-        ollama_models: [],
       });
 
     render(<SettingsPage />);
@@ -247,24 +285,34 @@ describe("SettingsPage", () => {
       expect(screen.getByText("INFO")).toBeInTheDocument();
     });
 
-    // Confirm /api/onboarding/state was fetched as part of the page load.
+    // The page no longer fetches /api/onboarding/state directly.
+    // The shared singleton owns that path; this assertion guards
+    // against a regression where someone re-adds the duplicate.
     const onboardingFetch = mockApi.get.mock.calls.find(
       (c) => (c[0] as string) === "/api/onboarding/state",
     );
-    expect(onboardingFetch).toBeDefined();
+    expect(onboardingFetch).toBeUndefined();
   });
+
+  // v0.32.0 BT.B.1 — the warn breadcrumb is now fired by the shared
+  // ``useResolvedMindId`` hook (singleton), not by the page itself.
+  // Message format moved from ``[settings] RecalibrateButton: ...``
+  // to ``[useResolvedMindId] resolved mind_id is unavailable ...``.
+  // Tests drive the hook's resolution by calling
+  // ``__resetResolvedMindIdCacheForTests`` (so the hook re-runs its
+  // fetch) and ALSO staging the /api/onboarding/state response as
+  // the FIRST item on the FIFO queue — the hook's fetch runs as a
+  // side effect of mount + before the page's own settings fetch.
 
   it("warns once when /api/onboarding/state returns null mind_id", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
+      // Reset so the singleton actually fires the hook fetch + observes
+      // the staged response. The mock queue order: hook reads first
+      // (subscribe happens during render), then the page's effects
+      // run (settings → config → safety).
+      __resetResolvedMindIdCacheForTests();
       mockApi.get
-        .mockResolvedValueOnce(mockSettings)
-        .mockResolvedValueOnce(mockMindConfig)
-        .mockResolvedValueOnce({
-          confirmation_method: "inline",
-          confirmation_channels: [],
-          classification_fallback: "ask",
-        })
         .mockResolvedValueOnce({
           complete: false,
           mind_name: "Sovyx",
@@ -274,6 +322,13 @@ describe("SettingsPage", () => {
           default_model: "",
           ollama_available: false,
           ollama_models: [],
+        })
+        .mockResolvedValueOnce(mockSettings)
+        .mockResolvedValueOnce(mockMindConfig)
+        .mockResolvedValueOnce({
+          confirmation_method: "inline",
+          confirmation_channels: [],
+          classification_fallback: "ask",
         });
 
       render(<SettingsPage />);
@@ -284,7 +339,7 @@ describe("SettingsPage", () => {
       // The single-fire warn breadcrumb should fire exactly once.
       await waitFor(() => {
         const matches = warnSpy.mock.calls.filter((args) =>
-          (args[0] as string).includes("RecalibrateButton"),
+          (args[0] as string).includes("[useResolvedMindId]"),
         );
         expect(matches.length).toBe(1);
         expect(matches[0]![0]).toContain('"default"');
@@ -297,14 +352,10 @@ describe("SettingsPage", () => {
   it("does NOT warn when /api/onboarding/state yields a real mind_id", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
+      // Reset + stage onboarding-state FIRST in the queue so the hook
+      // fetch consumes the real-mind response.
+      __resetResolvedMindIdCacheForTests();
       mockApi.get
-        .mockResolvedValueOnce(mockSettings)
-        .mockResolvedValueOnce(mockMindConfig)
-        .mockResolvedValueOnce({
-          confirmation_method: "inline",
-          confirmation_channels: [],
-          classification_fallback: "ask",
-        })
         .mockResolvedValueOnce({
           complete: true,
           mind_name: "Real Mind",
@@ -314,6 +365,13 @@ describe("SettingsPage", () => {
           default_model: "claude-3",
           ollama_available: false,
           ollama_models: [],
+        })
+        .mockResolvedValueOnce(mockSettings)
+        .mockResolvedValueOnce(mockMindConfig)
+        .mockResolvedValueOnce({
+          confirmation_method: "inline",
+          confirmation_channels: [],
+          classification_fallback: "ask",
         });
 
       render(<SettingsPage />);
@@ -321,11 +379,11 @@ describe("SettingsPage", () => {
         expect(screen.getByText("INFO")).toBeInTheDocument();
       });
 
-      // Allow the warn-once useEffect to settle. With a real mind id
+      // Allow the singleton fetch to settle. With a real mind id
       // resolved, the warn breadcrumb must NOT fire.
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 50));
       const matches = warnSpy.mock.calls.filter((args) =>
-        (args[0] as string).includes("RecalibrateButton"),
+        (args[0] as string).includes("[useResolvedMindId]"),
       );
       expect(matches.length).toBe(0);
     } finally {
@@ -401,5 +459,35 @@ describe("SettingsPage", () => {
         expect.objectContaining({ log_level: "DEBUG" }),
       );
     });
+  });
+
+  // ── BT.B.3 (v0.32.0) — SigningKeyCard wired into Settings page ──
+  //
+  // Note: dedicated unit tests for the card itself live in
+  // ``src/components/settings/signing-key-card.test.tsx``. We only
+  // need a single smoke test here to confirm the card mounts inside
+  // the page tree (alongside the other voice cards). Adding more page-
+  // level tests that mount ``SettingsPage`` would consume mocks from
+  // the queue and pollute the ``useResolvedMindId`` singleton state
+  // across tests, breaking earlier ``threads resolved mindId`` cases.
+
+  it("mounts the Voice signing key card alongside the rollback card", async () => {
+    mockApi.get.mockResolvedValueOnce(mockSettings);
+    render(<SettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText("INFO")).toBeInTheDocument();
+    });
+    // Stable test ids — survive i18n copy edits + section reorders.
+    expect(
+      screen.getByTestId("settings-signing-key-card"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("settings-rollback-card"),
+    ).toBeInTheDocument();
+    // Status row renders (proves the card finished its initial render
+    // without throwing despite the api.get mock being undefined).
+    expect(
+      screen.getByTestId("settings-signing-key-status"),
+    ).toBeInTheDocument();
   });
 });

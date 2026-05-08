@@ -1634,6 +1634,24 @@ export const CalibrationFeatureFlagUpdateRequestSchema = z.object({
   enabled: z.boolean(),
 });
 
+// BT.B.3 (v0.32.0) — Ed25519 signing-key generation surface.
+export const SigningKeyStatusResponseSchema = z.object({
+  exists: z.boolean(),
+  fingerprint_short: z.string().nullable(),
+  public_key_path: z.string().nullable(),
+  resolved_mind_id: z.string(),
+});
+
+export const GenerateSigningKeyResponseSchema = z.object({
+  ok: z.boolean(),
+  public_key_pem: z.string(),
+  public_key_path: z.string(),
+  private_key_path: z.string(),
+  fingerprint_short: z.string(),
+  mode: z.string(),
+  resolved_mind_id: z.string(),
+});
+
 /* ── Voice status receipt-check schema — v0.31.6 T3.1 ──
  *
  * Used by ``hooks/use-voice-running-verification.ts`` to confirm the

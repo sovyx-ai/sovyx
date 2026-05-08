@@ -71,6 +71,13 @@ from sovyx.voice.calibration import (
     rollback_calibration_profile,
 )
 from sovyx.voice.calibration._kb_cache import has_match
+from sovyx.voice.calibration._key_generation import (
+    SigningKeyExistsError,
+    generate_signing_key,
+    public_key_fingerprint_short,
+    signing_key_exists,
+    signing_key_paths,
+)
 from sovyx.voice.calibration._persistence import (
     CalibrationProfileRollbackError,
     list_calibration_backups,
@@ -117,6 +124,17 @@ _active_jobs: dict[str, asyncio.Task[None]] = {}
 # serialises the (check + register) so concurrent submissions for the
 # same mind serialise to "first wins, second gets 409".
 _START_LOCKS: LRULockDict[str] = LRULockDict(maxsize=256)
+
+# BT.B.3 (v0.32.0) — per-mind asyncio.Lock for the signing-key
+# generation endpoint. Mirrors ``_START_LOCKS``: two near-simultaneous
+# POSTs to ``/generate-signing-key`` for the same mind would both
+# observe ``signing_key_exists=False``, then both call
+# ``generate_signing_key`` — the second would silently overwrite the
+# first's freshly-written keypair, leaving operator A signing against
+# a key operator B replaced. The lock makes the (check + write)
+# atomic per mind. LRULockDict so the keys are evicted once the
+# operator stops touching them (CLAUDE.md anti-pattern #15).
+_SIGNING_KEY_LOCKS: LRULockDict[str] = LRULockDict(maxsize=256)
 
 
 # ====================================================================
@@ -379,6 +397,122 @@ class RollbackCalibrationResponse(BaseModel):
     resolved_mind_id_source: str = Field(
         ...,
         description="Same anti-pattern #35 contract as the /start endpoint.",
+    )
+
+
+class SigningKeyStatusResponse(BaseModel):
+    """Response for ``GET /api/voice/calibration/signing-key`` (BT.B.3).
+
+    Reports whether a calibration signing keypair already exists for
+    the resolved active mind, plus its public-key fingerprint when
+    present. The dashboard uses this to render the
+    ``"Generated <fingerprint>"`` vs ``"Not yet generated"`` status.
+    """
+
+    exists: bool = Field(
+        ...,
+        description=(
+            "True when EITHER half of the keypair already exists on "
+            "disk for the resolved mind. Partial presence is treated "
+            "as 'exists' for safety — overwriting half a keypair "
+            "would leave a mismatched pair on disk."
+        ),
+    )
+    fingerprint_short: str | None = Field(
+        default=None,
+        description=(
+            "First 8 hex chars of SHA-256 over the public key PEM. "
+            "Null when ``exists=False`` OR when the public key half "
+            "is missing/unreadable. Operator-facing short identifier."
+        ),
+    )
+    public_key_path: str | None = Field(
+        default=None,
+        description=("Absolute path to the public key file. Null when ``exists=False``."),
+    )
+    resolved_mind_id: str = Field(
+        ...,
+        description="Mind whose key is reported (sentinel-resolved).",
+    )
+
+
+class GenerateSigningKeyRequest(BaseModel):
+    """Body for ``POST /api/voice/calibration/generate-signing-key``."""
+
+    force: bool = Field(
+        default=False,
+        description=(
+            "When True, overwrite any existing keypair. WARNING: "
+            "every calibration profile signed by the previous key "
+            "will fail signature verification under STRICT mode and "
+            "must be re-signed (or accepted in LENIENT mode with a "
+            "WARN). Default: refuse to overwrite (HTTP 409)."
+        ),
+    )
+    mind_id: str = Field(
+        default="default",
+        min_length=1,
+        max_length=64,
+        description=(
+            "Owning mind. Same sentinel-resolution contract as "
+            '``/start`` — ``"default"`` resolves to the active '
+            "mind via :func:`resolve_active_mind_id_for_request`."
+        ),
+    )
+
+
+class GenerateSigningKeyResponse(BaseModel):
+    """Response for ``POST /api/voice/calibration/generate-signing-key``.
+
+    Carries ONLY the public key half (PEM string + path). The private
+    key NEVER leaves the daemon — it lives at
+    ``<data_dir>/<mind_id>/calibration.signing-key.priv`` with POSIX
+    perms ``0o600`` (Windows: inherited NTFS ACL) and is read by the
+    signer at calibration time via the ``--signing-key <path>`` flag.
+    """
+
+    ok: bool = Field(
+        default=True,
+        description="Always True on a 2xx response (echoed for client convenience).",
+    )
+    public_key_pem: str = Field(
+        ...,
+        description=(
+            "The freshly-generated public key in SubjectPublicKeyInfo "
+            "PEM. Operator may copy this to a secondary trust store "
+            "or compare against the fingerprint."
+        ),
+    )
+    public_key_path: str = Field(
+        ...,
+        description=(
+            "Absolute path to the persisted public key on disk "
+            "(``<data_dir>/<mind_id>/calibration.signing-key.pub``)."
+        ),
+    )
+    private_key_path: str = Field(
+        ...,
+        description=(
+            "Absolute path to the persisted private key on disk. "
+            "The file contents are NEVER returned in the response."
+        ),
+    )
+    fingerprint_short: str = Field(
+        ...,
+        description=(
+            "First 8 hex chars of SHA-256 over the public key PEM "
+            "bytes. Operator-facing short identifier."
+        ),
+    )
+    mode: str = Field(
+        ...,
+        description=(
+            '``"created"`` (no prior key) or ``"forced"`` (existing key was overwritten).'
+        ),
+    )
+    resolved_mind_id: str = Field(
+        ...,
+        description="Mind whose key was generated (sentinel-resolved).",
     )
 
 
@@ -758,6 +892,155 @@ async def set_calibration_feature_flag(
         enabled=body.enabled,
         runtime_override_active=body.enabled != boot,
         platform_supported=sys.platform == "linux",
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# Signing-key generation endpoints (BT.B.3 — v0.32.0)
+# ────────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/signing-key",
+    response_model=SigningKeyStatusResponse,
+)
+async def get_signing_key_status(
+    request: Request,
+    mind_id: str = "default",
+) -> SigningKeyStatusResponse:
+    """Report whether a calibration signing keypair exists (BT.B.3).
+
+    Read-only probe. The dashboard's "Voice signing key" section calls
+    this on mount to render the status badge + fingerprint. Same
+    sentinel-resolution contract as the other calibration endpoints.
+
+    The fingerprint + path are populated only when the public key is
+    readable; a truncated/corrupt public key returns
+    ``fingerprint_short=None`` so the dashboard can render
+    "Generated (key file unreadable — re-generate)" without crashing.
+    """
+    data_dir = _resolve_data_dir(request)
+    resolved_mind_id, _source = await _resolve_mind_id_from_sentinel(request, mind_id)
+    exists = await asyncio.to_thread(
+        signing_key_exists,
+        data_dir=data_dir,
+        mind_id=resolved_mind_id,
+    )
+    if not exists:
+        return SigningKeyStatusResponse(
+            exists=False,
+            fingerprint_short=None,
+            public_key_path=None,
+            resolved_mind_id=resolved_mind_id,
+        )
+
+    _priv, pub_path = signing_key_paths(data_dir=data_dir, mind_id=resolved_mind_id)
+    fingerprint: str | None = None
+    if pub_path.is_file():
+        try:
+            pub_bytes = await asyncio.to_thread(pub_path.read_bytes)
+            fingerprint = public_key_fingerprint_short(pub_bytes)
+        except OSError:
+            # Permission / disk error reading the file. Surface as
+            # "exists but fingerprint unknown" so the dashboard can
+            # show an actionable warning.
+            fingerprint = None
+
+    return SigningKeyStatusResponse(
+        exists=True,
+        fingerprint_short=fingerprint,
+        public_key_path=str(pub_path),
+        resolved_mind_id=resolved_mind_id,
+    )
+
+
+@router.post(
+    "/generate-signing-key",
+    response_model=GenerateSigningKeyResponse,
+)
+async def generate_signing_key_endpoint(
+    request: Request,
+    body: GenerateSigningKeyRequest,
+) -> GenerateSigningKeyResponse:
+    """Generate an Ed25519 calibration signing keypair (BT.B.3).
+
+    The CLI counterpart is ``sovyx voice generate-signing-key``;
+    either path produces identical effects (per-mind lock guarantees
+    the (check + write) atomicity within a single daemon process).
+
+    HTTP semantics:
+
+    * 200 — keypair generated; response carries public key PEM +
+      paths + fingerprint.
+    * 409 — key already exists and ``force=False`` (default). The
+      operator must explicitly opt into ``{"force": true}`` to
+      overwrite. Detail message names both file paths so the
+      operator can copy them out before re-running.
+    * 500 — filesystem refused the write (read-only mount, full
+      disk, EACCES, etc.). The error text carries the underlying
+      OSError message.
+
+    Concurrency: per-mind ``asyncio.Lock`` (LRULockDict-backed)
+    serialises (check + write) — two near-simultaneous POSTs for
+    the same mind cannot race into a silent-overwrite. Mirror of
+    the rc.2 fix on ``/start``.
+
+    Privacy: the response NEVER includes the private key bytes.
+    The private key stays on disk under ``0o600`` (POSIX) and is
+    read by the signer at calibration time via the
+    ``--signing-key <path>`` flag.
+    """
+    data_dir = _resolve_data_dir(request)
+    resolved_mind_id, resolved_source = await _resolve_mind_id_from_sentinel(
+        request,
+        body.mind_id,
+    )
+    if resolved_mind_id != body.mind_id:
+        logger.info(
+            "voice.calibration.signing_key.mind_id_resolved",
+            requested=body.mind_id,
+            resolved_hash=short_hash(resolved_mind_id),
+            source=resolved_source,
+        )
+
+    lock = _SIGNING_KEY_LOCKS.setdefault(resolved_mind_id)
+    async with lock:
+        try:
+            result = await asyncio.to_thread(
+                generate_signing_key,
+                data_dir=data_dir,
+                mind_id=resolved_mind_id,
+                force=body.force,
+                source="dashboard",
+            )
+        except SigningKeyExistsError as exc:
+            logger.info(
+                "voice.calibration.signing_key.refused_overwrite",
+                mind_id_hash=short_hash(resolved_mind_id),
+            )
+            raise HTTPException(
+                status_code=HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except OSError as exc:
+            logger.warning(
+                "voice.calibration.signing_key.write_failed",
+                mind_id_hash=short_hash(resolved_mind_id),
+                reason=str(exc)[:200],
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not write signing key: {exc}",
+            ) from exc
+
+    return GenerateSigningKeyResponse(
+        ok=True,
+        public_key_pem=result.public_key_pem,
+        public_key_path=str(result.public_key_path),
+        private_key_path=str(result.private_key_path),
+        fingerprint_short=result.fingerprint_short,
+        mode="forced" if body.force else "created",
+        resolved_mind_id=resolved_mind_id,
     )
 
 

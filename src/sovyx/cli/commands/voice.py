@@ -535,3 +535,166 @@ def train_wake_word(
             f"[red]Unexpected non-terminal state:[/red] {final_state.status.value}",
         )
         raise typer.Exit(code=1)
+
+
+# ── BT.B.3 v0.32.0 — Ed25519 calibration signing-key generation ─────
+
+
+def _resolve_data_dir_for_signing_key() -> Path:
+    """Resolve the Sovyx data directory the signing key will live under.
+
+    Mirrors :func:`_resolve_ledger_path` and :func:`_resolve_training_root`:
+    pull ``data_dir`` from the live :class:`EngineConfig` so the CLI
+    writes to the same location the daemon (and dashboard) reads from.
+    Fallback to ``~/.sovyx`` when config loading fails (pre-init,
+    corrupted YAML, etc.).
+    """
+    try:
+        from sovyx.engine.config import EngineConfig  # noqa: PLC0415
+
+        return EngineConfig().data_dir
+    except Exception:  # noqa: BLE001 — fall back gracefully
+        return Path.home() / ".sovyx"
+
+
+def _resolve_mind_id_for_signing_key(data_dir: Path, mind_id: str | None) -> str:
+    """Resolve the per-mind directory the signing key lands under.
+
+    When ``--mind-id`` is passed explicitly, trust the operator (multi-
+    mind future-proofing). Otherwise discover the first mind directory
+    under ``data_dir`` (same scan ``sovyx start`` does), and fall back
+    to ``"default"`` when none exists. The fallback matches how
+    operator-test installs (``sovyx init`` never run) lay out the
+    filesystem; the resulting ``<data_dir>/default/`` directory is
+    created on demand by :func:`generate_signing_key`.
+
+    CLAUDE.md anti-pattern #33: don't assume a registry method exists;
+    do the filesystem discovery defensively.
+    """
+    if mind_id is not None and mind_id.strip():
+        return mind_id.strip()
+
+    if data_dir.exists():
+        for child in sorted(data_dir.iterdir()):
+            if child.is_dir() and (child / "mind.yaml").exists():
+                return child.name
+    return "default"
+
+
+@voice_app.command("generate-signing-key")
+def generate_signing_key(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Overwrite an existing signing keypair. WARNING: every "
+            "calibration profile that was signed by the previous key "
+            "will fail signature verification under STRICT mode and "
+            "must be re-signed (or accepted in LENIENT mode with a "
+            "WARN). Default: refuse to overwrite."
+        ),
+    ),
+    output: str = typer.Option(
+        "",
+        "--output",
+        help=(
+            "Override the private-key path. The public key is written "
+            "next to it (`<output>.pub` derived from `<output>.priv`). "
+            "Default: <data_dir>/<mind_id>/calibration.signing-key.priv"
+        ),
+    ),
+    mind_id: str = typer.Option(
+        "",
+        "--mind-id",
+        help=(
+            "Owning mind. Empty = auto-detect from <data_dir>/<*>/mind.yaml; "
+            "falls back to 'default' when no mind is configured."
+        ),
+    ),
+) -> None:
+    """Generate an Ed25519 signing keypair for calibration profiles.
+
+    Persists ``<data_dir>/<mind_id>/calibration.signing-key.priv``
+    (PKCS8 PEM, ``0o600`` POSIX) and ``calibration.signing-key.pub``
+    (SubjectPublicKeyInfo PEM, ``0o644`` POSIX). On Windows the
+    POSIX chmod calls are no-ops; the inherited NTFS ACL governs
+    access.
+
+    Operator workflow:
+
+    1. ``sovyx voice generate-signing-key`` — produces the keypair on
+       first run (refuses to overwrite an existing key without
+       ``--force``).
+    2. ``sovyx doctor voice --calibrate --signing-key <key-path>``
+       — signs the persisted profile against the new key. The
+       <key-path> is the .priv file emitted by step 1, defaulting to
+       ``<data_dir>/<mind>/calibration.signing-key.priv``.
+    3. (v0.33.0+) the loader's :data:`Mode.STRICT` default flip will
+       require this key to be present + every persisted profile to be
+       signed. v0.32.0 ships the foundation only — the flip happens
+       after telemetry confirms wide adoption.
+
+    Headless multi-mind operators can target a specific mind via
+    ``--mind-id <name>``. Use ``--output <path>`` to override the
+    canonical location (e.g. when storing the key on an HSM-mounted
+    filesystem).
+    """
+    from sovyx.voice.calibration._key_generation import (  # noqa: PLC0415
+        SigningKeyExistsError,
+    )
+    from sovyx.voice.calibration._key_generation import (  # noqa: PLC0415
+        generate_signing_key as _generate,
+    )
+
+    data_dir = _resolve_data_dir_for_signing_key()
+    resolved_mind_id = _resolve_mind_id_for_signing_key(
+        data_dir,
+        mind_id if mind_id else None,
+    )
+
+    output_path: Path | None = None
+    if output.strip():
+        candidate = Path(output.strip())
+        # Accept either explicit `.priv` ending or any user-given name;
+        # the helper derives the `.pub` sibling deterministically.
+        if not candidate.name.endswith(".priv"):
+            output_path = candidate.with_suffix(candidate.suffix + ".priv")
+        else:
+            output_path = candidate
+
+    try:
+        result = _generate(
+            data_dir=data_dir,
+            mind_id=resolved_mind_id,
+            force=force,
+            output_path=output_path,
+            source="cli",
+        )
+    except SigningKeyExistsError as exc:
+        console.print(
+            f"[red]error:[/red] signing keypair already exists:\n"
+            f"  private: [dim]{exc.private_path}[/dim]\n"
+            f"  public:  [dim]{exc.public_path}[/dim]\n"
+            f"\nPass [bold]--force[/bold] to overwrite. WARNING: every "
+            f"calibration profile signed by the previous key will fail "
+            f"verification under STRICT mode.",
+        )
+        raise typer.Exit(code=1) from None
+    except OSError as exc:  # filesystem refused the write
+        console.print(
+            f"[red]error:[/red] could not write signing key: {exc}",
+        )
+        raise typer.Exit(code=1) from None
+
+    console.print(
+        f"[green]✓ Generated calibration signing keypair[/green] for "
+        f"mind [cyan]{resolved_mind_id!r}[/cyan]",
+    )
+    console.print(f"  private key: [dim]{result.private_key_path}[/dim]")
+    console.print(f"  public key:  [dim]{result.public_key_path}[/dim]")
+    console.print(f"  fingerprint: [bold]{result.fingerprint_short}[/bold]")
+    console.print(
+        "\n[dim]Next: sign a calibration profile with [bold]sovyx doctor "
+        "voice --calibrate --signing-key "
+        f"{result.private_key_path}[/bold].[/dim]",
+    )

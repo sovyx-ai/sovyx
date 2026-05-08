@@ -92,6 +92,16 @@ from sovyx.voice.calibration._applier import (
     CalibrationApplier,
 )
 from sovyx.voice.calibration._fingerprint import capture_fingerprint
+from sovyx.voice.calibration._key_generation import (
+    PRIVATE_KEY_FILENAME,
+    PUBLIC_KEY_FILENAME,
+    GeneratedSigningKey,
+    SigningKeyExistsError,
+    generate_signing_key,
+    public_key_fingerprint_short,
+    signing_key_exists,
+    signing_key_paths,
+)
 from sovyx.voice.calibration._measurer import capture_measurements
 from sovyx.voice.calibration._persistence import (
     CalibrationProfileLoadError,
@@ -146,12 +156,16 @@ __all__ = [
     "CalibrationProfileRollbackError",
     "CalibrationRule",
     "EngineMode",
+    "GeneratedSigningKey",
     "HardwareFingerprint",
     "MeasurementSnapshot",
+    "PRIVATE_KEY_FILENAME",
+    "PUBLIC_KEY_FILENAME",
     "ProvenanceRecorder",
     "ProvenanceTrace",
     "RuleContext",
     "RuleEvaluation",
+    "SigningKeyExistsError",
     "ProgressEvent",
     "WizardJobState",
     "WizardOrchestrator",
@@ -159,12 +173,16 @@ __all__ = [
     "WizardStatus",
     "capture_fingerprint",
     "capture_measurements",
+    "generate_signing_key",
     "inspect_migrated_profile_dict",
     "iter_rules",
     "load_calibration_profile",
     "profile_backup_path",
     "profile_path",
+    "public_key_fingerprint_short",
     "resolve_active_mic_card",
     "rollback_calibration_profile",
     "save_calibration_profile",
+    "signing_key_exists",
+    "signing_key_paths",
 ]

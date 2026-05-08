@@ -35,7 +35,10 @@ import type {
   CalibrationFeatureFlagUpdateRequest,
   CalibrationRollbackResponse,
   CancelJobResponse,
+  GenerateSigningKeyRequest,
+  GenerateSigningKeyResponse,
   PreviewFingerprintResponse,
+  SigningKeyStatusResponse,
   StartCalibrationRequest,
   StartCalibrationResponse,
   WizardJobSnapshot,
@@ -46,7 +49,9 @@ import {
   CalibrationFeatureFlagResponseSchema,
   CalibrationRollbackResponseSchema,
   CancelJobResponseSchema,
+  GenerateSigningKeyResponseSchema,
   PreviewFingerprintResponseSchema,
+  SigningKeyStatusResponseSchema,
   StartCalibrationResponseSchema,
   WizardJobSnapshotSchema,
 } from "@/types/schemas";
@@ -161,6 +166,35 @@ export interface CalibrationSlice {
    * / 401 / etc.) — error string populated for UI.
    */
   rollbackCalibration: () => Promise<CalibrationRollbackResponse | null>;
+
+  // ── BT.B.3 (v0.32.0) — Ed25519 signing-key surface ──
+
+  /**
+   * Current signing-key status (BT.B.3). Null while unloaded;
+   * populate via ``loadSigningKeyStatus`` when the dashboard's
+   * "Voice signing key" section mounts. The settings card uses
+   * this to render "Generated <fingerprint>" vs "Not yet
+   * generated".
+   */
+  signingKeyStatus: SigningKeyStatusResponse | null;
+
+  /**
+   * Fetch the current signing-key status from the daemon. Idempotent
+   * + cheap. Populates ``signingKeyStatus``; on failure leaves the
+   * field null (conservative gate; the card stays in "Loading...").
+   */
+  loadSigningKeyStatus: () => Promise<SigningKeyStatusResponse | null>;
+
+  /**
+   * Generate a new calibration signing keypair. Returns the full
+   * response (public-key PEM + paths + fingerprint) on success or
+   * null on failure (409 already-exists without force / 500 / etc.)
+   * — error string populated for UI. On success the slice also
+   * refreshes ``signingKeyStatus`` so the card flips to Generated.
+   */
+  generateSigningKey: (
+    req?: GenerateSigningKeyRequest,
+  ) => Promise<GenerateSigningKeyResponse | null>;
 }
 
 export const createCalibrationSlice: StateCreator<
@@ -177,6 +211,7 @@ export const createCalibrationSlice: StateCreator<
   calibrationWs: null,
   calibrationFeatureFlag: null,
   calibrationBackupCount: null,
+  signingKeyStatus: null,
 
   // ── fetchCalibrationPreview ──
   fetchCalibrationPreview: async () => {
@@ -402,6 +437,58 @@ export const createCalibrationSlice: StateCreator<
       // eslint-disable-next-line no-console
       console.warn("[calibration] backup-list load failed:", err);
       set({ calibrationBackupCount: null });
+      return null;
+    }
+  },
+
+  // ── loadSigningKeyStatus (BT.B.3) ──
+  loadSigningKeyStatus: async () => {
+    try {
+      const data = await api.get<SigningKeyStatusResponse>(
+        "/api/voice/calibration/signing-key",
+        { schema: SigningKeyStatusResponseSchema },
+      );
+      set({ signingKeyStatus: data });
+      return data;
+    } catch (err) {
+      // Conservative-gate pattern (mirrors loadCalibrationFeatureFlag):
+      // a transient backend hiccup shouldn't poison the UI; leave the
+      // status null so the card renders "Loading..." until the next
+      // load succeeds. Log to console for triage observability.
+      // eslint-disable-next-line no-console
+      console.warn("[calibration] signing-key status load failed:", err);
+      set({ signingKeyStatus: null });
+      return null;
+    }
+  },
+
+  // ── generateSigningKey (BT.B.3) ──
+  generateSigningKey: async (req?: GenerateSigningKeyRequest) => {
+    set({ calibrationLoading: true, calibrationError: null });
+    try {
+      const data = await api.post<GenerateSigningKeyResponse>(
+        "/api/voice/calibration/generate-signing-key",
+        req ?? {},
+        { schema: GenerateSigningKeyResponseSchema },
+      );
+      // Refresh the status so the card flips from "Not yet generated"
+      // to "Generated <fingerprint>" without an extra round-trip.
+      set({
+        calibrationLoading: false,
+        signingKeyStatus: {
+          exists: true,
+          fingerprint_short: data.fingerprint_short,
+          public_key_path: data.public_key_path,
+          resolved_mind_id: data.resolved_mind_id,
+        },
+      });
+      return data;
+    } catch (err) {
+      const message = _extractApiError(
+        err,
+        i18n.t("settings:signingKey.error.generateFailed"),
+      );
+      set({ calibrationLoading: false, calibrationError: message });
       return null;
     }
   },

@@ -205,6 +205,25 @@
     "success": "Restaurado. Ainda há {{remaining}} calibração(ões) anterior(es) disponível(eis) para reverter.",
     "failed": "Não foi possível reverter a calibração. O backup pode estar corrompido — veja o log do daemon."
   },
+  "signingKey": {
+    "title": "Chave de assinatura da calibração de voz",
+    "description": "Gera um par de chaves Ed25519 que o daemon usa para assinar perfis de calibração. Perfis assinados com esta chave serão aceitos no próximo modo STRICT do loader (v0.33.0+); o modo LENIENT (padrão atual) aceita perfis não assinados com um aviso.",
+    "statusLoading": "Carregando…",
+    "statusGenerated": "Gerada",
+    "statusNotGenerated": "Ainda não gerada",
+    "generateButton": "Gerar chave de assinatura",
+    "regenerateButton": "Regenerar",
+    "confirmRegenerateButton": "Sim, regenerar",
+    "cancelButton": "Cancelar",
+    "regenerateWarning": "Regenerar vai sobrescrever o par de chaves existente. Todo perfil de calibração assinado pela chave anterior falhará na verificação de assinatura no modo STRICT e precisará ser reassinado.",
+    "publicKeyPathLabel": "Chave pública:",
+    "note": "A chave privada permanece em disco com permissões somente do dono. O painel nunca recebe os bytes da chave privada.",
+    "generateSuccess": "Chave de assinatura gerada (fingerprint: {{fingerprint}}).",
+    "generateFailed": "Não foi possível gerar a chave de assinatura.",
+    "error": {
+      "generateFailed": "Não foi possível gerar a chave de assinatura."
+    }
+  },
   "calibrationWizard": {
     "title": "Etapa de calibração de voz no onboarding",
     "description": "Monta o assistente de calibração multi-etapas com consciência de hardware durante a configuração de voz. Desabilitado por padrão enquanto a Camada 3 do sistema auto-calibrável está em soak; ative para optar por incluir este deployment.",

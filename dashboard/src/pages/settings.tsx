@@ -42,6 +42,7 @@ import { LanguageSelector } from "@/components/settings/LanguageSelector";
 import { CalibrationWizardCard } from "@/components/settings/calibration-wizard-card";
 import { RecalibrateButton } from "@/components/settings/recalibrate-button";
 import { RollbackButton } from "@/components/settings/rollback-button";
+import { SigningKeyCard } from "@/components/settings/signing-key-card";
 import { VoiceClarityCard } from "@/components/settings/voice-clarity-card";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -50,13 +51,12 @@ import type {
   MindConfigResponse,
   MindConfigUpdate,
   MindConfigUpdateResponse,
-  OnboardingState,
   ToneType,
   ContentFilter,
 } from "@/types/api";
-import { OnboardingStateSchema } from "@/types/schemas";
 import { cn } from "@/lib/utils";
 import { ProviderConfig } from "@/components/settings/provider-config";
+import { useResolvedMindId } from "@/hooks/use-resolved-mind-id";
 
 type LogLevel = Settings["log_level"];
 const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARNING", "ERROR"];
@@ -103,15 +103,19 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // v0.31.7 T2.2 (M2 — paranoid round 2 closure of anti-pattern #35,
-  // 5th occurrence): resolved active mind id, threaded into
-  // <RecalibrateButton mindId={...} /> so the calibration profile
-  // lands at <data_dir>/<mind_id>/ instead of <data_dir>/default/.
-  // ``null`` until /api/onboarding/state resolves OR the daemon
-  // doesn't ship the field (pre-v0.31.6 daemons). The mount-time
-  // fallback to ``"default"`` is gated on a single-fire warn so the
-  // operator sees a console breadcrumb if resolution fails.
-  const [resolvedMindId, setResolvedMindId] = useState<string | null>(null);
+  // v0.32.0 BT.B.1 — resolved active mind id now comes from the
+  // shared ``useResolvedMindId`` hook (single source of truth across
+  // every component that needs the resolved id). Closes the
+  // structural side of CLAUDE.md anti-pattern #35: previous releases
+  // duplicated the fetch+state+warn dance per consumer (this page
+  // included), and each new ``mindId`` prop site was at risk of
+  // hardcoding ``"default"``. The hook normalises the snapshot to
+  // a non-null string + already fires a single console.warn
+  // breadcrumb on fallback, so the local warn-once useEffect is no
+  // longer needed here. We thread ``mindId`` directly into
+  // ``<RecalibrateButton />`` (no ``?? "default"`` fallback —
+  // the hook's internal fallback semantics handle that).
+  const { mindId: resolvedMindId } = useResolvedMindId();
 
   // Mind config state
   const [mindConfig, setMindConfig] = useState<MindConfigResponse | null>(null);
@@ -168,24 +172,6 @@ export default function SettingsPage() {
     }
   }, []);
 
-  // ── Fetch resolved active mind id (v0.31.7 T2.2 / anti-pattern #35) ──
-  const fetchResolvedMindId = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const data = await api.get<OnboardingState>("/api/onboarding/state", {
-        schema: OnboardingStateSchema,
-        signal,
-      });
-      setResolvedMindId(data.mind_id ?? null);
-    } catch (err) {
-      if (isAbortError(err)) return;
-      // Non-critical — RecalibrateButton falls through to "default"
-      // sentinel + console.warn breadcrumb if resolution fails. The
-      // backend resolver (_shared.resolve_active_mind_id_for_request)
-      // is the safety net.
-      setResolvedMindId(null);
-    }
-  }, []);
-
   // ── Fetch safety status ──
   const fetchSafetyStatus = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -205,32 +191,14 @@ export default function SettingsPage() {
     void fetchSettings(controller.signal);
     void fetchConfig(controller.signal);
     void fetchSafetyStatus(controller.signal);
-    void fetchResolvedMindId(controller.signal);
     return () => controller.abort();
-  }, [fetchSettings, fetchConfig, fetchSafetyStatus, fetchResolvedMindId]);
+  }, [fetchSettings, fetchConfig, fetchSafetyStatus]);
 
-  // v0.31.7 T2.2 — single-fire console.warn breadcrumb when the
-  // resolved mind id falls back to the ``"default"`` sentinel at
-  // RecalibrateButton mount time. Operator-side observability for
-  // the (rare) case where /api/onboarding/state didn't yield a
-  // ``mind_id`` (older daemon, transient failure, etc.). Fires
-  // exactly once per page lifetime; useRef would over-engineer a
-  // single check.
-  const [mindIdFallbackWarned, setMindIdFallbackWarned] = useState(false);
-  useEffect(() => {
-    if (mindIdFallbackWarned) return;
-    if (resolvedMindId !== null) return;
-    if (loading) return;
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[settings] RecalibrateButton: resolved mind_id is null; " +
-        'falling back to "default" sentinel. Calibration profile ' +
-        "may land at <data_dir>/default/ instead of the active " +
-        "mind's directory. Backend resolver is the safety net but " +
-        "operator should verify /api/onboarding/state response.",
-    );
-    setMindIdFallbackWarned(true);
-  }, [resolvedMindId, loading, mindIdFallbackWarned]);
+  // v0.32.0 BT.B.1 — the previous warn-once useEffect (resolvedMindId
+  // === null gating) lived here in v0.31.7 because the page owned the
+  // fetch. With ``useResolvedMindId``, the hook itself fires the
+  // single console.warn breadcrumb on the same fallback condition,
+  // so the page-side guard is redundant and was removed.
 
   // ── Save engine settings ──
   const handleSaveSettings = async () => {
@@ -881,16 +849,23 @@ export default function SettingsPage() {
       </ErrorBoundary>
 
       {/* ── Recalibrate trigger (§8.5 surface; renders only when wizard mount is enabled) ── */}
-      {/* v0.31.7 T2.2: ``mindId`` is REQUIRED on this prop now — the */}
-      {/* ``?? "default"`` fallback is the single sentinel-emit site, */}
-      {/* matched by the warn-once useEffect above. Anti-pattern #35. */}
+      {/* v0.32.0 BT.B.1: ``mindId`` comes from ``useResolvedMindId`` */}
+      {/* (already a non-null string — ``"default"`` only as the */}
+      {/* hook's internal fallback). The hook fires the single warn */}
+      {/* breadcrumb on fallback; no site-local ``?? "default"``. */}
       <ErrorBoundary name="section.settings.recalibrate" variant="section">
-        <RecalibrateButton mindId={resolvedMindId ?? "default"} />
+        <RecalibrateButton mindId={resolvedMindId} />
       </ErrorBoundary>
 
       {/* ── Rollback trigger (rc.12; closes rc.11 final-audit P3 operator-debt) ── */}
       <ErrorBoundary name="section.settings.rollback" variant="section">
         <RollbackButton />
+      </ErrorBoundary>
+
+      {/* ── BT.B.3 (v0.32.0) — Ed25519 calibration signing-key generation. */}
+      {/*    Foundation for the v0.33.0+ STRICT-mode default flip. ── */}
+      <ErrorBoundary name="section.settings.signingKey" variant="section">
+        <SigningKeyCard />
       </ErrorBoundary>
 
       {/* ── Display & Language (Mission v0.30.3 §T3.3 / D5) ── */}

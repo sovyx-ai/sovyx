@@ -205,6 +205,25 @@
     "success": "Restored. {{remaining}} prior calibration(s) still available to roll back to.",
     "failed": "Could not roll back the calibration. The backup may be corrupt — see the daemon log."
   },
+  "signingKey": {
+    "title": "Voice calibration signing key",
+    "description": "Generate an Ed25519 keypair the daemon uses to sign calibration profiles. Profiles signed with this key will be accepted under the upcoming STRICT loader mode (v0.33.0+); LENIENT mode (current default) accepts unsigned profiles with a warning.",
+    "statusLoading": "Loading…",
+    "statusGenerated": "Generated",
+    "statusNotGenerated": "Not yet generated",
+    "generateButton": "Generate signing key",
+    "regenerateButton": "Regenerate",
+    "confirmRegenerateButton": "Yes, regenerate",
+    "cancelButton": "Cancel",
+    "regenerateWarning": "Regenerating will overwrite the existing keypair. Every calibration profile signed by the previous key will fail signature verification under STRICT mode and must be re-signed.",
+    "publicKeyPathLabel": "Public key:",
+    "note": "The private key stays on disk under owner-only permissions. The dashboard never receives the private key bytes.",
+    "generateSuccess": "Signing key generated (fingerprint: {{fingerprint}}).",
+    "generateFailed": "Could not generate signing key.",
+    "error": {
+      "generateFailed": "Could not generate signing key."
+    }
+  },
   "calibrationWizard": {
     "title": "Voice calibration onboarding step",
     "description": "Mounts the multi-stage hardware-aware calibration wizard during voice setup. Default-disabled while Layer 3 of the self-calibrating system soaks; flip to ON to opt this deployment in.",
