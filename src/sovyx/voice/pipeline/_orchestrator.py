@@ -462,6 +462,40 @@ class VoicePipeline:
         self._vad_frames_since_heartbeat: int = 0
         self._last_heartbeat_monotonic: float = 0.0
 
+        # v0.31.7 CR3 — heartbeat decoupling from feed_frame.
+        #
+        # Pre-CR3 the heartbeat fired ONLY from inside
+        # ``_track_vad_for_heartbeat``, which was called from
+        # ``feed_frame``. ``feed_frame`` is awaited serially by the
+        # capture-side ``_consume_loop`` — one frame at a time. When
+        # ``_handle_recording → _end_recording → await stt.transcribe``
+        # parked on STT (Moonshine ONNX, 200-2000 ms) or
+        # ``_on_perception → bridge.process`` parked on the LLM
+        # (1-30 s), no further frames were drained from the queue, so
+        # ``voice_pipeline_heartbeat`` STOPPED for that whole window.
+        # Operators interpreted a healthy pipeline as wedged.
+        #
+        # CR3 fix: emit on a wall-clock timer regardless of consumer-
+        # loop progress. Per-frame ``_track_vad_for_heartbeat``
+        # continues to update the window stats below — the snapshot
+        # fields plus ``_max_vad_prob_since_heartbeat`` /
+        # ``_vad_frames_since_heartbeat`` — and a background
+        # ``_heartbeat_loop`` task spawned from :meth:`start` calls
+        # :meth:`_emit_heartbeat` every ``_HEARTBEAT_INTERVAL_S``.
+        # The per-frame call site keeps a back-compat interval check
+        # so a frame arriving exactly when the window expires still
+        # triggers an emission — both triggers converge on the same
+        # idempotent :meth:`_emit_heartbeat` body.
+        #
+        # Snapshot fields below let the timer-driven emission carry
+        # the freshest VAD probability observation even when the
+        # window-max happens to be stale (e.g. STT parked for 5 s,
+        # the timer fires 2.5x and reports the snapshot from the last
+        # frame fed before parking).
+        self._last_vad_probability_snapshot: float = 0.0
+        self._last_vad_probability_snapshot_at: float = 0.0
+        self._heartbeat_task: asyncio.Task[None] | None = None
+
         # Phase 4 / T4.35 — SNR low-alert de-flap counter. Counts
         # consecutive heartbeats whose drained SNR p50 sits below
         # the configured floor; once it reaches the consecutive-
@@ -1096,6 +1130,17 @@ class VoicePipeline:
         self._state = VoicePipelineState.IDLE
         self._last_heartbeat_monotonic = time.monotonic()
 
+        # v0.31.7 CR3 — spawn the wall-clock heartbeat loop. Decouples
+        # ``voice_pipeline_heartbeat`` emission from ``feed_frame`` so
+        # dashboards keep seeing liveness signals during STT / LLM /
+        # TTS parking (the consumer loop blocks on those awaits and
+        # would otherwise stop calling per-frame heartbeat trigger).
+        # See :meth:`_heartbeat_loop` for the full rationale.
+        self._heartbeat_task = spawn(
+            self._heartbeat_loop(),
+            name="voice-pipeline-heartbeat",
+        )
+
         # Mission Phase 1b — register runtime listeners (MM notification
         # + driver-update). Each listener registers in its own
         # try/except via ``_register_listeners`` so one failing doesn't
@@ -1157,6 +1202,24 @@ class VoicePipeline:
                 "voice.pipeline.stop_filler_drain_attempted",
                 reason="best-effort wait for filler cancellation",
             )
+
+        # v0.31.7 CR3 — cancel + drain the wall-clock heartbeat task.
+        # Same drain pattern as the filler task above: cancel, await
+        # with bounded timeout, treat CancelledError + TimeoutError as
+        # success (a wedged heartbeat must NOT stall pipeline stop).
+        # The task self-exits when ``_running`` flips False at the
+        # next sleep boundary, but we still cancel for liveness:
+        # without cancel a 2 s sleep would hold stop for up to one
+        # full heartbeat interval.
+        heartbeat_task = self._heartbeat_task
+        if heartbeat_task is not None and not heartbeat_task.done():
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.shield(heartbeat_task),
+                    timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                )
+        self._heartbeat_task = None
 
         # Interrupt active playback (idempotent).
         self._output.interrupt()
@@ -2524,28 +2587,81 @@ class VoicePipeline:
         )
 
     def _track_vad_for_heartbeat(self, probability: float) -> None:
-        """Accumulate per-frame VAD stats and emit a periodic heartbeat.
+        """Accumulate per-frame VAD stats for the periodic heartbeat.
 
-        Logs ``voice_pipeline_heartbeat`` every
-        ``pipeline_heartbeat_interval_seconds`` with the max probability
-        observed, frames processed, and current FSM state. The counters
-        reset after each emission so the "max" reflects the last window,
-        not the lifetime of the pipeline.
+        v0.31.7 CR3 — pre-CR3 this method ALSO triggered emission
+        when the heartbeat interval had elapsed. Emission is now
+        SOLELY driven by the wall-clock :meth:`_heartbeat_loop` task
+        spawned at :meth:`start` (cancelled at :meth:`stop`). This
+        method retains the per-frame call from :meth:`feed_frame` so
+        the emission body always reads fresh window stats — but it
+        no longer fires the emission itself.
 
-        When VAD probabilities stay far below ``onset_threshold`` (0.5)
-        despite real audio (capture heartbeats show live RMS), this log
-        surfaces it without requiring per-frame debug traces. Conversely,
-        a heartbeat with ``max_vad_probability >= 0.5`` but the
-        orchestrator still in IDLE points at an FSM configuration issue
-        (onset threshold / min_onset_frames).
+        Motivating bug: pre-CR3 ``feed_frame`` was awaited serially
+        by ``_consume_loop``; when ``_handle_recording → _end_recording``
+        parked on STT (Moonshine ONNX, 200-2000 ms) or
+        ``_on_perception → bridge.process`` parked on the LLM
+        (1-30 s), no further frames were drained, so the heartbeat
+        STOPPED for the whole parking window. Operators saw a
+        healthy pipeline as wedged. The timer-driven emission fires
+        regardless of consumer-loop progress.
+
+        Per-window stats updated here:
+
+        * ``_max_vad_prob_since_heartbeat`` — highest VAD probability
+          observed since the last emission. Read by ``_end_recording``
+          for the ``UserStoppedSpeakingFrame.silero_prob_snapshot`` and
+          by the deaf-warning detector inside :meth:`_emit_heartbeat`.
+        * ``_vad_frames_since_heartbeat`` — number of frames seen in the
+          current window; the deaf-warning detector requires
+          ``>= _DEAF_MIN_FRAMES`` before considering a window
+          "starved-but-not-quiet".
+        * ``_last_vad_probability_snapshot`` /
+          ``_last_vad_probability_snapshot_at`` — freshest per-frame
+          observation. The timer-driven emit reads them so it can
+          carry the latest VAD curve point even when the window-max
+          is stale (e.g. STT parked for 5 s; the timer fires 2.5x and
+          reports the snapshot from the last frame fed before parking).
         """
         if probability > self._max_vad_prob_since_heartbeat:
             self._max_vad_prob_since_heartbeat = probability
         self._vad_frames_since_heartbeat += 1
+        # v0.31.7 CR3 — freshness fields. Always overwritten with the
+        # latest per-frame observation; the timer-driven emit reads
+        # them so it carries the latest VAD curve point even when no
+        # frame arrives in the window (STT/LLM parked).
+        self._last_vad_probability_snapshot = probability
+        self._last_vad_probability_snapshot_at = time.monotonic()
 
-        now = time.monotonic()
-        if now - self._last_heartbeat_monotonic < _HEARTBEAT_INTERVAL_S:
-            return
+    def _emit_heartbeat(self, now: float) -> None:
+        """Emit a single ``voice_pipeline_heartbeat`` (idempotent within a window).
+
+        Called from two sites:
+
+        * :meth:`_heartbeat_loop` — primary contract, wall-clock
+          timer regardless of consumer-loop progress (v0.31.7 CR3).
+        * :meth:`_track_vad_for_heartbeat` — legacy per-frame fallback
+          when the interval has elapsed AND a frame happens to be in
+          flight; converges on the same idempotent body.
+
+        Both call sites reset ``_last_heartbeat_monotonic = now`` at
+        the bottom so a subsequent caller observes "interval has not
+        elapsed" and short-circuits.
+
+        The emission carries the same fields the pre-CR3 inline code
+        emitted PLUS the new freshness snapshot fields:
+
+        * ``mind_id``, ``state``, ``max_vad_probability``,
+          ``frames_processed`` — pre-CR3 schema (preserved for
+          dashboard back-compat).
+        * ``last_vad_probability``, ``last_vad_probability_age_s`` —
+          new freshness fields (CR3). ``age_s`` is computed against
+          ``now``; a value > ``_HEARTBEAT_INTERVAL_S`` means the
+          consumer loop hasn't fed a frame in the current window.
+        * ``snr_p50_db`` / ``snr_p95_db`` / ``snr_sample_count`` —
+          conditionally included when the SNR aggregator drained
+          non-empty (Phase 4 T4.34 contract).
+        """
         # Phase 4 / T4.34 — drain the per-window SNR buffer for
         # the heartbeat. The fields are conditionally added to the
         # log: when count == 0 (sustained silence or pre-first-
@@ -2559,6 +2675,15 @@ class VoicePipeline:
             heartbeat_extra["snr_p50_db"] = round(snr_window.p50_db, 2)
             heartbeat_extra["snr_p95_db"] = round(snr_window.p95_db, 2)
             heartbeat_extra["snr_sample_count"] = snr_window.count
+        # v0.31.7 CR3 — freshness fields. Age is computed against
+        # ``now`` (the heartbeat tick time) rather than a fresh
+        # ``time.monotonic()`` so timer-driven emission with mocked
+        # clocks reports a stable, test-friendly age.
+        if self._last_vad_probability_snapshot_at > 0.0:
+            heartbeat_extra["last_vad_probability"] = round(self._last_vad_probability_snapshot, 3)
+            heartbeat_extra["last_vad_probability_age_s"] = round(
+                max(0.0, now - self._last_vad_probability_snapshot_at), 3
+            )
         logger.info(
             "voice_pipeline_heartbeat",
             mind_id=self._config.mind_id,
@@ -2708,6 +2833,68 @@ class VoicePipeline:
         self._last_heartbeat_monotonic = now
         self._max_vad_prob_since_heartbeat = 0.0
         self._vad_frames_since_heartbeat = 0
+
+    async def _heartbeat_loop(self) -> None:
+        """Wall-clock heartbeat task — fires regardless of consumer-loop progress.
+
+        v0.31.7 CR3 — pre-CR3 the heartbeat was emitted ONLY from
+        :meth:`_track_vad_for_heartbeat` (called from
+        :meth:`feed_frame`). ``feed_frame`` is awaited serially by the
+        capture-side ``_consume_loop`` — one frame at a time. When
+        ``_handle_recording → _end_recording → await stt.transcribe``
+        parked on STT (Moonshine ONNX, 200-2000 ms) or
+        ``_on_perception → bridge.process`` parked on the LLM
+        (1-30 s), no further frames were drained, so the heartbeat
+        STOPPED for the whole parking window. Operators interpreted a
+        healthy pipeline as wedged.
+
+        This loop fixes the contract: heartbeat fires every
+        ``_HEARTBEAT_INTERVAL_S`` regardless of consumer-loop progress.
+        Per-frame ``_track_vad_for_heartbeat`` continues to update
+        the window stats (and is a SECONDARY trigger — see that
+        method's docstring) so dashboards see fresh VAD probability
+        in every emit even during parking.
+
+        Cancellation contract:
+
+        * The loop exits cleanly on :exc:`asyncio.CancelledError`
+          (raised when :meth:`stop` cancels the task).
+        * The loop also self-exits when ``_running`` flips False at
+          the next sleep boundary (defensive — :meth:`stop` always
+          cancels, but a future refactor that flips ``_running`` from
+          a different code path would still terminate the loop).
+
+        Per CLAUDE.md anti-pattern #15 + the spec's lifecycle rules,
+        the task is stored as ``_heartbeat_task`` (single field, not a
+        dict) and :meth:`stop` cancels + drains it with the same
+        bounded ``_CANCELLATION_TASK_TIMEOUT_S`` budget the filler
+        and TTS drains use.
+        """
+        try:
+            while self._running:
+                await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
+                if not self._running:
+                    return
+                # Best-effort emit — any exception raised inside
+                # _emit_heartbeat would otherwise terminate the loop
+                # and silence heartbeats forever for this pipeline
+                # lifetime. Logged at WARN so the regression is
+                # visible without crashing the daemon.
+                try:
+                    self._emit_heartbeat(time.monotonic())
+                except Exception as exc:  # noqa: BLE001 — observability isolation
+                    logger.warning(
+                        "voice.pipeline.heartbeat_emit_failed",
+                        mind_id=self._config.mind_id,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+        except asyncio.CancelledError:
+            # Cleanly cancellable by stop() — re-raise so the spawn
+            # telemetry records "cancelled" rather than "exited
+            # normally" (which would be misleading for forensic
+            # timeline reconstruction).
+            raise
 
     def _maybe_trigger_bypass_coordinator(self) -> None:
         """Delegate sustained deafness to the :class:`CaptureIntegrityCoordinator`.

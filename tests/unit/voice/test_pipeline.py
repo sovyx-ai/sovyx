@@ -2953,6 +2953,35 @@ def _events_of(caplog: pytest.LogCaptureFixture, event: str) -> list[dict[str, A
     ]
 
 
+async def _disable_heartbeat_timer(pipeline: VoicePipeline) -> None:
+    """Cancel the wall-clock heartbeat task so per-frame stat tests are deterministic.
+
+    v0.31.7 CR3 — :meth:`VoicePipeline.start` spawns a wall-clock
+    timer task that calls :meth:`_emit_heartbeat` every
+    ``_HEARTBEAT_INTERVAL_S`` seconds. Tests that exercise the
+    per-frame window stats want the timer disabled so an emission
+    only fires when the test calls :meth:`_emit_heartbeat`
+    explicitly. ``patch.object(time, "monotonic", ...)`` would also
+    affect ``loop.time()`` (CPython uses ``time.monotonic`` inside
+    :func:`asyncio.BaseEventLoop.time`), so a patched clock can race
+    with the timer task's ``asyncio.sleep`` and produce a spurious
+    emission. Cancelling the task removes the race entirely.
+
+    The ``await asyncio.sleep(0)`` lets the spawn's inner ``_runner``
+    actually enter ``await coro`` before we cancel — without it,
+    Python emits a ``RuntimeWarning: coroutine ... was never
+    awaited`` because the cancel races the awaitable's first
+    schedule.
+    """
+    if pipeline._heartbeat_task is None:  # noqa: SLF001 — test helper
+        return
+    # Yield once so the spawn runner reaches its `await coro` line.
+    await asyncio.sleep(0)
+    pipeline._heartbeat_task.cancel()  # noqa: SLF001
+    with contextlib.suppress(asyncio.CancelledError):
+        await pipeline._heartbeat_task  # noqa: SLF001
+
+
 class TestPipelineHeartbeat:
     """``voice_pipeline_heartbeat`` surfaces VAD activity even when the FSM never fires."""
 
@@ -2960,28 +2989,30 @@ class TestPipelineHeartbeat:
     async def test_heartbeat_emits_with_max_probability(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Heartbeat captures the highest VAD probability seen in the window."""
-        from sovyx.voice.pipeline import _orchestrator as orch_mod
+        """Heartbeat captures the highest VAD probability seen in the window.
 
+        v0.31.7 CR3 — pre-CR3 emission was triggered by ``feed_frame``
+        when the heartbeat interval had elapsed; tests patched
+        ``time.monotonic`` to advance the clock past the interval.
+        Post-CR3 emission is wall-clock-timer-driven (see CLAUDE.md
+        anti-pattern note in :meth:`_track_vad_for_heartbeat`), so
+        tests feed frames to update the window stats and then call
+        :meth:`_emit_heartbeat` directly to exercise the emission
+        body. The semantic under test is unchanged: probabilities
+        observed in the window get reported as ``max_vad_probability``.
+        """
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
+        await _disable_heartbeat_timer(pipeline)
 
         probs = [0.05, 0.42, 0.18]
-        pipeline._last_heartbeat_monotonic = 0.0
-        with patch.object(orch_mod.time, "monotonic", return_value=0.0):
-            for p in probs[:-1]:
-                refs["vad"].process_frame.return_value = VADEvent(
-                    is_speech=False, probability=p, state=VADState.SILENCE
-                )
-                await pipeline.feed_frame(_silence_frame())
-        refs["vad"].process_frame.return_value = VADEvent(
-            is_speech=False, probability=probs[-1], state=VADState.SILENCE
-        )
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
+        for p in probs:
+            refs["vad"].process_frame.return_value = VADEvent(
+                is_speech=False, probability=p, state=VADState.SILENCE
+            )
             await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(0.0)
 
         heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
         assert len(heartbeats) == 1
@@ -2993,29 +3024,27 @@ class TestPipelineHeartbeat:
     async def test_heartbeat_resets_window_after_emission(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Counters reset after each heartbeat so max reflects the last window only."""
-        from sovyx.voice.pipeline import _orchestrator as orch_mod
+        """Counters reset after each heartbeat so max reflects the last window only.
 
+        v0.31.7 CR3 — see ``test_heartbeat_emits_with_max_probability``
+        docstring for the per-frame stats vs timer-driven emission split.
+        """
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.9, state=VADState.SILENCE
         )
 
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(0.0)
         caplog.clear()
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.05, state=VADState.SILENCE
         )
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.1
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        await pipeline.feed_frame(_silence_frame())
+        # No second emission — counters reflect the new window only.
 
         heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
         assert heartbeats == []
@@ -3040,7 +3069,7 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
 
         # Simulate the FrameNormalizer feeding 5 SNR samples
         # between two heartbeats. Median of [10, 14, 18, 22, 30]
@@ -3051,10 +3080,8 @@ class TestPipelineHeartbeat:
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S + 1.0)
 
         heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
         assert len(heartbeats) == 1
@@ -3080,15 +3107,13 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
 
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S + 1.0)
 
         heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
         assert len(heartbeats) == 1
@@ -3113,7 +3138,7 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
@@ -3124,12 +3149,8 @@ class TestPipelineHeartbeat:
         for k in range(n_consecutive):
             for v in (2.0, 4.0, 6.0):
                 record_snr_sample(snr_db=v)
-            with patch.object(
-                orch_mod.time,
-                "monotonic",
-                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
-            ):
-                await pipeline.feed_frame(_silence_frame())
+            await pipeline.feed_frame(_silence_frame())
+            pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0)
 
         warns = _events_of(caplog, "voice_pipeline_snr_low_alert")
         assert len(warns) == 1
@@ -3160,7 +3181,7 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
@@ -3169,10 +3190,8 @@ class TestPipelineHeartbeat:
         # active.
         for v in (2.0, 4.0, 6.0):
             record_snr_sample(snr_db=v)
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S + 1.0)
 
         warns = _events_of(caplog, "voice_pipeline_snr_low_alert")
         assert warns == []
@@ -3197,7 +3216,7 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
@@ -3207,24 +3226,16 @@ class TestPipelineHeartbeat:
         for k in range(n_consecutive):
             for v in (2.0, 4.0, 6.0):
                 record_snr_sample(snr_db=v)
-            with patch.object(
-                orch_mod.time,
-                "monotonic",
-                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
-            ):
-                await pipeline.feed_frame(_silence_frame())
+            await pipeline.feed_frame(_silence_frame())
+            pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0)
         assert pipeline._snr_low_alert_active is True
         caplog.clear()
 
         # Recovery heartbeat: high SNR.
         for v in (25.0, 30.0, 35.0):
             record_snr_sample(snr_db=v)
-        with patch.object(
-            orch_mod.time,
-            "monotonic",
-            return_value=orch_mod._HEARTBEAT_INTERVAL_S * (n_consecutive + 1) + 1.0,
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (n_consecutive + 1) + 1.0)
 
         cleared = _events_of(caplog, "voice_pipeline_snr_low_alert_cleared")
         assert len(cleared) == 1
@@ -3248,7 +3259,7 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
@@ -3257,12 +3268,8 @@ class TestPipelineHeartbeat:
         # consecutive counter must stay at 0 (silence is not
         # low-SNR; SNR is undefined).
         for k in range(5):
-            with patch.object(
-                orch_mod.time,
-                "monotonic",
-                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
-            ):
-                await pipeline.feed_frame(_silence_frame())
+            await pipeline.feed_frame(_silence_frame())
+            pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0)
 
         warns = _events_of(caplog, "voice_pipeline_snr_low_alert")
         assert warns == []
@@ -3292,7 +3299,7 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
@@ -3311,12 +3318,8 @@ class TestPipelineHeartbeat:
         # read-only.
         n_consecutive = orch_mod._NOISE_FLOOR_DRIFT_CONSECUTIVE_HEARTBEATS
         for k in range(n_consecutive):
-            with patch.object(
-                orch_mod.time,
-                "monotonic",
-                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
-            ):
-                await pipeline.feed_frame(_silence_frame())
+            await pipeline.feed_frame(_silence_frame())
+            pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0)
 
         warns = _events_of(caplog, "voice_pipeline_noise_floor_drift_warning")
         assert len(warns) == 1
@@ -3347,7 +3350,7 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
@@ -3357,12 +3360,8 @@ class TestPipelineHeartbeat:
             record_noise_floor_sample(noise_floor_db=-30.0)
 
         for k in range(5):
-            with patch.object(
-                orch_mod.time,
-                "monotonic",
-                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
-            ):
-                await pipeline.feed_frame(_silence_frame())
+            await pipeline.feed_frame(_silence_frame())
+            pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0)
 
         warns = _events_of(caplog, "voice_pipeline_noise_floor_drift_warning")
         assert warns == []
@@ -3389,7 +3388,7 @@ class TestPipelineHeartbeat:
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
-        pipeline._last_heartbeat_monotonic = 0.0
+        await _disable_heartbeat_timer(pipeline)
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
@@ -3397,20 +3396,16 @@ class TestPipelineHeartbeat:
         # Window 1: feed 3 samples around 20 dB.
         for snr in (18.0, 20.0, 22.0):
             record_snr_sample(snr_db=snr)
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S + 1.0)
         caplog.clear()
 
         # Window 2: feed 3 samples around 5 dB. The window-1
         # median (20) MUST NOT contaminate the window-2 p50.
         for snr in (3.0, 5.0, 7.0):
             record_snr_sample(snr_db=snr)
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S * 2 + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * 2 + 1.0)
 
         heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
         assert len(heartbeats) == 1
@@ -3634,23 +3629,22 @@ class TestDeafSignalCoordinator:
         )
 
     async def _drive_deaf_heartbeat(self, pipeline: VoicePipeline) -> None:
-        """Force one deaf-heartbeat emission on the next fed frame.
+        """Force one deaf-heartbeat emission directly via ``_emit_heartbeat``.
 
-        Preloads the accumulator with ``_DEAF_MIN_FRAMES`` and zero max
-        VAD probability so the heartbeat classifies the window as deaf,
-        then advances monotonic time past the heartbeat interval so the
-        rate gate unblocks. A single ``feed_frame`` then runs the full
-        ``_track_vad_for_heartbeat`` path.
+        v0.31.7 CR3 — pre-CR3 this preloaded the accumulator and then
+        called ``feed_frame`` to trigger the per-frame heartbeat path.
+        Post-CR3 emission is wall-clock-timer-driven (see CLAUDE.md
+        anti-pattern #25 for the timer-vs-state-machine rationale),
+        so unit tests call :meth:`_emit_heartbeat` directly. The
+        accumulator preload remains: it sets the deaf-classification
+        state (frames >= DEAF_MIN_FRAMES + max_prob == 0) so the
+        emission's deaf branch fires.
         """
         from sovyx.voice.pipeline import _orchestrator as orch_mod
 
-        pipeline._last_heartbeat_monotonic = 0.0
         pipeline._vad_frames_since_heartbeat = orch_mod._DEAF_MIN_FRAMES
         pipeline._max_vad_prob_since_heartbeat = 0.0
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S + 1.0)
 
     @pytest.mark.asyncio
     async def test_callback_fires_after_threshold_consecutive_deaf_warnings(
@@ -3826,13 +3820,12 @@ class TestDeafSignalCoordinator:
 
         from sovyx.voice.pipeline import _orchestrator as orch_mod
 
-        pipeline._last_heartbeat_monotonic = 0.0
+        # v0.31.7 CR3 — emit directly (timer-driven path) with state
+        # set up to classify the window as healthy (max_prob > deaf
+        # threshold). Pre-CR3 this used feed_frame + monotonic patch.
         pipeline._vad_frames_since_heartbeat = orch_mod._DEAF_MIN_FRAMES
         pipeline._max_vad_prob_since_heartbeat = 0.9  # above the deaf threshold
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
+        pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S + 1.0)
         assert pipeline._deaf_warnings_consecutive == 0
         callback.assert_not_awaited()
 
