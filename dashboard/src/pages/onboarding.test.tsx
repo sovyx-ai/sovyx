@@ -21,6 +21,13 @@ import { render, screen, waitFor } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import OnboardingPage from "./onboarding";
 import { useDashboardStore } from "@/stores/dashboard";
+// v0.32.0 BT.B.1: the page now reads /api/onboarding/state via the
+// shared module-level singleton in ``useResolvedMindId`` /
+// ``useOnboardingState``. The singleton caches the resolved snapshot
+// across re-renders, which is correct for production but wrong for
+// tests — every ``it()`` block needs a fresh fetch. Reset between
+// tests via the test-only escape hatch.
+import { __resetResolvedMindIdCacheForTests } from "@/hooks/use-resolved-mind-id";
 
 vi.mock("@/lib/api", () => {
   return {
@@ -61,6 +68,10 @@ function stageStep1(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Reset the BT.B.1 singleton so every test starts from a clean
+  // "not yet fetched" state. Without this, the second ``it()`` block
+  // would observe the cached snapshot from the first.
+  __resetResolvedMindIdCacheForTests();
   // Reset voiceWarning between tests (in-memory zustand state survives
   // by default, so we must explicitly clear it).
   useDashboardStore.setState({ voiceWarning: null });

@@ -22,12 +22,12 @@ import {
   VoiceStep,
   FirstChatStep,
 } from "@/components/onboarding";
-import type { OnboardingState } from "@/types/api";
-import {
-  OnboardingCompleteResponseSchema,
-  OnboardingStateSchema,
-} from "@/types/schemas";
+import { OnboardingCompleteResponseSchema } from "@/types/schemas";
 import { useDashboardStore } from "@/stores/dashboard";
+import {
+  useResolvedMindId,
+  useOnboardingState,
+} from "@/hooks/use-resolved-mind-id";
 
 const TOTAL_STEPS = 5;
 
@@ -45,40 +45,64 @@ export default function OnboardingPage() {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [mindName, setMindName] = useState("Sovyx");
-  // v0.31.6 C1: resolved active mind id, threaded into VoiceStep so
-  // <VoiceCalibrationStep mindId={...} /> stops hardcoding "default".
-  // Null until /api/onboarding/state resolves; VoiceStep treats null
-  // as "not yet known" and falls back to "default" with a warning.
-  const [mindId, setMindId] = useState<string | null>(null);
+  // v0.32.0 BT.B.1 — both the resolved mind id AND the broader
+  // onboarding-state payload now come from shared singleton hooks
+  // (``useResolvedMindId`` + ``useOnboardingState``). They share one
+  // module-level fetch — only one ``/api/onboarding/state`` request
+  // is fired per page lifetime regardless of how many consumers
+  // mount. Closes the structural side of CLAUDE.md anti-pattern #35:
+  // previous releases duplicated the fetch+state+warn dance per
+  // consumer, and each new ``mindId`` prop site was at risk of
+  // hardcoding ``"default"``. The mind id hook normalises the
+  // snapshot to a non-null string + exposes ``isFallback`` so
+  // consumers can branch defensively. ``VoiceStep`` keeps accepting
+  // ``string | null`` for back-compat with pre-hook tests that pass
+  // a literal id.
+  const { mindId: resolvedMindId, isFallback: mindIdIsFallback } =
+    useResolvedMindId();
+  const mindId = mindIdIsFallback ? null : resolvedMindId;
+  const onboardingSnapshot = useOnboardingState();
   const [language, setLanguage] = useState(
     () => navigator.language?.split("-")[0] ?? "en",
   );
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
 
+  // Once the singleton snapshot resolves (success OR error), drain
+  // the broader fields into local component state + lift the loading
+  // gate. Errors are swallowed defensively — same semantics as the
+  // pre-BT.B.1 ``.catch(() => {})`` so a transient backend hiccup
+  // doesn't trap the operator on the loading spinner.
+  //
+  // The set-state-in-effect rule deliberately disabled here: the
+  // initial population of these fields IS a one-shot hydration from
+  // an external store (the singleton), which is exactly the pattern
+  // ``useEffect`` is designed for. Cascading renders are not a
+  // concern because the snapshot reference is stable post-resolution
+  // (the singleton mutates by reference but ``useSyncExternalStore``
+  // returns the same object until ``notifyAll`` fires, and ``notifyAll``
+  // fires at most once per page lifetime — at fetch resolution).
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    api
-      .get<OnboardingState>("/api/onboarding/state", {
-        schema: OnboardingStateSchema,
-      })
-      .then((state) => {
-        if (state.complete) {
-          navigate("/", { replace: true });
-          return;
-        }
-        setMindName(state.mind_name || "Sovyx");
-        setMindId(state.mind_id ?? null);
-        setOllamaAvailable(state.ollama_available);
-        setOllamaModels(state.ollama_models);
-        if (state.provider_configured) {
-          setProvider(state.default_provider);
-          setModel(state.default_model);
-          setStep(2);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [navigate]);
+    if (onboardingSnapshot.isLoading) return;
+    const data = onboardingSnapshot.state;
+    if (data) {
+      if (data.complete) {
+        navigate("/", { replace: true });
+        return;
+      }
+      setMindName(data.mind_name || "Sovyx");
+      setOllamaAvailable(data.ollama_available);
+      setOllamaModels(data.ollama_models);
+      if (data.provider_configured) {
+        setProvider(data.default_provider);
+        setModel(data.default_model);
+        setStep(2);
+      }
+    }
+    setLoading(false);
+  }, [onboardingSnapshot, navigate]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleProviderConfigured = useCallback((p: string, m: string) => {
     setProvider(p);

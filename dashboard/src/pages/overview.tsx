@@ -20,6 +20,7 @@ import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
 import { MindAliveCard } from "@/components/dashboard/mind-alive-card";
 import { ChannelStatusCard } from "@/components/dashboard/channel-status";
 import { useOnboardingProgress } from "@/hooks/use-onboarding";
+import { useOnboardingState } from "@/hooks/use-resolved-mind-id";
 
 /**
  * Smart stat value display.
@@ -57,24 +58,27 @@ export default function OverviewPage() {
     showBanner, showAliveCard, setDismissed,
   } = useOnboardingProgress();
 
+  // v0.32.0 BT.B.1 — read /api/onboarding/state via the shared
+  // singleton hook instead of a page-local lazy ``api.get`` import.
+  // The brief constraint: ``ZERO api.get(...).then(...) for
+  // onboarding state should remain in pages/`` — only the hook
+  // implementation reads it. The hook's snapshot is reused across
+  // every consumer on the page (settings, onboarding, overview),
+  // so the redirect check costs at most one ``state.complete``
+  // read once the hook resolves.
+  const { state: onboardingPayload } = useOnboardingState();
   useEffect(() => {
     if (!status) return;
+    if (onboardingPayload === null) return;
     const noProvider =
       !status.llm_calls_today &&
       !status.llm_cost_today &&
       !status.memory_concepts &&
       !status.messages_today;
-    if (noProvider && step1 === "pending") {
-      import("@/lib/api").then(({ api }) => {
-        api
-          .get<{ complete: boolean }>("/api/onboarding/state")
-          .then((state) => {
-            if (!state.complete) navigate("/onboarding", { replace: true });
-          })
-          .catch(() => {});
-      });
+    if (noProvider && step1 === "pending" && !onboardingPayload.complete) {
+      navigate("/onboarding", { replace: true });
     }
-  }, [status, step1, navigate]);
+  }, [status, step1, navigate, onboardingPayload]);
 
   // ── Transition: WelcomeBanner → MindAliveCard (Cenário A vs B) ──
   // Cenário A: user WITNESSES allDone becoming true → animated transition
