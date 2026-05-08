@@ -548,6 +548,83 @@
       "ws_connection_error": "Calibration WebSocket connection error"
     }
   },
+  "hardwareDetection": {
+    "detecting": "Detecting hardware...",
+    "detectionFailed": "Hardware detection failed",
+    "infoChip": {
+      "cpu": "CPU",
+      "cpuValue": "{{cores}} cores",
+      "ram": "RAM",
+      "ramValue": "{{gb}} GB"
+    },
+    "deviceSelect": {
+      "input": "Input",
+      "output": "Output",
+      "none": "None"
+    },
+    "tier": {
+      "gpuLabel": "GPU {{vram}} MB"
+    },
+    "audioWarning": "No audio devices detected. Voice pipeline requires a microphone and speaker.",
+    "models": {
+      "checking": "Checking installed models…",
+      "fallbackTitle": "Recommended models ({{totalMb}} MB total)",
+      "title": "Voice models",
+      "allInstalledBadge": "All installed",
+      "missingBadge": "{{count}} missing · {{mb}} MB",
+      "manualBadge": "manual",
+      "installedAria": "installed",
+      "availableAria": "available to download",
+      "downloadingState": "Downloading{{currentSuffix}} ({{done}}/{{total}})",
+      "currentSuffix": " {{model}}",
+      "downloadCta": "Download missing models ({{mb}} MB)",
+      "fallbackErrorMessage": "Download failed"
+    },
+    "downloadError": {
+      "title": {
+        "cooldown": "Download blocked — recent failure cooldown active",
+        "allMirrorsExhausted": "All mirror sources are currently unreachable",
+        "checksumMismatch": "Download rejected — file integrity check failed",
+        "network": "Network error during download",
+        "unknown": "Download failed"
+      },
+      "hint": {
+        "cooldown": "We wait before retrying to avoid hammering a source that was just failing. You can force-retry below or wait for the countdown.",
+        "allMirrorsExhausted": "Primary + every fallback mirror failed. Check your internet connection; if persistent, the upstream release may be offline.",
+        "checksumMismatch": "The mirror served a file whose contents don't match the pinned SHA-256. The mirror is probably drift-ing — we'll try another source on retry.",
+        "network": "Transient network glitch. Retry in a moment.",
+        "unknown": ""
+      },
+      "retryCountdown": "Retry available in {{countdown}}",
+      "countdownNow": "now",
+      "countdownSecondsOnly": "{{s}}s",
+      "countdownMinutesAndSeconds": "{{m}}m {{s}}s",
+      "retryButton": "Retry download"
+    },
+    "languageLabels": {
+      "en-us": "English (US)",
+      "en-gb": "English (UK)",
+      "pt-br": "Portuguese (BR)",
+      "es": "Spanish",
+      "fr": "French",
+      "hi": "Hindi",
+      "it": "Italian",
+      "ja": "Japanese",
+      "zh": "Chinese"
+    },
+    "voicePicker": {
+      "loadingOption": "Loading…",
+      "languageAria": "Voice-test language",
+      "voiceAria": "Voice"
+    },
+    "micTest": {
+      "startButton": "Test microphone",
+      "stopButton": "Stop test",
+      "connecting": "Connecting…",
+      "ready": "Ready — speak to see your levels",
+      "fallbackError": "Mic test failed"
+    }
+  },
   "qualityPanel": {
     "loading": "Loading voice quality snapshot…",
     "errorPrefix": "Voice quality snapshot unavailable: {{error}}",

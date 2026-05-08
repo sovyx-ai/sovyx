@@ -8,6 +8,7 @@
  */
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import {
   CpuIcon,
@@ -114,6 +115,7 @@ function HardwareDetectionImpl({
   onVoiceChange,
   initialLanguage,
 }: HardwareDetectionProps) {
+  const { t } = useTranslation("voice");
   const [loading, setLoading] = useState(true);
   const [info, setInfo] = useState<HardwareInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -244,7 +246,7 @@ function HardwareDetectionImpl({
     return (
       <div className="flex items-center justify-center py-6 text-sm text-[var(--svx-color-text-tertiary)]">
         <LoaderIcon className="mr-2 size-4 animate-spin" />
-        Detecting hardware...
+        {t("hardwareDetection.detecting")}
       </div>
     );
   }
@@ -253,7 +255,7 @@ function HardwareDetectionImpl({
     return (
       <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-4 py-3 text-xs text-[var(--svx-color-error)]">
         <AlertTriangleIcon className="mr-1.5 inline size-3.5" />
-        {error ?? "Hardware detection failed"}
+        {error ?? t("hardwareDetection.detectionFailed")}
       </div>
     );
   }
@@ -273,11 +275,19 @@ function HardwareDetectionImpl({
 
       {/* Hardware summary */}
       <div className="grid grid-cols-2 gap-3">
-        <InfoChip icon={CpuIcon} label="CPU" value={`${hardware.cpu_cores} cores`} />
+        <InfoChip
+          icon={CpuIcon}
+          label={t("hardwareDetection.infoChip.cpu")}
+          value={t("hardwareDetection.infoChip.cpuValue", {
+            cores: hardware.cpu_cores,
+          })}
+        />
         <InfoChip
           icon={HardDriveIcon}
-          label="RAM"
-          value={`${Math.round(hardware.ram_mb / 1024)} GB`}
+          label={t("hardwareDetection.infoChip.ram")}
+          value={t("hardwareDetection.infoChip.ramValue", {
+            gb: Math.round(hardware.ram_mb / 1024),
+          })}
         />
       </div>
 
@@ -286,7 +296,7 @@ function HardwareDetectionImpl({
         <div className="space-y-2">
           <DeviceSelect
             icon={MicIcon}
-            label="Input"
+            label={t("hardwareDetection.deviceSelect.input")}
             devices={audio.input_devices}
             selected={selectedInput}
             onChange={handleInputChange}
@@ -299,7 +309,7 @@ function HardwareDetectionImpl({
         <div className="space-y-2">
           <DeviceSelect
             icon={Volume2Icon}
-            label="Output"
+            label={t("hardwareDetection.deviceSelect.output")}
             devices={audio.output_devices}
             selected={selectedOutput}
             onChange={handleOutputChange}
@@ -318,14 +328,19 @@ function HardwareDetectionImpl({
         </div>
       </div>
 
-      {/* Tier badge */}
+      {/* Tier badge — ``hardware.tier`` is a stable backend identifier
+          (e.g. "RPI4", "DESKTOP_GPU", "WORKSTATION") rendered verbatim;
+          tier names are NOT translated to keep the operator's mental
+          model aligned with the docs that reference the same constant. */}
       <div className="flex items-center gap-2">
         <span className="rounded-full bg-[var(--svx-color-brand-primary)]/10 px-3 py-1 text-xs font-medium text-[var(--svx-color-brand-primary)]">
           {hardware.tier}
         </span>
         {hardware.has_gpu && (
           <span className="rounded-full bg-[var(--svx-color-success)]/10 px-3 py-1 text-xs font-medium text-[var(--svx-color-success)]">
-            GPU {hardware.gpu_vram_mb} MB
+            {t("hardwareDetection.tier.gpuLabel", {
+              vram: hardware.gpu_vram_mb,
+            })}
           </span>
         )}
       </div>
@@ -334,9 +349,7 @@ function HardwareDetectionImpl({
       {!audio.available && (
         <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-warning)]/10 px-3 py-2.5 text-xs text-[var(--svx-color-warning)]">
           <AlertTriangleIcon className="size-3.5 shrink-0" />
-          <span>
-            No audio devices detected. Voice pipeline requires a microphone and speaker.
-          </span>
+          <span>{t("hardwareDetection.audioWarning")}</span>
         </div>
       )}
 
@@ -362,6 +375,7 @@ function ModelsDiskStatusPanel({
   fallbackTotalMb: number;
   fallback: HardwareInfo["recommended_models"];
 }) {
+  const { t } = useTranslation("voice");
   const { status, statusLoading, statusError, download, downloading, startDownload } =
     useVoiceModels();
 
@@ -369,7 +383,7 @@ function ModelsDiskStatusPanel({
     return (
       <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-3 py-2.5 text-xs text-[var(--svx-color-text-tertiary)]">
         <LoaderIcon className="size-3.5 animate-spin" />
-        <span>Checking installed models…</span>
+        <span>{t("hardwareDetection.models.checking")}</span>
       </div>
     );
   }
@@ -379,7 +393,9 @@ function ModelsDiskStatusPanel({
     return (
       <div className="space-y-2">
         <h4 className="text-xs font-medium text-[var(--svx-color-text-secondary)]">
-          Recommended models ({fallbackTotalMb} MB total)
+          {t("hardwareDetection.models.fallbackTitle", {
+            totalMb: fallbackTotalMb,
+          })}
         </h4>
         <div className="space-y-1.5">
           {fallback.map((m) => (
@@ -414,15 +430,19 @@ function ModelsDiskStatusPanel({
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <h4 className="text-xs font-medium text-[var(--svx-color-text-secondary)]">
-          Voice models
+          {t("hardwareDetection.models.title")}
         </h4>
         {status.all_installed ? (
           <span className="flex items-center gap-1 text-[10px] text-[var(--svx-color-success)]">
-            <CheckCircle2Icon className="size-3" /> All installed
+            <CheckCircle2Icon className="size-3" />{" "}
+            {t("hardwareDetection.models.allInstalledBadge")}
           </span>
         ) : (
           <span className="text-[10px] text-[var(--svx-color-warning)]">
-            {status.missing_count} missing · {status.missing_download_mb} MB
+            {t("hardwareDetection.models.missingBadge", {
+              count: status.missing_count,
+              mb: status.missing_download_mb,
+            })}
           </span>
         )}
       </div>
@@ -447,16 +467,18 @@ function ModelsDiskStatusPanel({
               </span>
               {m.installed ? (
                 <CheckCircle2Icon
-                  aria-label="installed"
+                  aria-label={t("hardwareDetection.models.installedAria")}
                   className="size-3.5 text-[var(--svx-color-success)]"
                 />
               ) : m.download_available ? (
                 <CloudDownloadIcon
-                  aria-label="available to download"
+                  aria-label={t("hardwareDetection.models.availableAria")}
                   className="size-3.5 text-[var(--svx-color-text-tertiary)]"
                 />
               ) : (
-                <span className="text-[10px] text-[var(--svx-color-warning)]">manual</span>
+                <span className="text-[10px] text-[var(--svx-color-warning)]">
+                  {t("hardwareDetection.models.manualBadge")}
+                </span>
               )}
             </div>
           </div>
@@ -480,14 +502,23 @@ function ModelsDiskStatusPanel({
               <>
                 <LoaderIcon className="size-3.5 animate-spin" />
                 <span>
-                  Downloading{download?.current_model ? ` ${download.current_model}` : "…"}
-                  {" "}({download?.completed_models ?? 0}/{download?.total_models ?? 0})
+                  {t("hardwareDetection.models.downloadingState", {
+                    currentSuffix: download?.current_model
+                      ? t("hardwareDetection.models.currentSuffix", {
+                          model: download.current_model,
+                        })
+                      : "…",
+                    done: download?.completed_models ?? 0,
+                    total: download?.total_models ?? 0,
+                  })}
                 </span>
               </>
             ) : (
               <>
                 <DownloadIcon className="size-3.5" />
-                Download missing models ({status.missing_download_mb} MB)
+                {t("hardwareDetection.models.downloadCta", {
+                  mb: status.missing_download_mb,
+                })}
               </>
             )}
           </button>
@@ -508,7 +539,10 @@ function ModelsDiskStatusPanel({
           {download?.status === "error" && (
             <DownloadErrorPanel
               errorCode={download.error_code ?? "unknown"}
-              errorMessage={download.error ?? "Download failed"}
+              errorMessage={
+                download.error ??
+                t("hardwareDetection.models.fallbackErrorMessage")
+              }
               retryAfterSeconds={download.retry_after_seconds ?? null}
               onRetry={startDownload}
             />
@@ -519,31 +553,45 @@ function ModelsDiskStatusPanel({
   );
 }
 
-const _ERROR_CODE_TITLES: Record<string, string> = {
-  cooldown: "Download blocked — recent failure cooldown active",
-  all_mirrors_exhausted: "All mirror sources are currently unreachable",
-  checksum_mismatch: "Download rejected — file integrity check failed",
-  network: "Network error during download",
-  unknown: "Download failed",
-};
-
-const _ERROR_CODE_HINTS: Record<string, string> = {
-  cooldown:
-    "We wait before retrying to avoid hammering a source that was just failing. You can force-retry below or wait for the countdown.",
+// v0.32.5 Phase 4.B.2 — error code → i18n key maps. Backend sends a
+// stable code identifier (cooldown / all_mirrors_exhausted /
+// checksum_mismatch / network / unknown); the UI resolves to the
+// per-locale title + hint at render time. Codes themselves are NEVER
+// translated (they're contract identifiers); only operator-facing
+// titles + hints migrate.
+const _ERROR_CODE_TITLE_KEYS: Record<string, string> = {
+  cooldown: "hardwareDetection.downloadError.title.cooldown",
   all_mirrors_exhausted:
-    "Primary + every fallback mirror failed. Check your internet connection; if persistent, the upstream release may be offline.",
+    "hardwareDetection.downloadError.title.allMirrorsExhausted",
   checksum_mismatch:
-    "The mirror served a file whose contents don't match the pinned SHA-256. The mirror is probably drift-ing — we'll try another source on retry.",
-  network: "Transient network glitch. Retry in a moment.",
-  unknown: "",
+    "hardwareDetection.downloadError.title.checksumMismatch",
+  network: "hardwareDetection.downloadError.title.network",
+  unknown: "hardwareDetection.downloadError.title.unknown",
 };
 
-function _formatCountdown(seconds: number): string {
-  if (seconds <= 0) return "now";
+const _ERROR_CODE_HINT_KEYS: Record<string, string> = {
+  cooldown: "hardwareDetection.downloadError.hint.cooldown",
+  all_mirrors_exhausted:
+    "hardwareDetection.downloadError.hint.allMirrorsExhausted",
+  checksum_mismatch:
+    "hardwareDetection.downloadError.hint.checksumMismatch",
+  network: "hardwareDetection.downloadError.hint.network",
+  unknown: "hardwareDetection.downloadError.hint.unknown",
+};
+
+function _formatCountdown(
+  seconds: number,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  if (seconds <= 0) return t("hardwareDetection.downloadError.countdownNow");
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
-  if (m === 0) return `${s}s`;
-  return `${m}m ${s.toString().padStart(2, "0")}s`;
+  if (m === 0)
+    return t("hardwareDetection.downloadError.countdownSecondsOnly", { s });
+  return t("hardwareDetection.downloadError.countdownMinutesAndSeconds", {
+    m,
+    s: s.toString().padStart(2, "0"),
+  });
 }
 
 function DownloadErrorPanel({
@@ -557,6 +605,7 @@ function DownloadErrorPanel({
   retryAfterSeconds: number | null;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation("voice");
   const [countdown, setCountdown] = useState<number>(retryAfterSeconds ?? 0);
 
   useEffect(() => {
@@ -571,8 +620,22 @@ function DownloadErrorPanel({
     return () => window.clearInterval(id);
   }, [countdown]);
 
-  const title = _ERROR_CODE_TITLES[errorCode] ?? _ERROR_CODE_TITLES.unknown;
-  const hint = _ERROR_CODE_HINTS[errorCode] ?? "";
+  // Type-safe key resolution: ``Record<string, string>`` index access
+  // returns ``string | undefined`` under strict TS, so the fallback to
+  // ``_ERROR_CODE_*_KEYS.unknown`` doesn't narrow on its own. Pin the
+  // ``unknown`` literal as the ultimate fallback so the type narrows
+  // back to ``string`` for the t() call.
+  const titleKey: string =
+    _ERROR_CODE_TITLE_KEYS[errorCode] ??
+    "hardwareDetection.downloadError.title.unknown";
+  const hintKey: string =
+    _ERROR_CODE_HINT_KEYS[errorCode] ??
+    "hardwareDetection.downloadError.hint.unknown";
+  const title = t(titleKey);
+  // The "unknown" hint key resolves to an empty string per the
+  // localisation map; ``t()`` returns "" so we suppress the rendered
+  // <div> wrapper via the truthy check below.
+  const hint = t(hintKey);
   const retryDisabled = errorCode === "cooldown" && countdown > 0;
 
   return (
@@ -595,7 +658,9 @@ function DownloadErrorPanel({
       <div className="flex items-center justify-between gap-2">
         {retryDisabled ? (
           <span className="text-[10px] text-[var(--svx-color-error)]/80">
-            Retry available in {_formatCountdown(countdown)}
+            {t("hardwareDetection.downloadError.retryCountdown", {
+              countdown: _formatCountdown(countdown, t),
+            })}
           </span>
         ) : (
           <span />
@@ -611,7 +676,7 @@ function DownloadErrorPanel({
               : "border-[var(--svx-color-error)]/40 bg-[var(--svx-color-error)]/10 hover:bg-[var(--svx-color-error)]/20",
           )}
         >
-          Retry download
+          {t("hardwareDetection.downloadError.retryButton")}
         </button>
       </div>
     </div>
@@ -655,6 +720,7 @@ function DeviceSelect({
   onChange: (index: number) => void;
   warn?: boolean;
 }) {
+  const { t } = useTranslation("voice");
   if (devices.length === 0) {
     return (
       <div
@@ -666,7 +732,9 @@ function DeviceSelect({
         <Icon className="size-3.5 shrink-0 text-[var(--svx-color-warning)]" />
         <div className="min-w-0">
           <div className="text-[10px] text-[var(--svx-color-text-tertiary)]">{label}</div>
-          <div className="text-xs font-medium text-[var(--svx-color-warning)]">None</div>
+          <div className="text-xs font-medium text-[var(--svx-color-warning)]">
+            {t("hardwareDetection.deviceSelect.none")}
+          </div>
         </div>
       </div>
     );
@@ -716,18 +784,6 @@ function DeviceSelect({
  * we forward ``"en"`` to the button in that case so its post body is
  * always schema-valid, and disable the button until the catalog arrives.
  */
-const LANGUAGE_LABELS: Record<string, string> = {
-  "en-us": "English (US)",
-  "en-gb": "English (UK)",
-  "pt-br": "Portuguese (BR)",
-  es: "Spanish",
-  fr: "French",
-  hi: "Hindi",
-  it: "Italian",
-  ja: "Japanese",
-  zh: "Chinese",
-};
-
 function VoiceTestPicker({
   deviceId,
   catalog,
@@ -743,18 +799,30 @@ function VoiceTestPicker({
   onLanguageChange: (lang: string) => void;
   onVoiceChange: (voice: string) => void;
 }) {
+  const { t } = useTranslation("voice");
   const ready = catalog.catalog !== null && selectedLanguage !== null;
   const voices = selectedLanguage
     ? catalog.voicesForLanguage(selectedLanguage)
     : [];
   const languages = catalog.catalog?.supported_languages ?? [];
 
+  // v0.32.5 Phase 4.B.2 — language label resolver. The locale file
+  // defines names for each known BCP-47 code under
+  // ``hardwareDetection.languageLabels.*``. Unknown codes fall through
+  // to the raw code (matches the legacy behaviour) so a future Moonshine
+  // addition surfaces visibly until the translation lands.
+  const labelForLanguage = (code: string): string => {
+    const key = `hardwareDetection.languageLabels.${code}`;
+    const label = t(key);
+    return label === key ? code : label;
+  };
+
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-2">
         <div className="relative">
           <select
-            aria-label="Voice-test language"
+            aria-label={t("hardwareDetection.voicePicker.languageAria")}
             value={selectedLanguage ?? ""}
             onChange={(e) => onLanguageChange(e.target.value)}
             disabled={!ready}
@@ -764,10 +832,14 @@ function VoiceTestPicker({
             )}
             style={{ colorScheme: "dark" }}
           >
-            {!ready && <option value="">Loading…</option>}
+            {!ready && (
+              <option value="">
+                {t("hardwareDetection.voicePicker.loadingOption")}
+              </option>
+            )}
             {languages.map((code) => (
               <option key={code} value={code}>
-                {LANGUAGE_LABELS[code] ?? code}
+                {labelForLanguage(code)}
               </option>
             ))}
           </select>
@@ -775,7 +847,7 @@ function VoiceTestPicker({
         </div>
         <div className="relative">
           <select
-            aria-label="Voice"
+            aria-label={t("hardwareDetection.voicePicker.voiceAria")}
             value={selectedVoice ?? ""}
             onChange={(e) => onVoiceChange(e.target.value)}
             disabled={!ready || voices.length === 0}
@@ -785,7 +857,11 @@ function VoiceTestPicker({
             )}
             style={{ colorScheme: "dark" }}
           >
-            {!ready && <option value="">Loading…</option>}
+            {!ready && (
+              <option value="">
+                {t("hardwareDetection.voicePicker.loadingOption")}
+              </option>
+            )}
             {voices.map((v) => (
               <option key={v.id} value={v.id}>
                 {v.display_name}
@@ -819,16 +895,22 @@ function VoiceTestPicker({
  * unmount via the hook's own teardown.
  */
 function MicTestPanel({ deviceId }: { deviceId: number | null }) {
+  const { t } = useTranslation("voice");
   const [enabled, setEnabled] = useState(false);
   const stream = useAudioLevelStream({ deviceId, enabled });
 
+  // Backend-supplied ``errorDetail`` / ``errorCode`` are passed through
+  // unchanged when present (operator's own audio stack often supplies
+  // a more device-specific message than any localised fallback).
   const statusText =
     stream.state === "error"
-      ? stream.errorDetail ?? stream.errorCode ?? "Mic test failed"
+      ? stream.errorDetail ??
+        stream.errorCode ??
+        t("hardwareDetection.micTest.fallbackError")
       : stream.state === "connecting"
-      ? "Connecting…"
+      ? t("hardwareDetection.micTest.connecting")
       : stream.state === "ready"
-      ? "Ready — speak to see your levels"
+      ? t("hardwareDetection.micTest.ready")
       : stream.state === "streaming"
       ? null
       : null;
@@ -842,7 +924,7 @@ function MicTestPanel({ deviceId }: { deviceId: number | null }) {
           className="flex w-full items-center justify-center gap-1.5 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3 py-1.5 text-[11px] text-[var(--svx-color-text-secondary)] transition-colors hover:text-[var(--svx-color-text-primary)]"
         >
           <ActivityIcon className="size-3" />
-          Test microphone
+          {t("hardwareDetection.micTest.startButton")}
         </button>
       ) : (
         <>
@@ -864,7 +946,7 @@ function MicTestPanel({ deviceId }: { deviceId: number | null }) {
             onClick={() => setEnabled(false)}
             className="text-[10px] text-[var(--svx-color-text-tertiary)] hover:text-[var(--svx-color-text-primary)]"
           >
-            Stop test
+            {t("hardwareDetection.micTest.stopButton")}
           </button>
         </>
       )}

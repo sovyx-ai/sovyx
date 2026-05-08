@@ -13,6 +13,10 @@
  *      transient 429 wiped the whole Step 4.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+// v0.32.5 Phase 4.B.2 — initialise i18n synchronously so the
+// component's ``useTranslation("voice")`` resolves keys to localised
+// strings instead of returning bare key names.
+import "@/lib/i18n";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import { HardwareDetection } from "./HardwareDetection";

@@ -548,6 +548,83 @@
       "ws_connection_error": "Error de conexión WebSocket de calibración"
     }
   },
+  "hardwareDetection": {
+    "detecting": "Detectando hardware...",
+    "detectionFailed": "Falló la detección de hardware",
+    "infoChip": {
+      "cpu": "CPU",
+      "cpuValue": "{{cores}} núcleos",
+      "ram": "RAM",
+      "ramValue": "{{gb}} GB"
+    },
+    "deviceSelect": {
+      "input": "Entrada",
+      "output": "Salida",
+      "none": "Ninguno"
+    },
+    "tier": {
+      "gpuLabel": "GPU {{vram}} MB"
+    },
+    "audioWarning": "No se detectaron dispositivos de audio. El pipeline de voz requiere un micrófono y altavoz.",
+    "models": {
+      "checking": "Verificando modelos instalados…",
+      "fallbackTitle": "Modelos recomendados ({{totalMb}} MB en total)",
+      "title": "Modelos de voz",
+      "allInstalledBadge": "Todos instalados",
+      "missingBadge": "{{count}} faltantes · {{mb}} MB",
+      "manualBadge": "manual",
+      "installedAria": "instalado",
+      "availableAria": "disponible para descarga",
+      "downloadingState": "Descargando{{currentSuffix}} ({{done}}/{{total}})",
+      "currentSuffix": " {{model}}",
+      "downloadCta": "Descargar modelos faltantes ({{mb}} MB)",
+      "fallbackErrorMessage": "Falló la descarga"
+    },
+    "downloadError": {
+      "title": {
+        "cooldown": "Descarga bloqueada — cooldown por falla reciente activo",
+        "allMirrorsExhausted": "Todas las fuentes mirror están actualmente inaccesibles",
+        "checksumMismatch": "Descarga rechazada — la verificación de integridad del archivo falló",
+        "network": "Error de red durante la descarga",
+        "unknown": "Falló la descarga"
+      },
+      "hint": {
+        "cooldown": "Esperamos antes de reintentar para no machacar una fuente que estaba fallando. Puedes forzar el retry abajo o esperar el conteo.",
+        "allMirrorsExhausted": "Mirror primario + todos los fallbacks fallaron. Revisa tu conexión; si persiste, el release upstream puede estar offline.",
+        "checksumMismatch": "El mirror sirvió un archivo cuyo contenido no coincide con el SHA-256 anclado. Probablemente el mirror está desincronizado — probaremos otra fuente en el retry.",
+        "network": "Falla de red transitoria. Reintenta en un momento.",
+        "unknown": ""
+      },
+      "retryCountdown": "Retry disponible en {{countdown}}",
+      "countdownNow": "ahora",
+      "countdownSecondsOnly": "{{s}}s",
+      "countdownMinutesAndSeconds": "{{m}}m {{s}}s",
+      "retryButton": "Reintentar descarga"
+    },
+    "languageLabels": {
+      "en-us": "Inglés (EE.UU.)",
+      "en-gb": "Inglés (Reino Unido)",
+      "pt-br": "Portugués (BR)",
+      "es": "Español",
+      "fr": "Francés",
+      "hi": "Hindi",
+      "it": "Italiano",
+      "ja": "Japonés",
+      "zh": "Chino"
+    },
+    "voicePicker": {
+      "loadingOption": "Cargando…",
+      "languageAria": "Idioma de la prueba de voz",
+      "voiceAria": "Voz"
+    },
+    "micTest": {
+      "startButton": "Probar micrófono",
+      "stopButton": "Detener prueba",
+      "connecting": "Conectando…",
+      "ready": "Listo — habla para ver tus niveles",
+      "fallbackError": "Falló la prueba del mic"
+    }
+  },
   "qualityPanel": {
     "loading": "Cargando snapshot de calidad de voz…",
     "errorPrefix": "Snapshot de calidad de voz no disponible: {{error}}",
