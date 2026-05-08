@@ -53,6 +53,7 @@ from sovyx.voice.pipeline._frame_types import (
     BargeInInterruptionFrame,
     CaptureRestartFrame,
     EndFrame,
+    LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     OutputAudioRawFrame,
     PipelineFrame,
@@ -305,6 +306,18 @@ class VoicePipeline:
         # config mind_id (single-mind backward-compat); router match
         # overrides per turn; reset on IDLE return.
         self._current_mind_id = config.mind_id
+
+        # v0.32.3 Phase 3.B.1 — track the THINKING phase entry so
+        # :class:`LLMFullResponseEndFrame` can carry an accurate
+        # ``elapsed_ms`` field at the THINKING → SPEAKING transition.
+        # Set at the IDLE/RECORDING → THINKING boundary (the same
+        # site that emits :class:`LLMFullResponseStartFrame`); cleared
+        # after the End frame fires at ``speak()`` / ``flush_stream()``.
+        # ``None`` for the proactive-speak path (cogloop calling
+        # ``speak()`` without a preceding wake/STT turn): in that
+        # case the End frame is suppressed since the THINKING phase
+        # never happened on the pipeline side.
+        self._llm_thinking_start_monotonic: float | None = None
 
         # Mission `MISSION-voice-runtime-listener-wireup-2026-04-30.md`
         # Phase 1b — runtime listener wire-up. Captured at construction
@@ -1100,6 +1113,14 @@ class VoicePipeline:
         # Reset per-turn mind context to the config default so the
         # next turn's WakeWordDetectedEvent starts clean.
         self._current_mind_id = self._config.mind_id
+        # v0.32.3 Phase 3.B.1 — drop any THINKING anchor that the prior
+        # turn left dangling (e.g. a barge-in cancelled the speech chain
+        # before ``speak()``/``flush_stream()`` ran their End-frame
+        # emit). Without this reset, the next turn's End frame would
+        # carry an ``elapsed_ms`` measured against the OLD turn's
+        # THINKING start. The next THINKING entry resets the anchor
+        # for the next turn, but only if this site clears the leak.
+        self._llm_thinking_start_monotonic = None
 
     def _notify_wake_word_false_fire(self) -> None:
         """Forward a false-fire signal to the wake-word detector.
@@ -1439,10 +1460,20 @@ class VoicePipeline:
         """Async callback for ``IMMNotificationClient.OnDefaultDeviceChanged``
         events filtered to ``flow=eCapture, role=eCommunications``.
 
-        Mission Phase 1b emits the structured event ONLY. The
-        capture-task ``request_device_change_restart`` wire-up that
-        turns this signal into an actual restart is OUT OF SCOPE per
-        mission Part 4.2 — separate future commit.
+        v0.32.3 Phase 3.B.1 — observability-only **by design**. Pre-fix
+        the docstring claimed the restart wire-up was "deferred", but
+        the architecture has since converged on the
+        :class:`sovyx.voice.health.watchdog.VoiceHealthWatchdog` owning
+        active-device restart via the ``WM_DEVICECHANGE`` listener
+        (:func:`build_windows_hotplug_listener`) → ``_handle_active_removal``
+        → ``_re_cascade``. The watchdog path is the single source of
+        truth for restart on Windows; the IMM subscription provides
+        complementary fine-grained audio-endpoint observability that
+        ``WM_DEVICECHANGE`` cannot (it carries
+        ``flow=eCapture, role=eCommunications`` filters + detailed
+        state codes). Wiring restart from BOTH sources would race the
+        watchdog's lock + invalidate idempotency. Keep this callback
+        log-only.
         """
         logger.info(
             "voice.default_capture_changed",
@@ -1454,8 +1485,12 @@ class VoicePipeline:
         """Async callback for ``IMMNotificationClient.OnDeviceStateChanged``.
 
         Same scope contract as :meth:`_on_default_capture_changed` —
-        emit the structured event for now; downstream wire-up
-        deferred.
+        observability-only by design (v0.32.3 Phase 3.B.1 docstring
+        clarification). The watchdog's ``WM_DEVICECHANGE`` listener
+        owns the actual restart via ``_handle_active_removal``; the
+        IMM subscription complements it with audio-endpoint-specific
+        state codes (UNPLUGGED / NOT_PRESENT / DISABLED) for
+        dashboards.
 
         Args:
             device_id: The endpoint GUID whose state changed.
@@ -2180,10 +2215,18 @@ class VoicePipeline:
         # request_id will be filled by the cognitive bridge when it
         # registers the LLM cancel hook; here we mark the start with
         # the utterance_id so dashboards see the THINKING boundary.
+        # v0.32.3 Phase 3.B.1 — capture the THINKING entry timestamp
+        # so the matching :class:`LLMFullResponseEndFrame` (emitted at
+        # ``speak()`` or ``flush_stream()``) can compute ``elapsed_ms``
+        # against this anchor. Use ``time.monotonic()`` consistently
+        # across both frame timestamps so dashboards rendering against
+        # the same clock get a coherent THINKING span.
+        thinking_start_monotonic = time.monotonic()
+        self._llm_thinking_start_monotonic = thinking_start_monotonic
         self._record_frame(
             LLMFullResponseStartFrame(
                 frame_type="LLMFullResponseStart",
-                timestamp_monotonic=time.monotonic(),
+                timestamp_monotonic=thinking_start_monotonic,
                 model="",  # filled by cognitive bridge per-call
                 request_id="",
             ),
@@ -2263,12 +2306,63 @@ class VoicePipeline:
 
     # -- TTS / speaking interface (called by CogLoop) -----------------------
 
+    def _emit_llm_full_response_end_frame(self, output_chars: int) -> None:
+        """Emit :class:`LLMFullResponseEndFrame` at the THINKING → SPEAKING boundary.
+
+        v0.32.3 Phase 3.B.1 — closes audit gap P0.B2. Pre-fix the End
+        frame was defined in :mod:`_frame_types` but had zero emit
+        sites; dashboards never saw the THINKING-span close so LLM-
+        side latency couldn't be rendered without correlating against
+        the LLM router's own logs.
+
+        Emit semantics:
+            * ``output_chars`` — rough character length of the LLM
+              response handed to TTS (full text for ``speak()``;
+              ``len(text_buffer)`` for ``flush_stream()``).
+            * ``elapsed_ms`` — clock-monotonic delta between the
+              matching :class:`LLMFullResponseStartFrame` (set by
+              ``_llm_thinking_start_monotonic`` at the THINKING entry)
+              and the End frame's emission. ``0`` when no THINKING
+              phase preceded the speak (proactive cogloop initiative).
+            * Suppressed entirely when ``_llm_thinking_start_monotonic``
+              is ``None`` to avoid emitting a misleading "End" frame
+              for a turn that had no observable "Start" — matches the
+              ring buffer's start-end-frame pairing contract that
+              dashboards rely on for the SPEAKING-after-THINKING span.
+
+        Once emitted, ``_llm_thinking_start_monotonic`` is cleared so
+        a follow-up speak/flush in the same turn doesn't double-emit.
+        The next THINKING entry resets the anchor for the next turn.
+        """
+        if self._llm_thinking_start_monotonic is None:
+            return
+        now_monotonic = time.monotonic()
+        elapsed_ms = max(
+            0,
+            int((now_monotonic - self._llm_thinking_start_monotonic) * 1000),
+        )
+        self._record_frame(
+            LLMFullResponseEndFrame(
+                frame_type="LLMFullResponseEnd",
+                timestamp_monotonic=now_monotonic,
+                output_chars=output_chars,
+                elapsed_ms=elapsed_ms,
+            ),
+        )
+        self._llm_thinking_start_monotonic = None
+
     async def speak(self, text: str) -> None:
         """Synthesize and play text (called by CogLoop.act).
 
         Args:
             text: Text to speak.
         """
+        # v0.32.3 Phase 3.B.1 — emit the LLMFullResponseEndFrame BEFORE
+        # the SPEAKING transition so the frame ring buffer reflects
+        # THINKING-end → SPEAKING-start in temporal order. Helper is a
+        # no-op when no preceding THINKING phase fired (proactive
+        # cogloop speak), preserving the start-end pairing contract.
+        self._emit_llm_full_response_end_frame(output_chars=len(text))
         self._state = VoicePipelineState.SPEAKING
         # Step 13 frame emission — TTS speak boundary. Per-chunk
         # OutputAudioRawFrame frames will be emitted as chunks land
@@ -2509,7 +2603,26 @@ class VoicePipeline:
         — by making the interrupt explicit here. Belt + suspenders;
         ``interrupt()`` is idempotent so the upstream
         ``cancel_speech_chain`` path is unaffected.
+
+        v0.32.3 Phase 3.B.1 — emit :class:`LLMFullResponseEndFrame`
+        on entry. This is the canonical "LLM done generating" signal
+        for the streaming path: ``stream_text`` is called per-chunk
+        and can't tell which chunk is the last, so the cognitive
+        bridge invokes ``flush_stream`` once the LLM router signals
+        completion. The frame's ``output_chars`` reports the residual
+        buffer length (the chunks already synthesised landed in the
+        per-chunk ``OutputAudioRawFrame`` ring); dashboards correlate
+        the End frame's ``elapsed_ms`` with the matching Start frame
+        to render LLM-side latency.
         """
+        # v0.32.3 Phase 3.B.1 — close the THINKING-span observability
+        # by emitting the matching End frame even if the residual
+        # buffer is empty (LLM streamed to clean sentence boundaries).
+        # Helper is a no-op when no THINKING phase preceded
+        # (proactive flush from cogloop initiative).
+        self._emit_llm_full_response_end_frame(
+            output_chars=len(self._text_buffer),
+        )
         if self._text_buffer.strip():
             try:
                 chunk = await self._synthesize_tracked(self._text_buffer)

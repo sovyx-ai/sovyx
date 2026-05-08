@@ -23,6 +23,7 @@ from typing import Any
 
 from sovyx.voice.pipeline._frame_types import (
     EndFrame,
+    LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     OutputAudioRawFrame,
     TranscriptionFrame,
@@ -169,8 +170,107 @@ class TestFrameTypesIntegrationSurface:
         assert UserStartedSpeakingFrame
         assert TranscriptionFrame
         assert LLMFullResponseStartFrame
+        # v0.32.3 Phase 3.B.1 — End frame is now actually emitted
+        # (audit gap P0.B2 closure); pin the import so test catches
+        # a regression where someone removes the symbol thinking it
+        # was unused.
+        assert LLMFullResponseEndFrame
         assert OutputAudioRawFrame
         assert EndFrame
+
+
+class TestLLMFullResponseEndFrame:
+    """v0.32.3 Phase 3.B.1 — closes audit gap P0.B2.
+
+    Pre-fix the End frame was defined but had zero emit sites; the
+    THINKING-span had a Start frame with no matching End. Dashboards
+    correlating LLM-side latency had to fall back to the LLM router's
+    own logs. The fix wires emission at:
+
+      * ``speak()`` entry — non-streaming "LLM done generating" path
+      * ``flush_stream()`` entry — streaming "LLM done streaming" path
+
+    Both paths emit AT MOST once per turn. ``_clear_utterance_id``
+    drops any leaked anchor so the next turn's End frame can't carry
+    a stale ``elapsed_ms`` from a barge-in-cancelled prior turn.
+    """
+
+    def _make_pipeline(self) -> VoicePipeline:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sovyx.voice.pipeline._config import VoicePipelineConfig
+
+        return VoicePipeline(
+            config=VoicePipelineConfig(),
+            vad=MagicMock(),
+            wake_word=MagicMock(),
+            stt=AsyncMock(),
+            tts=AsyncMock(),
+            event_bus=None,
+        )
+
+    def test_end_frame_emitted_after_thinking_anchor_set(self) -> None:
+        """When ``_llm_thinking_start_monotonic`` is set, the helper
+        emits the End frame with positive ``output_chars`` + sane
+        ``elapsed_ms``."""
+        import time
+
+        pipeline = self._make_pipeline()
+        pipeline._llm_thinking_start_monotonic = time.monotonic() - 0.05  # 50 ms ago
+        pipeline._emit_llm_full_response_end_frame(output_chars=42)
+
+        end_frames = [
+            f
+            for f in pipeline._state_machine.frame_history()
+            if isinstance(f, LLMFullResponseEndFrame)
+        ]
+        assert len(end_frames) == 1
+        assert end_frames[0].output_chars == 42  # noqa: PLR2004
+        assert end_frames[0].elapsed_ms >= 0
+        # Anchor is cleared so a follow-up emit doesn't fire again.
+        assert pipeline._llm_thinking_start_monotonic is None
+
+    def test_end_frame_suppressed_when_no_thinking_anchor(self) -> None:
+        """Proactive ``speak()`` from cogloop initiative — no THINKING
+        phase preceded, so the End frame must NOT fire (would be
+        misleading: a SPEAKING-span without a matching THINKING)."""
+        pipeline = self._make_pipeline()
+        assert pipeline._llm_thinking_start_monotonic is None
+        pipeline._emit_llm_full_response_end_frame(output_chars=10)
+
+        end_frames = [
+            f
+            for f in pipeline._state_machine.frame_history()
+            if isinstance(f, LLMFullResponseEndFrame)
+        ]
+        assert end_frames == []
+
+    def test_end_frame_idempotent_after_emit(self) -> None:
+        """Second invocation after the anchor was cleared must NOT
+        re-emit (a turn produces one Start + at most one End)."""
+        import time
+
+        pipeline = self._make_pipeline()
+        pipeline._llm_thinking_start_monotonic = time.monotonic()
+        pipeline._emit_llm_full_response_end_frame(output_chars=10)
+        pipeline._emit_llm_full_response_end_frame(output_chars=10)
+
+        end_frames = [
+            f
+            for f in pipeline._state_machine.frame_history()
+            if isinstance(f, LLMFullResponseEndFrame)
+        ]
+        assert len(end_frames) == 1
+
+    def test_clear_utterance_id_resets_thinking_anchor(self) -> None:
+        """Barge-in / terminal-IDLE path clears the leaked anchor so
+        the next turn's End frame can't carry stale ``elapsed_ms``."""
+        import time
+
+        pipeline = self._make_pipeline()
+        pipeline._llm_thinking_start_monotonic = time.monotonic()
+        pipeline._clear_utterance_id()
+        assert pipeline._llm_thinking_start_monotonic is None
 
 
 class TestBargeInInterruptionFrame:
