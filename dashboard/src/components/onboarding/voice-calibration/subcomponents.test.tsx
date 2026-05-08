@@ -160,7 +160,17 @@ describe("ProfileReview", () => {
     expect(screen.getByText(/calibration.json/)).toBeInTheDocument();
   });
 
-  it("invokes onCompleted on confirm click", () => {
+  it("invokes onCompleted on confirm click after voice status verifies", async () => {
+    // v0.31.4 GAP 7 closure: Confirm now polls /api/voice/status
+    // before advancing. Test must mock the status endpoint as
+    // running=true; otherwise the receipt check fails closed +
+    // surfaces the verification-failed banner instead of advancing.
+    const { vi: vitest } = await import("vitest");
+    const apiMod = await import("@/lib/api");
+    const getSpy = vitest
+      .spyOn(apiMod.api, "get")
+      .mockResolvedValue({ pipeline: { running: true } } as never);
+
     const onCompleted = vi.fn();
     render(
       <ProfileReview
@@ -171,7 +181,41 @@ describe("ProfileReview", () => {
     );
     const button = screen.getByRole("button");
     fireEvent.click(button);
-    expect(onCompleted).toHaveBeenCalledOnce();
+    // The receipt check is async; wait for onCompleted to fire.
+    const { waitFor } = await import("@/test/test-utils");
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledOnce());
+    getSpy.mockRestore();
+  });
+
+  it("shows verification banner + does NOT advance when pipeline not running", async () => {
+    // v0.31.4 GAP 7 closure: pipeline.running===false → fail closed,
+    // surface the operator-actionable banner instead of advancing.
+    const { vi: vitest } = await import("vitest");
+    const apiMod = await import("@/lib/api");
+    const getSpy = vitest
+      .spyOn(apiMod.api, "get")
+      .mockResolvedValue({ pipeline: { running: false } } as never);
+
+    const onCompleted = vi.fn();
+    render(
+      <ProfileReview
+        triageWinnerHid={null}
+        profilePath={null}
+        onCompleted={onCompleted}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    const { waitFor } = await import("@/test/test-utils");
+    // Wait long enough for 3×1s retry cycle to finish.
+    await waitFor(
+      () =>
+        expect(
+          screen.getByTestId("voice-calibration-verification-failed"),
+        ).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
+    expect(onCompleted).not.toHaveBeenCalled();
+    getSpy.mockRestore();
   });
 });
 

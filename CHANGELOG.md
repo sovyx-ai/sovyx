@@ -6,7 +6,157 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.31.3 below)
+(none — every shipped delta is in v0.31.4 below)
+
+## [0.31.4] — 2026-05-08
+
+Voice onboarding bug-class closure. The 4 prior audit passes
+(rc.16 → v0.31.1 → v0.31.2 → v0.31.3) ALL declared "system clean ship
+GA". 30 minutes after operator started production test on canonical
+hardware (Sony VAIO + Linux Mint + Razer USB headset), voice silently
+failed end-to-end. Investigation found 9 correlated gaps spanning
+frontend (wizard stub), backend (phantom YAML field), registry
+(zombie task overwrite), calibration (wrong-mic fix), and onboarding
+flow. Each module was clean in isolation; **the bug was in the
+integration**.
+
+Gap map: ``docs-internal/GAP-MAP-voice-onboarding-broken-2026-05-08.md``.
+Mission spec: ``docs-internal/missions/MISSION-voice-onboarding-bug-class-2026-05-08.md``.
+
+### Fixed (P0 — CRITICAL, blocks GA)
+
+- **GAP 1 — `VoiceSetupWizard.handleSave` was a documented stub.**
+  Pre-v0.31.4 ``handleSave`` (``VoiceSetupWizard.tsx:242-249``) only
+  dispatched ``advanceToDone`` locally + called ``onComplete``
+  callback. Comment literal: "for v0.30.0 the wizard's selection is
+  application-scope (not yet persisted to mind.yaml; that wire-up is
+  left for v0.30.x patches once the wizard's ratification UX is
+  validated by D22 browser pilot)." Operator finished the wizard,
+  saw "All set!", advanced through onboarding — but voice was never
+  enabled. Direct evidence: operator's log shows
+  ``voice_wizard_test_record_complete diagnosis=ok`` followed by 3
+  minutes of silence (no ``voice_pipeline_created``) before SIGINT.
+  Fix: ``handleSave`` now POSTs ``/api/voice/enable`` with
+  ``{input_device}``; advances only on 200 OK; surfaces error
+  banner instead of silent advance. 3 new vitest cases.
+
+- **GAP 3 — registry `register_instance` silently overwrote with
+  zombie task leak.** Pre-v0.31.4 the registry's ``register_instance``
+  (``registry.py:64-81``) overwrote any existing instance with a
+  ``service_overwritten`` warning. If the old instance owned a
+  running asyncio task (e.g. ``AudioCaptureTask``), the task
+  continued executing as a zombie — holding the mic handle +
+  delivering frames to the orchestrator queue concurrently with the
+  new task. Direct evidence: operator's log showed 2
+  ``audio-capture-consumer`` tasks (task_id ``4d710bad`` +
+  ``b0ac45d1``) running in parallel feeding the same orchestrator
+  (frames_processed=157, 158, 157, 158 alternating), producing 4×
+  frame drops (gap_ms=136.3 vs 32 ms expected). Fix: split the
+  contract into ``register_instance(*, replace_existing=False)``
+  (raises ``ServiceAlreadyRegisteredError`` on duplicate INSTANCE)
+  + new async ``replace_instance`` (awaits stop/cancel/aclose on the
+  old instance before overwriting). Voice enable migrated to
+  ``await replace_instance``. 7 new test cases.
+
+- **GAP 5 — R10 mic fix targeted wrong physical hardware.**
+  Pre-v0.31.4 ``_apply_linux_mixer`` (``_applier.py:747``) picked
+  ``candidates[0]`` (first attenuated card) regardless of which mic
+  the operator was using. Plus ``_measurer.py:160`` hardcoded
+  ``amixer -c 0 scontents``, probing ONLY card 0. Operator with
+  Razer USB on card 2 + attenuated laptop internal mic on card 1
+  had R10 boost the WRONG mic. Direct evidence:
+  ``Planned mixer remediation: card 1 HD-Audio Generic — BOOST UP``
+  while ``arecord -l`` showed card 2 = Razer. Fix: plumb
+  ``active_mic_card_index`` through ``CalibrationApplier`` →
+  ``_apply_linux_mixer`` (prefers candidate matching active card)
+  + ``capture_measurements`` → ``_read_mixer_state(card_index)``
+  (probes operator's actual card). Defaults preserve back-compat.
+  4 new test cases.
+
+### Fixed (P1 — HIGH, operator-blocking with workaround)
+
+- **GAP 2 — `voice_enabled` is now a real top-level MindConfig
+  field.** Pre-v0.31.4 ``/api/voice/enable`` wrote a
+  ``voice: {enabled: true}`` YAML SECTION that bootstrap NEVER read.
+  Phantom config field; daemon restart silently dropped voice state.
+  Fix: add ``voice_enabled: bool = Field(default=False)`` as
+  TOP-LEVEL field in ``MindConfig``. Endpoint now persists via
+  ``ConfigEditor.set_scalar`` BEFORE writing the legacy nested
+  section (kept as back-compat for operator-side tooling).
+
+- **GAP 4 — bootstrap auto-resumes voice on daemon restart.**
+  Pre-v0.31.4 voice was opt-in via explicit ``/api/voice/enable``
+  HTTP call after every daemon start. New helper
+  ``_auto_resume_voice_pipeline`` in ``bootstrap.py`` reads
+  ``MindConfig.voice_enabled``; if True, calls
+  ``create_voice_pipeline`` factory + bundles via
+  ``replace_instance``. DEFENSIVE: any exception is logged + swallowed
+  (``voice_auto_resume_failed`` event) so daemon startup is NEVER
+  blocked by voice failure.
+
+- **GAP 6 — onboarding state reflects wizard-driven enable.**
+  Pre-v0.31.4 wizard's ``onComplete`` only set ``wizardTested=true``
+  without updating parent's ``enabled`` state. Post GAP 1 fix the
+  wizard actually persists voice; ``onComplete`` now also sets
+  ``enabled=true`` so parent's "Continue" button activates without
+  operator clicking a redundant "Enable Voice" button. Voice page
+  triggers ``fetchData()`` on wizard close.
+
+### Fixed (P2 — MEDIUM, UX confusion)
+
+- **GAP 7 — `ProfileReview` verifies pipeline running before
+  advancing.** ``handleConfirm`` polls ``/api/voice/status`` up to
+  3× with 1s delays; only advances on confirmed
+  ``pipeline.running=true``. Otherwise renders inline error banner
+  with operator-actionable recovery. 2 new vitest cases.
+
+- **GAP 8 — `/api/onboarding/complete` returns `voice_configured`
+  field.** Frontend uses it to render "Voice not configured" banner
+  on overview page when ``onboarding_complete=true`` but voice
+  pipeline isn't registered. Defensive fallback for registry
+  malfunction. 3 new test cases.
+
+- **GAP 9 — PII redactor structural-field allowlist extended.**
+  Adds ``task_id``, ``request_id``, ``session_id``, ``profile_id``,
+  ``profile_id_hash``, ``mind_id_hash``, ``fingerprint_hash``,
+  ``service.instance.id``, etc. to ``_PROTECTED_KEYS`` so they're
+  never classified as PII by the global regex sweep. Pre-v0.31.4
+  all-digit ``task_id`` matched ``PHONE_BR_RE`` and got redacted as
+  ``[redacted-phone]``, polluting observability logs. 2 new test
+  cases.
+
+### Quality gates (all green at HEAD)
+
+- ruff check + format: clean
+- mypy strict: 0 issues in 512 source files (Linux baseline)
+- bandit: 0/0/0/0
+- pytest: 14587 passed (+23 from v0.31.3 baseline of 14564)
+- vitest: 1240 passed (+5 from v0.31.3 baseline of 1235; 1
+  preexisting test rewritten for new ProfileReview contract)
+- tsc -b: clean
+- uv lock --check: clean
+
+### Mission
+
+Spec: ``docs-internal/missions/MISSION-voice-onboarding-bug-class-2026-05-08.md``.
+Four-commit chain (P0 + P1 + P2 + release) per
+``feedback_staged_adoption``. Each commit independently revertable.
+
+### Lessons archived
+
+The 4-pass audit framework (rc.16 → v0.31.1 → v0.31.2 → v0.31.3)
+declared "system clean" but production failed because audit checked
+each module in isolation; the bug crossed 5 subsystem boundaries.
+**Future audits MUST include explicit end-to-end operator-journey
+simulation** (synthetic operator that traverses frontend →
+backend → registry → calibration → mic-hardware) — unit-level
+audits cannot certify GA-readiness.
+
+Stub-with-doc-comment is a TIMEBOMB, not "deferred work". The
+``handleSave`` stub had been deferred since v0.30.0; 5+ patches
+shipped without anyone wiring it up. **Process gap to close:**
+every ``// deferred to v0.X.Y`` comment must have a tracking issue
++ an auto-failing test that flips green when the stub is wired.
 
 ## [0.31.3] — 2026-05-07
 

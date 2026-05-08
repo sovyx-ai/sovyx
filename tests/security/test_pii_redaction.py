@@ -307,8 +307,7 @@ class TestProtectedEnvelopeKeys:
         rec = next(
             json.loads(line)
             for line in log_file.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-            and json.loads(line).get("event") == "background_task_running"
+            if line.strip() and json.loads(line).get("event") == "background_task_running"
         )
         # Task IDs are structural; the literal value MUST land in the
         # log unredacted.
@@ -316,9 +315,7 @@ class TestProtectedEnvelopeKeys:
         # Confirm the broken pre-v0.31.4 marker is NOT present.
         assert "[redacted-phone]" not in rec["task_id"]
 
-    def test_request_id_not_redacted(
-        self, tmp_path: Path, _clean_state: None
-    ) -> None:
+    def test_request_id_not_redacted(self, tmp_path: Path, _clean_state: None) -> None:
         """``request_id`` joins task_id in the structural-identifier
         allowlist."""
         log_file = _setup(tmp_path)
@@ -331,8 +328,7 @@ class TestProtectedEnvelopeKeys:
         rec = next(
             json.loads(line)
             for line in log_file.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-            and json.loads(line).get("event") == "request_logged"
+            if line.strip() and json.loads(line).get("event") == "request_logged"
         )
         assert rec["request_id"] == "9876543210"
 

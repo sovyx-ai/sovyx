@@ -223,9 +223,7 @@ class TestCompleteOnboarding:
         resp = client.post("/api/onboarding/complete")
         assert resp.status_code == 200  # noqa: PLR2004
 
-    def test_voice_configured_false_when_voice_not_enabled(
-        self, client: TestClient, app
-    ) -> None:
+    def test_voice_configured_false_when_voice_not_enabled(self, client: TestClient, app) -> None:
         """v0.31.4 GAP 8 closure: response carries ``voice_configured``
         so the frontend can render a "voice not configured" banner
         when operator finishes onboarding without enabling voice.

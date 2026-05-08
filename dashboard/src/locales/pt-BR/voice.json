@@ -161,7 +161,8 @@
     },
     "save": {
       "intro": "Salve este microfone como o dispositivo de entrada de voz do Sovyx.",
-      "button": "Salvar"
+      "button": "Salvar",
+      "saving": "Salvando..."
     },
     "done": {
       "message": "Tudo pronto! Seu microfone está configurado.",
@@ -513,7 +514,9 @@
     "review": {
       "title": "Calibração aplicada",
       "decision_explanation": "A Sovyx detectou seu hardware e aplicou o ajuste de áudio correspondente automaticamente. Clique em confirmar para continuar. Se a voz ainda não funcionar como esperado, você pode rodar a calibração novamente em Configurações → Voz.",
-      "confirm": "Confirmar e continuar"
+      "confirm": "Confirmar e continuar",
+      "verifying": "Verificando pipeline de voz…",
+      "verification_failed": "A calibração terminou mas o pipeline de voz ainda não está rodando. Abra Configurações → Voz → Recalibrar para tentar de novo, ou habilite manualmente na página de Voz."
     },
     "cancel": {
       "title": "Cancelar calibração?",
