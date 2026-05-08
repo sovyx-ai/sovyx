@@ -1784,3 +1784,125 @@ class TestEnableVoiceMindIdResolution:
         _, kwargs = matches[0]
         assert kwargs["voice.mind_id"] == "jonny"
         assert kwargs["voice.source"] == "app_state"
+
+
+class TestEnableVoiceConcurrencyMutex:
+    """v0.31.6 T3.4 — ``_ENABLE_LOCKS`` serialises concurrent ``/enable`` POSTs.
+
+    Pre-T3.4 the ~330 LOC between the idempotent check and the
+    ``replace_instance`` calls was unguarded — two near-simultaneous
+    POSTs (operator double-click + slow network) could both pass the
+    idempotent check before either registered, build full pipelines in
+    parallel, and produce zombie ``audio-capture-consumer`` tasks. The
+    per-mind LRULockDict mutex turns the second contender into the
+    ``already_active`` short-circuit path.
+    """
+
+    def _fake_sounddevice_module(self) -> ModuleType:
+        fake = ModuleType("sounddevice")
+        fake.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+        return fake
+
+    async def test_enable_concurrent_requests_serialised(self) -> None:
+        from httpx import ASGITransport, AsyncClient
+
+        application = create_app(token=_TOKEN)
+
+        # Stateful registry: ``is_registered(VoicePipeline)`` flips True
+        # the moment the first ``replace_instance(VoicePipeline, ...)``
+        # lands. The second contender re-checks under the lock and
+        # short-circuits to ``already_active``.
+        registered_types: set[type] = set()
+        registry = MagicMock()
+
+        def _is_registered(cls: type) -> bool:
+            return cls in registered_types
+
+        async def _replace_instance(cls: type, instance: object) -> None:  # noqa: ARG001
+            registered_types.add(cls)
+
+        registry.is_registered.side_effect = _is_registered
+        registry.replace_instance = AsyncMock(side_effect=_replace_instance)
+        registry.resolve = AsyncMock()
+        application.state.registry = registry
+        application.state.mind_yaml_path = None
+        application.state.mind_id = "concurrent-mind"
+
+        # Gate that the first ``create_voice_pipeline`` call blocks on
+        # while the second POST queues at ``_ENABLE_LOCKS.acquire``.
+        # Without the gate the awaits could resolve before the second
+        # request even reached the route handler, hiding the race.
+        from sovyx.voice.factory import VoiceBundle
+
+        gate = asyncio.Event()
+        call_count = 0
+
+        async def _slow_create_voice_pipeline(**_kwargs: object) -> VoiceBundle:
+            nonlocal call_count
+            call_count += 1
+            await gate.wait()
+            capture = MagicMock()
+            capture.start = AsyncMock()
+            capture.host_api_name = "MME"
+            pipeline = MagicMock()
+            pipeline.stop = AsyncMock()
+            pipeline.config.wake_word_enabled = False
+            return VoiceBundle(pipeline=pipeline, capture_task=capture)
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sounddevice_module()}),
+            patch(
+                "sovyx.voice.factory.create_voice_pipeline",
+                new=_slow_create_voice_pipeline,
+            ),
+        ):
+            transport = ASGITransport(app=application)
+            async with AsyncClient(
+                transport=transport,
+                base_url="http://test",
+                headers={"Authorization": f"Bearer {_TOKEN}"},
+            ) as client:
+                first = asyncio.create_task(client.post("/api/voice/enable"))
+                # Yield enough times for the first request to reach
+                # ``create_voice_pipeline`` and block on ``gate``. The
+                # second request then queues at ``_ENABLE_LOCKS``.
+                for _ in range(20):
+                    await asyncio.sleep(0)
+                second = asyncio.create_task(client.post("/api/voice/enable"))
+                for _ in range(20):
+                    await asyncio.sleep(0)
+                # Release the gate so the first finishes, then both
+                # tasks resolve. Order of completion is not asserted —
+                # only the per-call serialisation contract.
+                gate.set()
+                resp_first, resp_second = await asyncio.gather(first, second)
+
+        # The mutex must let exactly ONE pipeline build through. The
+        # second POST short-circuits inside the lock on the idempotent
+        # re-check.
+        assert call_count == 1, (
+            f"expected create_voice_pipeline to fire exactly once under "
+            f"_ENABLE_LOCKS, got {call_count} calls"
+        )
+        assert resp_first.status_code == 200  # noqa: PLR2004
+        assert resp_second.status_code == 200  # noqa: PLR2004
+        statuses = sorted([resp_first.json()["status"], resp_second.json()["status"]])
+        assert statuses == ["active", "already_active"], (
+            f"expected one active + one already_active, got {statuses}"
+        )

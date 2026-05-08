@@ -233,6 +233,62 @@ class TestProtectedKeys:
         assert out[key] == _FAKE_IPV4
 
 
+class TestHashRedactKeys:
+    """v0.31.6 T3.6 — hardware-fingerprint fields are HASHED, not passed through.
+
+    Operator's mic/host-api labels (e.g. ``"Razer BlackShark V2 Pro"``)
+    don't match any PII regex, so the global sweep would leak them
+    verbatim. The redactor's HASH layer replaces the value with a
+    deterministic 12-hex-prefix so dashboards can correlate device
+    occurrences without exposing the device label.
+    """
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "voice_input_device_name",
+            "voice_input_device_host_api",
+            "voice.input_device_name",
+            "voice.input_device_host_api",
+        ],
+    )
+    def test_hardware_fingerprint_is_hashed(self, key: str) -> None:
+        red = _redactor()
+        out = _call(red, {key: "Razer BlackShark V2 Pro"})
+        # Replaced with the canonical sha256 prefix shape, never the raw label.
+        assert out[key] != "Razer BlackShark V2 Pro"
+        assert isinstance(out[key], str)
+        assert out[key].startswith("sha256:")
+        assert len(out[key]) == len("sha256:") + 12  # noqa: PLR2004
+
+    def test_hash_is_deterministic_across_calls(self) -> None:
+        red = _redactor()
+        first = _call(red, {"voice_input_device_name": "Internal Microphone"})
+        second = _call(red, {"voice_input_device_name": "Internal Microphone"})
+        assert first["voice_input_device_name"] == second["voice_input_device_name"]
+
+    def test_distinct_device_names_hash_differently(self) -> None:
+        red = _redactor()
+        out_a = _call(red, {"voice_input_device_name": "Razer BlackShark V2 Pro"})
+        out_b = _call(red, {"voice_input_device_name": "Internal Microphone"})
+        assert out_a["voice_input_device_name"] != out_b["voice_input_device_name"]
+
+    def test_pre_hashed_keys_still_pass_through(self) -> None:
+        # Ensure the new HASH layer didn't regress the existing
+        # pass-through allowlist. ``mind_id_hash`` / ``profile_id_hash``
+        # are pre-hashed by the caller and must arrive verbatim.
+        red = _redactor()
+        out = _call(
+            red,
+            {
+                "mind_id_hash": "sha256:abcdef012345",
+                "profile_id_hash": "sha256:0123456789ab",
+            },
+        )
+        assert out["mind_id_hash"] == "sha256:abcdef012345"
+        assert out["profile_id_hash"] == "sha256:0123456789ab"
+
+
 # ── Idempotence ────────────────────────────────────────────────────────
 
 

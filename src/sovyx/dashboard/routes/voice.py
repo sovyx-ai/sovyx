@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
+from sovyx.engine._lock_dict import LRULockDict
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._bypass_tier_state import snapshot as _bypass_tier_snapshot
 
@@ -26,6 +27,20 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/voice", dependencies=[Depends(verify_token)])
+
+
+# v0.31.6 T3.4 — race-free (idempotent-check + register) atomic for
+# ``POST /api/voice/enable``. Pre-v0.31.6 the ~330 LOC between the
+# ``is_registered(VoicePipeline)`` check and ``replace_instance`` were
+# unguarded; two concurrent POSTs (operator double-click + slow
+# network) could both pass the idempotent check before either
+# registered, build full pipelines in parallel, and each
+# ``replace_instance`` call would then await teardown of the OTHER's
+# fresh registration — producing zombie ``audio-capture-consumer``
+# tasks and chaotic VAD. Mirrors the per-mind ``_START_LOCKS`` pattern
+# in ``voice_calibration.py``. Anti-pattern #15: LRULockDict, never
+# raw ``defaultdict(asyncio.Lock)``.
+_ENABLE_LOCKS: LRULockDict[str] = LRULockDict(maxsize=64)
 
 
 # ── T6.20 — aggregated voice service health ──────────────────────────
@@ -1643,7 +1658,63 @@ async def enable_voice(request: Request) -> JSONResponse:
             status_code=400,
         )
 
-    # 3. Idempotent check
+    # v0.31.6 T3.4 — resolve the per-mind id BEFORE the idempotent
+    # check + lock acquire. The lock key MUST be the resolved mind_id
+    # (post-resolver), not the raw request mind_id, so the sentinel
+    # ``"default"`` doesn't bypass the lock for any operator that
+    # actually has a real mind active. The resolver is also the source
+    # of provenance the rest of the route already logs.
+    from sovyx.dashboard._shared import resolve_active_mind_id_for_request
+
+    resolved_mind_id, mind_id_source = await resolve_active_mind_id_for_request(
+        request,
+    )
+    logger.info(
+        "voice.dashboard.voice_enable_mind_resolved",
+        **{
+            "voice.mind_id": resolved_mind_id,
+            "voice.source": mind_id_source,
+        },
+    )
+
+    async with _ENABLE_LOCKS.acquire(resolved_mind_id):
+        return await _enable_voice_locked(
+            request=request,
+            resolved_mind_id=resolved_mind_id,
+            input_device=input_device,
+            output_device=output_device,
+            input_device_name=input_device_name,
+            input_device_host_api=input_device_host_api,
+            request_voice_id=request_voice_id,
+            request_language=request_language,
+            tts_engine=tts_engine,
+        )
+
+
+async def _enable_voice_locked(
+    *,
+    request: Request,
+    resolved_mind_id: str,
+    input_device: int | None,
+    output_device: int | None,
+    input_device_name: str | None,
+    input_device_host_api: str | None,
+    request_voice_id: str | None,
+    request_language: str | None,
+    tts_engine: str,
+) -> JSONResponse:
+    """Body of :func:`enable_voice` executed under ``_ENABLE_LOCKS``.
+
+    Split out as a separate coroutine so the lock-guarded section is a
+    single ``async with`` + single call site at the route handler. All
+    request validation + dep checks happen in :func:`enable_voice`
+    BEFORE the lock is acquired (cheap fast-fail for already-active /
+    bad-input cases). This function owns the (idempotent-check +
+    register) atomic that pre-v0.31.6 raced.
+    """
+    # 3. Idempotent check (under the lock — second concurrent request
+    # blocks here until the first one has registered, then sees the
+    # registration and short-circuits to ``already_active``).
     registry = getattr(request.app.state, "registry", None)
     if registry is not None:
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
@@ -1791,24 +1862,11 @@ async def enable_voice(request: Request) -> JSONResponse:
     effective_device_host_api = input_device_host_api or mind_device_host_api or None
 
     # Mission ``MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
-    # §Phase 1 T1.2 — resolve the active mind id via the canonical
-    # resolver instead of a raw ``getattr`` against an attribute that
-    # production code never assigned. The (mind_id, source) tuple lets
-    # us emit ``voice.dashboard.voice_enable_mind_resolved`` so the
-    # provenance shows up in dashboards.
-    from sovyx.dashboard._shared import resolve_active_mind_id_for_request
+    # §Phase 1 T1.2 — resolved_mind_id is now passed in by ``enable_voice``
+    # which performs the resolve BEFORE acquiring ``_ENABLE_LOCKS`` (so
+    # the lock key matches the real per-mind serialisation contract,
+    # not the sentinel ``"default"``).
     from sovyx.voice._capture_task import CaptureInoperativeError
-
-    resolved_mind_id, mind_id_source = await resolve_active_mind_id_for_request(
-        request,
-    )
-    logger.info(
-        "voice.dashboard.voice_enable_mind_resolved",
-        **{
-            "voice.mind_id": resolved_mind_id,
-            "voice.source": mind_id_source,
-        },
-    )
 
     try:
         bundle = await create_voice_pipeline(

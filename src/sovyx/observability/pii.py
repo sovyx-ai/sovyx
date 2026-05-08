@@ -228,6 +228,23 @@ _PROTECTED_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
+# v0.31.6 T3.6 — hardware-fingerprint fields that the regex sweep can't
+# match. ``voice_input_device_name`` carries strings like ``"Razer
+# BlackShark V2 Pro"`` — operator hardware fingerprint, not a PII regex
+# shape, so the global sweep leaves it verbatim. The right semantics
+# is HASH (deterministic 12-hex-prefix correlation across log lines
+# without ever exposing the device label). Mirrors the approach used
+# for ``mind_id_hash`` / ``profile_id_hash`` upstream — those keys are
+# pre-hashed by callers; the keys below are hashed by the redactor.
+_HASH_REDACT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "voice_input_device_name",
+        "voice_input_device_host_api",
+        "voice.input_device_name",
+        "voice.input_device_host_api",
+    }
+)
+
 
 class PIIRedactor:
     """Structlog processor that applies per-field-class + global PII redaction.
@@ -256,6 +273,9 @@ class PIIRedactor:
             if not isinstance(value, str):
                 continue
             if key in _PROTECTED_KEYS:
+                continue
+            if key in _HASH_REDACT_KEYS:
+                event_dict[key] = _hash_value(value)
                 continue
             mode = self._field_modes.get(key)
             if mode is not None:
