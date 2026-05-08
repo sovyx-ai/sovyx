@@ -152,7 +152,17 @@ describe("VoiceStep", () => {
       expect(mockPost).toHaveBeenCalledTimes(1);
     });
     const [, body] = mockPost.mock.calls[0];
-    expect(body).toEqual({ input_device: 0, output_device: 1 });
+    // v0.31.6 M2: HardwareDetection now emits input_device_name on its
+    // onDeviceChange payload; VoiceStep stashes + forwards it. The
+    // pre-v0.31.6 strict {input_device, output_device}-only shape is
+    // gone — operators get the device name persisted on first run.
+    expect(body).toEqual({
+      input_device: 0,
+      output_device: 1,
+      input_device_name: "Mic",
+    });
+    expect(body).not.toHaveProperty("voice_id");
+    expect(body).not.toHaveProperty("language");
   });
 
   it("does not mount the wizard by default (opt-in affordance)", async () => {
@@ -207,10 +217,25 @@ import { useDashboardStore } from "@/stores/dashboard";
 // Replace VoiceCalibrationStep with a sentinel so we can assert mount
 // presence without pulling in its complex side effects (fingerprint
 // fetch, websocket, etc). Same pattern as recalibrate-button.test.tsx.
+//
+// v0.31.6 C1: the sentinel also surfaces ``mindId`` via a data
+// attribute + spy so the C1 tests below can assert the resolved id
+// flows in. vitest hoists vi.mock to the top of the module so a
+// second vi.mock for the same path silently no-ops; we therefore
+// declare a single mock and feed both groups of tests from it.
+const calibrationMindIdSpy = vi.fn<(mindId: string) => void>();
 vi.mock("@/components/onboarding/VoiceCalibrationStep", () => ({
-  VoiceCalibrationStep: () => (
-    <div data-testid="voice-calibration-step-sentinel">calibration-step</div>
-  ),
+  VoiceCalibrationStep: (props: { mindId: string }) => {
+    calibrationMindIdSpy(props.mindId);
+    return (
+      <div
+        data-testid="voice-calibration-step-sentinel"
+        data-mind-id={props.mindId}
+      >
+        calibration-step
+      </div>
+    );
+  },
 }));
 
 /** Compose stubGets() with the calibration feature-flag endpoint
@@ -455,5 +480,170 @@ describe("VoiceStep — cross-platform gate (rc.11 EIXO 2)", () => {
     expect(
       screen.queryByTestId("voice-calibration-platform-unsupported"),
     ).not.toBeInTheDocument();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// v0.31.6 C1 — VoiceStep mindId resolution.
+// Pre-v0.31.6 the calibration mount hardcoded ``mindId="default"``
+// even when the operator had run ``sovyx init meu-mind``. Anti-pattern
+// #35 (cross-layer config defaults are sentinels, not values),
+// reincidente in the frontend post-rc.12. These tests pin the
+// resolver: a real id flows; null falls back to "default" with a
+// console.warn.
+// ════════════════════════════════════════════════════════════════════
+
+describe("VoiceStep — mindId resolution (v0.31.6 C1)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ calibrationFeatureFlag: null });
+    calibrationMindIdSpy.mockReset();
+  });
+
+  it("forwards a real mindId prop to <VoiceCalibrationStep />", async () => {
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: true,
+      },
+    });
+    stubGetsWithCalibrationFlag({
+      enabled: true,
+      runtime_override_active: false,
+      platform_supported: true,
+    });
+
+    render(
+      <VoiceStep
+        onConfigured={() => {}}
+        onSkip={() => {}}
+        mindId="meu-mind"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-calibration-step-sentinel"),
+      ).toBeInTheDocument();
+    });
+    const node = screen.getByTestId("voice-calibration-step-sentinel");
+    expect(node.getAttribute("data-mind-id")).toBe("meu-mind");
+    expect(calibrationMindIdSpy).toHaveBeenCalledWith("meu-mind");
+  });
+
+  it("falls back to 'default' (with console.warn) when mindId is null", async () => {
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: true,
+      },
+    });
+    stubGetsWithCalibrationFlag({
+      enabled: true,
+      runtime_override_active: false,
+      platform_supported: true,
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    render(
+      <VoiceStep
+        onConfigured={() => {}}
+        onSkip={() => {}}
+        mindId={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-calibration-step-sentinel"),
+      ).toBeInTheDocument();
+    });
+    const node = screen.getByTestId("voice-calibration-step-sentinel");
+    expect(node.getAttribute("data-mind-id")).toBe("default");
+    expect(calibrationMindIdSpy).toHaveBeenCalledWith("default");
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/falling back to 'default'/);
+
+    warnSpy.mockRestore();
+  });
+
+  it("falls back to 'default' (with console.warn) when mindId prop is omitted", async () => {
+    useDashboardStore.setState({
+      calibrationFeatureFlag: {
+        enabled: true,
+        runtime_override_active: false,
+        platform_supported: true,
+      },
+    });
+    stubGetsWithCalibrationFlag({
+      enabled: true,
+      runtime_override_active: false,
+      platform_supported: true,
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-calibration-step-sentinel"),
+      ).toBeInTheDocument();
+    });
+    expect(calibrationMindIdSpy).toHaveBeenCalledWith("default");
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// v0.31.6 M2 — handleEnable forwards the input device name.
+// Pre-v0.31.6 only the contention-recovery path passed the device
+// name to /api/voice/enable. First-run operators got an empty name
+// persisted; the next calibration run silently picked card 0
+// (v0.31.4 GAP 5 sibling). The fix: HardwareDetection now emits
+// ``input_device_name`` on its onDeviceChange payload, VoiceStep
+// stashes it and forwards it on the happy-path Enable Voice click.
+// ════════════════════════════════════════════════════════════════════
+
+describe("VoiceStep — input device name forwarding (v0.31.6 M2)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ calibrationFeatureFlag: null });
+  });
+
+  it("forwards input_device_name on /api/voice/enable on the happy path", async () => {
+    // Calibration flag OFF → legacy HardwareDetection path mounts.
+    stubGetsWithCalibrationFlag({
+      enabled: false,
+      runtime_override_active: false,
+    });
+    mockPost.mockResolvedValue({ ok: true, status: "active" });
+
+    render(<VoiceStep onConfigured={() => {}} onSkip={() => {}} />);
+
+    // Wait for hardware-detect to settle.
+    await screen.findByText(/8 cores/i);
+
+    // Click Enable Voice — the button only renders post-detection.
+    const enableBtn = await screen.findByRole("button", {
+      name: /enable voice/i,
+    });
+    fireEvent.click(enableBtn);
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledTimes(1);
+    });
+    const [path, body] = mockPost.mock.calls[0];
+    expect(path).toBe("/api/voice/enable");
+    // The default-input fixture device is named "Mic" — that name
+    // MUST flow through to the enable POST.
+    expect(body).toMatchObject({
+      input_device: 0,
+      output_device: 1,
+      input_device_name: "Mic",
+    });
   });
 });

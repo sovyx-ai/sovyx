@@ -90,6 +90,25 @@ export const SystemStatusSchema = z.object({
   has_lifetime_activity: z.boolean().optional(),
 });
 
+// ── Onboarding ──
+
+/**
+ * GET /api/onboarding/state runtime schema. ``mind_id`` is added in
+ * v0.31.6 (C1 closure) and is ``.nullable().optional()`` because
+ * pre-v0.31.6 daemons don't ship the field — preserving back-compat
+ * while we roll the closure.
+ */
+export const OnboardingStateSchema = z.object({
+  complete: z.boolean(),
+  mind_name: z.string(),
+  mind_id: z.string().nullable().optional(),
+  provider_configured: z.boolean(),
+  default_provider: z.string(),
+  default_model: z.string(),
+  ollama_available: z.boolean(),
+  ollama_models: z.array(z.string()),
+});
+
 // ── Conversations ──
 
 export const MessageSchema = z.object({

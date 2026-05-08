@@ -22,16 +22,8 @@ import {
   VoiceStep,
   FirstChatStep,
 } from "@/components/onboarding";
-
-interface OnboardingState {
-  complete: boolean;
-  mind_name: string;
-  provider_configured: boolean;
-  default_provider: string;
-  default_model: string;
-  ollama_available: boolean;
-  ollama_models: string[];
-}
+import type { OnboardingState } from "@/types/api";
+import { OnboardingStateSchema } from "@/types/schemas";
 
 const TOTAL_STEPS = 5;
 
@@ -43,6 +35,11 @@ export default function OnboardingPage() {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [mindName, setMindName] = useState("Sovyx");
+  // v0.31.6 C1: resolved active mind id, threaded into VoiceStep so
+  // <VoiceCalibrationStep mindId={...} /> stops hardcoding "default".
+  // Null until /api/onboarding/state resolves; VoiceStep treats null
+  // as "not yet known" and falls back to "default" with a warning.
+  const [mindId, setMindId] = useState<string | null>(null);
   const [language, setLanguage] = useState(
     () => navigator.language?.split("-")[0] ?? "en",
   );
@@ -51,13 +48,16 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     api
-      .get<OnboardingState>("/api/onboarding/state")
+      .get<OnboardingState>("/api/onboarding/state", {
+        schema: OnboardingStateSchema,
+      })
       .then((state) => {
         if (state.complete) {
           navigate("/", { replace: true });
           return;
         }
         setMindName(state.mind_name || "Sovyx");
+        setMindId(state.mind_id ?? null);
         setOllamaAvailable(state.ollama_available);
         setOllamaModels(state.ollama_models);
         if (state.provider_configured) {
@@ -152,6 +152,7 @@ export default function OnboardingPage() {
         {step === 4 && (
           <VoiceStep
             language={language}
+            mindId={mindId}
             onConfigured={handleVoiceDone}
             onSkip={handleVoiceDone}
           />

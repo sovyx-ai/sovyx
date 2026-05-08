@@ -35,6 +35,17 @@ interface VoiceStepProps {
    * English-default-voice coherence bug.
    */
   language?: string;
+  /**
+   * Resolved active mind id from ``GET /api/onboarding/state``. Threaded
+   * to ``<VoiceCalibrationStep />`` so calibration jobs run under the
+   * operator's actual mind (e.g. ``meu-mind``) instead of the literal
+   * ``"default"`` sentinel — anti-pattern #35 (cross-layer config
+   * defaults are sentinels, not values), reincidente in the frontend
+   * post-rc.12. Null when state hasn't resolved yet OR no mind_config
+   * is mounted; VoiceStep falls back to ``"default"`` with a console
+   * warning so operators can tell the resolver failed.
+   */
+  mindId?: string | null;
 }
 
 interface EnableResult {
@@ -46,7 +57,33 @@ interface EnableResult {
   tts_engine?: string;
 }
 
-export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
+/**
+ * Resolve the active mind id, falling back to the literal ``"default"``
+ * sentinel only when the resolver failed (state hasn't loaded OR no
+ * mind_config mounted server-side). Emits a console.warn on the
+ * fallback path so operators triaging "calibration ran under wrong
+ * mind" have a breadcrumb. v0.31.6 C1 closure (anti-pattern #35
+ * frontend reincidente).
+ */
+function resolveMindId(mindId: string | null | undefined): string {
+  if (typeof mindId === "string" && mindId.length > 0) {
+    return mindId;
+  }
+  // eslint-disable-next-line no-console
+  console.warn(
+    "VoiceStep.resolveMindId: falling back to 'default' — backend " +
+      "/api/onboarding/state did not return a mind_id. Calibration " +
+      "may persist to the wrong path.",
+  );
+  return "default";
+}
+
+export function VoiceStep({
+  onConfigured,
+  onSkip,
+  language,
+  mindId,
+}: VoiceStepProps) {
   // Two namespaces: ``onboarding`` is the dominant context (page copy
   // + error messages); ``voice`` is reused for wizard-related strings
   // shared with voice.tsx (Mission v0.30.4 §wizard.* keys).
@@ -101,6 +138,17 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
     input_device: null,
     output_device: null,
   });
+  // v0.31.6 M2: track the selected input device NAME (not just the
+  // PortAudio index) so the happy-path Enable Voice click persists
+  // ``voice_input_device_name`` to mind.yaml. Pre-v0.31.6 only the
+  // contention-recovery path passed the name; first-run operators got
+  // an empty name persisted, and `_active_mic.resolve_active_mic_card`
+  // returned None on the next calibration run (v0.31.4 GAP 5 silent
+  // regression). HardwareDetection emits the name via the extended
+  // ``SelectedDevices`` payload (input_device_name field).
+  const [selectedDeviceName, setSelectedDeviceName] = useState<string | undefined>(
+    undefined,
+  );
   const [voiceSelection, setVoiceSelection] = useState<SelectedVoice>({
     language: null,
     voice: null,
@@ -172,8 +220,12 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
   );
 
   const handleEnable = useCallback(async () => {
-    await enableWithDevices(devices);
-  }, [devices, enableWithDevices]);
+    // v0.31.6 M2: forward the device NAME so the backend persists
+    // ``voice_input_device_name`` on first-run; without it the next
+    // calibration run can't resolve the active mic and silently
+    // falls back to card 0 (anti-pattern #35 sibling).
+    await enableWithDevices(devices, selectedDeviceName);
+  }, [devices, enableWithDevices, selectedDeviceName]);
 
   const handleSelectAlternative = useCallback(
     (device: AlternativeDevice) => {
@@ -194,7 +246,16 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
   }, []);
 
   const handleDetected = useCallback(() => setDetected(true), []);
-  const handleDeviceChange = useCallback((d: SelectedDevices) => setDevices(d), []);
+  const handleDeviceChange = useCallback((d: SelectedDevices) => {
+    setDevices(d);
+    // v0.31.6 M2: capture the device name when HardwareDetection
+    // surfaces it (input_device_name on the SelectedDevices payload).
+    // Stays undefined when the field is absent so we don't overwrite
+    // a previously-resolved name with empty.
+    if (d.input_device_name !== undefined) {
+      setSelectedDeviceName(d.input_device_name ?? undefined);
+    }
+  }, []);
   const handleVoiceChange = useCallback((v: SelectedVoice) => setVoiceSelection(v), []);
 
   return (
@@ -223,7 +284,7 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
                        optional VoiceSetupWizard. */}
       {calibrationWizardEnabled && !enabled && !missingDeps && !wizardOpen ? (
         <VoiceCalibrationStep
-          mindId="default"
+          mindId={resolveMindId(mindId)}
           onCompleted={onConfigured}
           onFallback={() => {
             // FALLBACK terminal flips us to the legacy flow; the

@@ -61,6 +61,16 @@ interface HardwareInfo {
 export interface SelectedDevices {
   input_device: number | null;
   output_device: number | null;
+  /**
+   * v0.31.6 M2: the human-readable name of the selected input device
+   * (e.g. ``"Razer Seiren Mini"``). Optional for back-compat with
+   * callers that ignore it; HardwareDetection always emits it when a
+   * default / user-picked device exists, so the parent (VoiceStep)
+   * can persist ``voice_input_device_name`` to mind.yaml on
+   * ``/api/voice/enable`` — without it ``_active_mic.resolve_active_mic_card``
+   * returns None on the next calibration run.
+   */
+  input_device_name?: string | null;
 }
 
 /**
@@ -170,18 +180,30 @@ function HardwareDetectionImpl({
     onDeviceChangeRef.current = onDeviceChange;
   }, [onDetected, onDeviceChange]);
 
+  // v0.31.6 M2: cache the detected input device list so handleInputChange
+  // can resolve a name from the freshly-picked index without round-tripping
+  // through state (the index→name lookup must be synchronous).
+  const inputDevicesRef = useRef<AudioDevice[]>([]);
+
   useEffect(() => {
     api
       .get<HardwareInfo>("/api/voice/hardware-detect")
       .then((data) => {
         setInfo(data);
         setError(null);
+        inputDevicesRef.current = data.audio.input_devices;
         const defIn = findDefault(data.audio.input_devices);
         const defOut = findDefault(data.audio.output_devices);
         setSelectedInput(defIn);
         setSelectedOutput(defOut);
+        const defInName =
+          data.audio.input_devices.find((d) => d.index === defIn)?.name ?? null;
         onDetectedRef.current?.(data);
-        onDeviceChangeRef.current?.({ input_device: defIn, output_device: defOut });
+        onDeviceChangeRef.current?.({
+          input_device: defIn,
+          output_device: defOut,
+          input_device_name: defInName,
+        });
       })
       .catch((err) => {
         setError(String(err));
@@ -192,7 +214,13 @@ function HardwareDetectionImpl({
   const handleInputChange = useCallback(
     (index: number) => {
       setSelectedInput(index);
-      onDeviceChange?.({ input_device: index, output_device: selectedOutput });
+      const name =
+        inputDevicesRef.current.find((d) => d.index === index)?.name ?? null;
+      onDeviceChange?.({
+        input_device: index,
+        output_device: selectedOutput,
+        input_device_name: name,
+      });
     },
     [selectedOutput, onDeviceChange],
   );
@@ -200,7 +228,14 @@ function HardwareDetectionImpl({
   const handleOutputChange = useCallback(
     (index: number) => {
       setSelectedOutput(index);
-      onDeviceChange?.({ input_device: selectedInput, output_device: index });
+      const name =
+        inputDevicesRef.current.find((d) => d.index === selectedInput)?.name ??
+        null;
+      onDeviceChange?.({
+        input_device: selectedInput,
+        output_device: index,
+        input_device_name: name,
+      });
     },
     [selectedInput, onDeviceChange],
   );

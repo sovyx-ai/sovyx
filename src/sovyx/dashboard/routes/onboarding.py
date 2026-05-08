@@ -30,7 +30,23 @@ _ENV_VAR_MAP: dict[str, str] = {
 
 @router.get("/state")
 async def get_onboarding_state(request: Request) -> JSONResponse:
-    """Return onboarding progress for the active mind."""
+    """Return onboarding progress for the active mind.
+
+    v0.31.6 C1 closure: response now carries ``mind_id`` so the
+    frontend can pass the resolved active mind id to
+    ``<VoiceCalibrationStep mindId={...} />`` instead of the literal
+    ``"default"`` sentinel. Pre-v0.31.6 the calibration job fired
+    ``POST /api/voice/calibration/start`` with ``mind_id="default"``
+    even when the operator had run ``sovyx init meu-mind`` — the
+    backend resolver coerced the sentinel to the real id but emitted
+    a structured WARN, AND any frontend logic that read the prop
+    directly believed the mind was ``"default"``. Calibration profile
+    could persist to the wrong path. The new ``mind_id`` field flows
+    the canonical id top-down so the frontend never has to guess.
+    Field is nullable: when no mind_config is mounted (very early
+    boot, registry malfunction) the frontend falls back to the
+    ``"default"`` literal with a console warning.
+    """
     mind_config = getattr(request.app.state, "mind_config", None)
     provider_configured = False
     ollama_available = False
@@ -58,6 +74,7 @@ async def get_onboarding_state(request: Request) -> JSONResponse:
         {
             "complete": mind_config.onboarding_complete if mind_config else False,
             "mind_name": mind_config.name if mind_config else "Sovyx",
+            "mind_id": str(mind_config.id) if mind_config else None,
             "provider_configured": provider_configured or ollama_available,
             "default_provider": mind_config.llm.default_provider if mind_config else "",
             "default_model": mind_config.llm.default_model if mind_config else "",

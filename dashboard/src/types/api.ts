@@ -43,6 +43,29 @@ export interface SystemStatus {
   has_lifetime_activity?: boolean;
 }
 
+// ── Onboarding ──
+
+/**
+ * GET /api/onboarding/state response — mirrors
+ * sovyx.dashboard.routes.onboarding.get_onboarding_state.
+ *
+ * v0.31.6 C1: ``mind_id`` carries the resolved active mind id so
+ * downstream components (in particular ``<VoiceCalibrationStep />``)
+ * never default to the literal ``"default"`` sentinel. Nullable when
+ * no mind_config is mounted yet — frontend falls back to ``"default"``
+ * with a console warning.
+ */
+export interface OnboardingState {
+  complete: boolean;
+  mind_name: string;
+  mind_id: string | null;
+  provider_configured: boolean;
+  default_provider: string;
+  default_model: string;
+  ollama_available: boolean;
+  ollama_models: string[];
+}
+
 // ── Conversations ──
 
 /** Single message (conversation turn) — from get_conversation_messages() */

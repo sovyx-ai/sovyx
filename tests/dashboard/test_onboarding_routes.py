@@ -24,6 +24,7 @@ def app():
 
     mind_config = MagicMock()
     mind_config.configure_mock(name="test-mind")
+    mind_config.id = "test-mind"
     mind_config.onboarding_complete = False
     mind_config.llm.default_provider = ""
     mind_config.llm.default_model = ""
@@ -50,6 +51,32 @@ class TestGetOnboardingState:
         assert "provider_configured" in data
         assert "ollama_available" in data
         assert "mind_name" in data
+        # v0.31.6 C1: response carries the resolved active mind id
+        # so the frontend can pass it to <VoiceCalibrationStep /> instead
+        # of the literal "default" sentinel (anti-pattern #35 reincidente).
+        assert "mind_id" in data
+
+    def test_returns_mind_id_from_mind_config(self, app, client: TestClient) -> None:
+        """v0.31.6 C1: ``mind_id`` mirrors ``mind_config.id`` exactly."""
+        app.state.mind_config.id = "meu-mind"
+        resp = client.get("/api/onboarding/state")
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["mind_id"] == "meu-mind"
+
+    def test_returns_mind_id_none_when_no_mind_config(self, client: TestClient) -> None:
+        """v0.31.6 C1: when no mind_config is mounted (very early boot
+        / registry malfunction), ``mind_id`` is ``None`` so the
+        frontend falls back to the ``"default"`` literal with a
+        console warning instead of misattributing calibration to a
+        non-existent mind."""
+        application = create_app(token=_TOKEN)
+        # No mind_config attached to app.state; getattr returns None.
+        c = TestClient(application, headers={"Authorization": f"Bearer {_TOKEN}"})
+        resp = c.get("/api/onboarding/state")
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["mind_id"] is None
 
     def test_complete_true_when_set(self, app, client: TestClient) -> None:
         app.state.mind_config.onboarding_complete = True
