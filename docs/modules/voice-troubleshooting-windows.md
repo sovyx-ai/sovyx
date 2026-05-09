@@ -11,7 +11,7 @@ explain how to disable / bypass / work around it.
 
 | Symptom | Most likely cause | First lever to try |
 |---------|------------------|--------------------|
-| `voice` enables fine, mic hardware light is on, but Sovyx never wakes on the wake word | Microsoft Voice Clarity APO destroying signal upstream of PortAudio | Run `sovyx doctor voice_capture_apo` (post-wire-up: v0.25.0+); inspect `Detected APOs` row |
+| `voice` enables fine, mic hardware light is on, but Sovyx never wakes on the wake word | Microsoft Voice Clarity APO destroying signal upstream of PortAudio | Run `sovyx doctor voice_capture_apo` (wired in v0.32.6); inspect `Detected APOs` row |
 | Pipeline reports "deaf signal" then silently quarantines the endpoint | Cascade ↔ runtime drift (Furo W-4) — runtime opens MME while cascade picked DirectSound | Set `SOVYX_TUNING__VOICE__CASCADE_HOST_API_ALIGNMENT_ENABLED=true` (v0.25.0+) |
 | Same combo (DirectSound, 16 kHz, mono) keeps winning the cascade and producing silence | Cold probe accepting silent combo (Furo W-1) | Set `SOVYX_TUNING__VOICE__PROBE_COLD_STRICT_VALIDATION_ENABLED=true` |
 | Microphone works in Discord/Zoom but not in Sovyx | Voice Clarity is in EFX (post-mix), not MFX (pre-mix) — Tier 1 RAW won't fix it | Set both `SOVYX_TUNING__VOICE__BYPASS_TIER1_RAW_ENABLED=true` AND `SOVYX_TUNING__VOICE__BYPASS_TIER2_HOST_API_ROTATE_ENABLED=true` (v0.26.0+ default-on) |
@@ -66,7 +66,7 @@ the common case where Voice Clarity sits in MFX.
 **When to set it true** (v0.25.0 pilots):
 
 * Your hardware reports `RawProcessingSupported=true` for the capture
-  endpoint (check via the post-wire-up `sovyx doctor voice_capture_apo`).
+  endpoint (check via `sovyx doctor voice_capture_apo`, wired in v0.32.6).
 * You want to evaluate Tier 1 alone before v0.26.0 default-flip.
 
 **When to leave it false:**
@@ -168,7 +168,7 @@ understood layer beats three mysterious ones).
 
 ## Diagnostics
 
-### `sovyx doctor voice_capture_apo` (v0.25.0+)
+### `sovyx doctor voice_capture_apo` (wired in v0.32.6)
 
 Renders a Rich table with one row per check:
 

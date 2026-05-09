@@ -77,9 +77,10 @@ run_layer_G() {
     # linux_session_manager_grab existe em 0.21.1+ (ADR R_X3).
     run_step "G_doctor_linux_sm_grab" "$dir/doctor_linux_session_manager_grab.txt" "$SOVYX_DIAG_DOCTOR_TIMEOUT" \
         bash -c 'sovyx doctor linux_session_manager_grab --json 2>&1 || sovyx doctor linux_session_manager_grab 2>&1'
-    # voice_capture_apo NÃO existe em 0.21.1 (ADR R_X3). Tenta e registra.
+    # voice_capture_apo wired in v0.32.6 (Phase 5.C). Pre-v0.32.6 logs
+    # the subcommand-missing line; v0.32.6+ captures the JSON output.
     run_step "G_doctor_voice_capture_apo" "$dir/doctor_voice_capture_apo.txt" 10 \
-        bash -c 'sovyx doctor voice_capture_apo 2>&1 || echo "subcommand not found in this version (expected in 0.21.1)"'
+        bash -c 'sovyx doctor voice_capture_apo --json 2>&1 || sovyx doctor voice_capture_apo 2>&1 || echo "subcommand not available in this Sovyx version"'
 
     # ── APIs Sovyx (precisam do token) ───────────────────────────────────
     _api_get_to_file "/api/health"                    "$dir/api_health.json"                     || true

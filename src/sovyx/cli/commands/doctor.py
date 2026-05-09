@@ -1782,6 +1782,87 @@ def _run_cascade(*, output_json: bool) -> int:
     return errors + warnings
 
 
+@doctor_app.command("voice_capture_apo")
+def doctor_voice_capture_apo(
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the DiagnosticResult as a single JSON object on stdout.",
+    ),
+) -> None:
+    """Scan Windows capture-APO chain for Voice Clarity (subcommand wire-up).
+
+    Phase 5.C v0.32.6 — surfaces the existing
+    :func:`sovyx.upgrade.doctor._check_voice_capture_apo` check as a
+    standalone Typer subcommand. Multiple operator-facing docs
+    (``faq.md``, ``modules/voice-troubleshooting-windows.md``,
+    ``modules/voice.md``) and the bundled bash diag script
+    (``voice/diagnostics/_bash/lib/G_sovyx.sh``) have referenced this
+    subcommand syntax since v0.21.1; the underlying check existed but
+    no Typer wire-up was ever added. This command closes that gap.
+
+    Same backing function as the ``voice_capture_apo`` row in the
+    default ``sovyx doctor`` output — running this subcommand directly
+    skips the other 11 checks and prints just the APO result.
+
+    Always exits ``0`` on non-Windows platforms (the check returns
+    ``PASS`` with a "skipped" message — capture APOs are a Windows-only
+    failure mode). On Windows, exit code reflects the severity:
+
+    * ``0`` — ``PASS`` (no Voice Clarity APO active OR bypass armed)
+    * ``1`` — ``WARN`` (Voice Clarity APO active without armed bypass,
+      OR scan failed). Treat as actionable: the printed
+      ``fix_suggestion`` lists the env-var to set.
+    """
+    from sovyx.upgrade.doctor import DiagnosticStatus, _check_voice_capture_apo
+
+    result = _check_voice_capture_apo()
+
+    if output_json:
+        print(json.dumps(result.to_dict(), ensure_ascii=False))
+    else:
+        console = Console()
+        status_style = {
+            DiagnosticStatus.PASS: "green",
+            DiagnosticStatus.WARN: "yellow",
+            DiagnosticStatus.FAIL: "red",
+        }[result.status]
+        marker = {
+            DiagnosticStatus.PASS: "✓",
+            DiagnosticStatus.WARN: "⚠",
+            DiagnosticStatus.FAIL: "✗",
+        }[result.status]
+        console.print(
+            f"[bold {status_style}]{marker} {result.check}: {result.status.value.upper()}[/]"
+        )
+        console.print(f"  {result.message}")
+        if result.fix_suggestion:
+            console.print(f"  [dim]fix:[/] {result.fix_suggestion}")
+        if result.details:
+            # Per-endpoint scan + bypass_status — render selectively
+            # rather than dumping the full dict (operators piping into
+            # jq want --json).
+            endpoints = result.details.get("endpoints")
+            if isinstance(endpoints, list) and endpoints:
+                console.print("  endpoints:")
+                for ep in endpoints:
+                    if isinstance(ep, dict):
+                        name = ep.get("endpoint_name") or ep.get("endpoint_id") or "?"
+                        active = ep.get("voice_clarity_active", False)
+                        marker = "⚠ APO active" if active else "✓ clean"
+                        console.print(f"    - {name!s} ({marker})")
+            bypass_status = result.details.get("bypass_status")
+            if isinstance(bypass_status, list) and bypass_status:
+                console.print("  bypass_status:")
+                for tier in bypass_status:
+                    if isinstance(tier, dict):
+                        name = tier.get("name", "?")
+                        enabled = tier.get("enabled", False)
+                        console.print(f"    - {name}: {'ON' if enabled else 'off'}")
+
+    raise typer.Exit(0 if result.status == DiagnosticStatus.PASS else 1)
+
+
 @doctor_app.command("platform")
 def doctor_platform(
     output_json: bool = typer.Option(
