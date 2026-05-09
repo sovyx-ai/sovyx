@@ -2053,9 +2053,13 @@ class VoicePipeline:
         # noisy capture conditions. The factor is a strict
         # downgrade ([0, 1] multiplier); empty buffer ⇒ 1.0
         # (no SNR data, leave confidence unmodified).
+        # Phase 5.A.2 — read under the same configured-at-startup
+        # mind_id the FrameNormalizer producer writes under, so
+        # multi-mind hosts get per-mind utterance confidence
+        # factors instead of a merged buffer.
         from sovyx.voice.health._recent_snr import window_summary
 
-        snr_summary = window_summary()
+        snr_summary = window_summary(mind_id=self._config.mind_id)
         if snr_summary.count > 0:
             snr_p50_db: float | None = snr_summary.p50_db
             snr_factor = max(0.0, min(1.0, snr_summary.p50_db / 17.0))
@@ -2874,21 +2878,19 @@ class VoicePipeline:
         # log: when count == 0 (sustained silence or pre-first-
         # speech) we OMIT them rather than emit synthetic zeros so
         # dashboards don't graph misleading floor values.
-        # v0.32.6 Phase 5.A — per-mind keying FOUNDATION shipped in
-        # ``_snr_heartbeat`` (see module docstring). The producer
-        # (``FrameNormalizer._observe_snr``) still calls
-        # ``record_snr_sample`` without ``mind_id``, defaulting to the
-        # ``"default"`` key. Drain MUST match the producer key or the
-        # consumer reads 0 samples and the heartbeat omits SNR fields
-        # entirely on multi-mind hosts. Threading ``mind_id`` through
-        # FrameNormalizer (constructor + 10 construction sites + per-
-        # turn updates from the orchestrator) is staged-adoption Phase
-        # 5.A.2 — see PHASE-4-D-AUDIT.md Finding 6 for the full plan.
-        # Until then this reads from the same ``"default"`` key the
-        # producer writes to, preserving exact pre-fix behaviour.
+        # v0.32.6 Phase 5.A — per-mind keying FOUNDATION; v0.32.16 Phase
+        # 5.A.2 — PRODUCER thread-through closure. ``FrameNormalizer``
+        # now records under the configured-at-startup ``_config.mind_id``
+        # (see ``_capture_task.py`` + ``_restart_mixin.py`` construction
+        # sites). The drain MUST match the producer key, so we read
+        # under the same configured mind_id (heartbeat + producer share
+        # the pipeline's lifetime). Per-turn ``_current_mind_id`` is
+        # NOT used here because audio-quality samples are hardware-level
+        # (the FrameNormalizer's lifetime is the audio session, not the
+        # turn). Closes PHASE-4-D-AUDIT.md Finding 6.
         from sovyx.voice.health._snr_heartbeat import drain_window_stats
 
-        snr_window = drain_window_stats()
+        snr_window = drain_window_stats(mind_id=self._config.mind_id)
         heartbeat_extra: dict[str, object] = {}
         if snr_window.count > 0:
             heartbeat_extra["snr_p50_db"] = round(snr_window.p50_db, 2)
@@ -2966,12 +2968,12 @@ class VoicePipeline:
         # rolling buffer without clearing (drain pattern is for
         # SNR; the noise-floor trend wants a stable horizon).
         if _NOISE_FLOOR_DRIFT_ALERT_ENABLED:
-            # Phase 5.A — same staged-adoption contract as the SNR
-            # drain above; producer keys to ``"default"`` until the
-            # FrameNormalizer threading ships in Phase 5.A.2.
+            # Phase 5.A.2 — same configured-at-startup ``_config.mind_id``
+            # the producer writes under. See SNR drain above for the
+            # rationale.
             from sovyx.voice.health._noise_floor_trending import compute_drift
 
-            drift = compute_drift()
+            drift = compute_drift(mind_id=self._config.mind_id)
             if drift.ready:
                 if drift.drift_db > _NOISE_FLOOR_DRIFT_THRESHOLD_DB:
                     self._noise_floor_drift_consecutive_heartbeats += 1

@@ -346,6 +346,11 @@ class RestartMixin:
             wiener_entropy_threshold=self._wiener_entropy_threshold,
             resample_peak_check_enabled=self._resample_peak_check_enabled,
             phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+            # Phase 5.A.2 — multi-mind keying for SNR + noise-floor
+            # heartbeat aggregators. Same configured-at-startup mind_id
+            # the original FrameNormalizer was constructed with at
+            # capture_task.start (see _capture_task.py mind_id wire-up).
+            mind_id=self._pipeline.config.mind_id,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring epoch
         # increment so the dashboard's restart-history timeline
@@ -498,6 +503,11 @@ class RestartMixin:
             wiener_entropy_threshold=self._wiener_entropy_threshold,
             resample_peak_check_enabled=self._resample_peak_check_enabled,
             phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+            # Phase 5.A.2 — multi-mind keying for SNR + noise-floor
+            # heartbeat aggregators. Same configured-at-startup mind_id
+            # the original FrameNormalizer was constructed with at
+            # capture_task.start (see _capture_task.py mind_id wire-up).
+            mind_id=self._pipeline.config.mind_id,
         )
         # Reset the ring buffer — stale frames from the pre-error stream
         # would mislead any integrity probe issued immediately after the
@@ -643,6 +653,11 @@ class RestartMixin:
             wiener_entropy_threshold=self._wiener_entropy_threshold,
             resample_peak_check_enabled=self._resample_peak_check_enabled,
             phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+            # Phase 5.A.2 — multi-mind keying for SNR + noise-floor
+            # heartbeat aggregators. Same configured-at-startup mind_id
+            # the original FrameNormalizer was constructed with at
+            # capture_task.start (see _capture_task.py mind_id wire-up).
+            mind_id=self._pipeline.config.mind_id,
         )
         # T32 — emit CaptureRestartFrame for the revert pair. MANUAL
         # reason because the shared restart is always initiated by an
@@ -878,6 +893,11 @@ class RestartMixin:
             wiener_entropy_threshold=self._wiener_entropy_threshold,
             resample_peak_check_enabled=self._resample_peak_check_enabled,
             phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+            # Phase 5.A.2 — multi-mind keying for SNR + noise-floor
+            # heartbeat aggregators. Same configured-at-startup mind_id
+            # the original FrameNormalizer was constructed with at
+            # capture_task.start (see _capture_task.py mind_id wire-up).
+            mind_id=self._pipeline.config.mind_id,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring-buffer
         # epoch increment. APO_DEGRADED + bypass_tier=2
@@ -1127,6 +1147,11 @@ class RestartMixin:
             wiener_entropy_threshold=self._wiener_entropy_threshold,
             resample_peak_check_enabled=self._resample_peak_check_enabled,
             phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+            # Phase 5.A.2 — multi-mind keying for SNR + noise-floor
+            # heartbeat aggregators. Same configured-at-startup mind_id
+            # the original FrameNormalizer was constructed with at
+            # capture_task.start (see _capture_task.py mind_id wire-up).
+            mind_id=self._pipeline.config.mind_id,
         )
         # T32 — emit CaptureRestartFrame for the Linux revert pair.
         # Two legitimate semantics: (a) revert from a prior
@@ -1435,6 +1460,11 @@ class RestartMixin:
             wiener_entropy_threshold=self._wiener_entropy_threshold,
             resample_peak_check_enabled=self._resample_peak_check_enabled,
             phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+            # Phase 5.A.2 — multi-mind keying for SNR + noise-floor
+            # heartbeat aggregators. Same configured-at-startup mind_id
+            # the original FrameNormalizer was constructed with at
+            # capture_task.start (see _capture_task.py mind_id wire-up).
+            mind_id=self._pipeline.config.mind_id,
         )
         # T32 — emit CaptureRestartFrame for the rotation. Tier 2
         # bypass = APO_DEGRADED reason + bypass_tier=2.
@@ -1752,6 +1782,11 @@ class RestartMixin:
             wiener_entropy_threshold=self._wiener_entropy_threshold,
             resample_peak_check_enabled=self._resample_peak_check_enabled,
             phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+            # Phase 5.A.2 — multi-mind keying for SNR + noise-floor
+            # heartbeat aggregators. Same configured-at-startup mind_id
+            # the original FrameNormalizer was constructed with at
+            # capture_task.start (see _capture_task.py mind_id wire-up).
+            mind_id=self._pipeline.config.mind_id,
         )
 
         # Anti-pattern #29 — emit the CaptureRestartFrame BEFORE

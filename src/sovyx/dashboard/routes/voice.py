@@ -1143,14 +1143,22 @@ async def get_voice_quality_snapshot(
     from sovyx.voice.health._noise_floor_trending import compute_drift
     from sovyx.voice.health._recent_snr import window_summary
 
-    # Phase 5.A — staged-adoption: aggregator foundation supports
-    # per-mind keying (see ``_noise_floor_trending`` module docstring),
-    # but the producer (FrameNormalizer) still keys to ``"default"``
-    # until Phase 5.A.2 threads ``mind_id`` through. Reading without
-    # ``mind_id=`` matches the producer's key, preserving exact pre-
-    # fix behaviour.
-    snr = window_summary()
-    drift = compute_drift()
+    # Phase 5.A.2 — multi-mind keying: read under the active pipeline's
+    # configured-at-startup mind_id (the producer's key). Resolve via the
+    # registered VoicePipeline; fall back to legacy ``"default"`` key
+    # when no pipeline is registered (boot in progress) so the endpoint
+    # never 5xx-s on a transient registry-empty window.
+    drain_mind_id = "default"
+    try:
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        if registry.is_registered(VoicePipeline):
+            pipeline = await registry.resolve(VoicePipeline)
+            drain_mind_id = pipeline.config.mind_id
+    except Exception:  # noqa: BLE001 — best-effort; degrade to default key
+        pass
+    snr = window_summary(mind_id=drain_mind_id)
+    drift = compute_drift(mind_id=drain_mind_id)
 
     snr_p50: float | None
     if snr.count == 0:

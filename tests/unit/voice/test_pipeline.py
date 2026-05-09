@@ -2191,7 +2191,7 @@ class TestPipelineEvents:
         reset_for_tests()
         # Pre-load the buffer with samples at 20 dB → factor → 1.0.
         for _ in range(20):
-            record_sample(snr_db=20.0)
+            record_sample(snr_db=20.0, mind_id="test-mind")
 
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
         await pipeline.start()
@@ -2223,7 +2223,7 @@ class TestPipelineEvents:
 
         reset_for_tests()
         for _ in range(20):
-            record_sample(snr_db=8.0)
+            record_sample(snr_db=8.0, mind_id="test-mind")
 
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
         await pipeline.start()
@@ -2254,7 +2254,7 @@ class TestPipelineEvents:
 
         reset_for_tests()
         for _ in range(20):
-            record_sample(snr_db=-2.0)
+            record_sample(snr_db=-2.0, mind_id="test-mind")
 
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
         await pipeline.start()
@@ -3102,7 +3102,7 @@ class TestPipelineHeartbeat:
         # between two heartbeats. Median of [10, 14, 18, 22, 30]
         # is 18 (idx 2); p95 idx = int(5*0.95)=4 → 30.
         for snr in (10.0, 14.0, 18.0, 22.0, 30.0):
-            record_snr_sample(snr_db=snr)
+            record_snr_sample(snr_db=snr, mind_id="test-mind")
 
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
@@ -3175,7 +3175,7 @@ class TestPipelineHeartbeat:
         n_consecutive = orch_mod._SNR_LOW_ALERT_CONSECUTIVE_HEARTBEATS
         for k in range(n_consecutive):
             for v in (2.0, 4.0, 6.0):
-                record_snr_sample(snr_db=v)
+                record_snr_sample(snr_db=v, mind_id="test-mind")
             await pipeline.feed_frame(_silence_frame())
             pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0)
 
@@ -3216,7 +3216,7 @@ class TestPipelineHeartbeat:
         # One low-SNR heartbeat — counter goes to 1, alert NOT
         # active.
         for v in (2.0, 4.0, 6.0):
-            record_snr_sample(snr_db=v)
+            record_snr_sample(snr_db=v, mind_id="test-mind")
         await pipeline.feed_frame(_silence_frame())
         pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S + 1.0)
 
@@ -3252,7 +3252,7 @@ class TestPipelineHeartbeat:
         n_consecutive = orch_mod._SNR_LOW_ALERT_CONSECUTIVE_HEARTBEATS
         for k in range(n_consecutive):
             for v in (2.0, 4.0, 6.0):
-                record_snr_sample(snr_db=v)
+                record_snr_sample(snr_db=v, mind_id="test-mind")
             await pipeline.feed_frame(_silence_frame())
             pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0)
         assert pipeline._snr_low_alert_active is True
@@ -3260,7 +3260,7 @@ class TestPipelineHeartbeat:
 
         # Recovery heartbeat: high SNR.
         for v in (25.0, 30.0, 35.0):
-            record_snr_sample(snr_db=v)
+            record_snr_sample(snr_db=v, mind_id="test-mind")
         await pipeline.feed_frame(_silence_frame())
         pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * (n_consecutive + 1) + 1.0)
 
@@ -3336,9 +3336,9 @@ class TestPipelineHeartbeat:
         # comfortably above the 10 dB threshold.
         baseline_count = _LONG_WINDOW_SAMPLES - _SHORT_WINDOW_SAMPLES
         for _ in range(baseline_count):
-            record_noise_floor_sample(noise_floor_db=-55.0)
+            record_noise_floor_sample(noise_floor_db=-55.0, mind_id="test-mind")
         for _ in range(_SHORT_WINDOW_SAMPLES):
-            record_noise_floor_sample(noise_floor_db=-40.0)
+            record_noise_floor_sample(noise_floor_db=-40.0, mind_id="test-mind")
 
         # Drive ``_NOISE_FLOOR_DRIFT_CONSECUTIVE_HEARTBEATS``
         # heartbeats; the drift sustains because compute_drift is
@@ -3384,7 +3384,7 @@ class TestPipelineHeartbeat:
 
         # Half-fill the long window — ready=False at compute_drift.
         for _ in range(_LONG_WINDOW_SAMPLES // 2):
-            record_noise_floor_sample(noise_floor_db=-30.0)
+            record_noise_floor_sample(noise_floor_db=-30.0, mind_id="test-mind")
 
         for k in range(5):
             await pipeline.feed_frame(_silence_frame())
@@ -3422,7 +3422,7 @@ class TestPipelineHeartbeat:
 
         # Window 1: feed 3 samples around 20 dB.
         for snr in (18.0, 20.0, 22.0):
-            record_snr_sample(snr_db=snr)
+            record_snr_sample(snr_db=snr, mind_id="test-mind")
         await pipeline.feed_frame(_silence_frame())
         pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S + 1.0)
         caplog.clear()
@@ -3430,7 +3430,7 @@ class TestPipelineHeartbeat:
         # Window 2: feed 3 samples around 5 dB. The window-1
         # median (20) MUST NOT contaminate the window-2 p50.
         for snr in (3.0, 5.0, 7.0):
-            record_snr_sample(snr_db=snr)
+            record_snr_sample(snr_db=snr, mind_id="test-mind")
         await pipeline.feed_frame(_silence_frame())
         pipeline._emit_heartbeat(orch_mod._HEARTBEAT_INTERVAL_S * 2 + 1.0)
 

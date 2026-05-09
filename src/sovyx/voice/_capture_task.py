@@ -614,6 +614,12 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
             wiener_entropy_threshold=self._wiener_entropy_threshold,
             resample_peak_check_enabled=self._resample_peak_check_enabled,
             phase_inversion_auto_recovery_enabled=self._phase_inversion_auto_recovery_enabled,
+            # Phase 5.A.2 — multi-mind keying for SNR + noise-floor
+            # heartbeat aggregators. Each AudioCaptureTask is bound to
+            # one VoicePipeline → one configured mind. Audio-quality
+            # samples are hardware-level (not per-turn) so the
+            # configured-at-startup mind_id is the correct granularity.
+            mind_id=self._pipeline.config.mind_id,
         )
         if not self._normalizer.is_passthrough:
             logger.info(

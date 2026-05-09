@@ -19,14 +19,22 @@ read-only contract). Producer = FrameNormalizer's
 ``_observe_snr``; consumer = orchestrator's transcription
 completion path.
 
-Cardinality / memory: 310 samples × 8 bytes = ~2.5 KB. Bounded
-``deque(maxlen=N)`` drops oldest samples FIFO.
+Phase 5.A.2 — multi-mind keying. Each mind has its own bounded
+ring buffer keyed by ``mind_id``. ``OrderedDict`` + LRU eviction
+caps memory at ``_MAX_MINDS = 32`` per process; misbehaving
+callers that generate unbounded mind_id values can't blow the
+heap. Pre-Phase-5.A.2 a single module-level ``deque`` merged
+samples from every mind on multi-mind hosts, distorting the
+per-utterance confidence factor.
+
+Cardinality / memory: 310 samples × 8 bytes × 32 minds = ~80 KB
+worst case. Bounded ``deque(maxlen=N)`` drops oldest samples FIFO.
 """
 
 from __future__ import annotations
 
 import threading
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 
 _WINDOW_SAMPLES = 310
@@ -35,6 +43,18 @@ to capture sustained-noise utterances without dilution from
 silence-only frames; short enough that the SNR snapshot reflects
 the recent (i.e. utterance-relevant) capture state, not minutes-
 old data."""
+
+
+_DEFAULT_MIND = "default"
+"""Sentinel for un-migrated callers (probe / health-check sites
+that don't bind to a specific mind). Real production callers
+pass an explicit mind_id."""
+
+
+_MAX_MINDS = 32
+"""LRU cap. Two orders of magnitude above any plausible operator
+mind topology (typical 1-5 minds; large multi-tenant deployments
+~10-15). Defends against unbounded-mind_id misuse."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +81,36 @@ class RecentSnrSummary:
 
 
 _lock = threading.Lock()
-_buffer: deque[float] = deque(maxlen=_WINDOW_SAMPLES)
+# OrderedDict so we can move-to-end on access for LRU semantics. Each
+# value is a bounded ring buffer for that mind's recent samples.
+_per_mind_buffers: OrderedDict[str, deque[float]] = OrderedDict()
 
 
-def record_sample(snr_db: float) -> None:
-    """Append one SNR sample to the rolling buffer.
+def _get_or_create_buffer_locked(mind_id: str) -> deque[float]:
+    """Resolve the per-mind buffer; create + LRU-evict if needed.
+
+    Caller MUST hold ``_lock``. The OrderedDict is touched on EVERY
+    access to maintain LRU ordering — the eviction target is whichever
+    mind's buffer hasn't been touched longest.
+    """
+    buf = _per_mind_buffers.get(mind_id)
+    if buf is None:
+        # Evict oldest mind if at capacity. Cold path in normal
+        # multi-mind use; defends against a misbehaving caller that
+        # generates unbounded mind_id values.
+        while len(_per_mind_buffers) >= _MAX_MINDS:
+            evicted_mind, _ = _per_mind_buffers.popitem(last=False)
+            del evicted_mind  # name retained for grep / future logging
+        buf = deque(maxlen=_WINDOW_SAMPLES)
+        _per_mind_buffers[mind_id] = buf
+    else:
+        # LRU touch: move to end (most-recently-used).
+        _per_mind_buffers.move_to_end(mind_id, last=True)
+    return buf
+
+
+def record_sample(snr_db: float, *, mind_id: str = _DEFAULT_MIND) -> None:
+    """Append one SNR sample to the rolling buffer for ``mind_id``.
 
     Called from :meth:`sovyx.voice._frame_normalizer.FrameNormalizer.
     _observe_snr` alongside the existing T4.34 heartbeat-
@@ -78,13 +123,21 @@ def record_sample(snr_db: float) -> None:
             as the heartbeat path (caller skips floor + first-
             frame samples) so the percentile pair stays
             consistent across both aggregators.
+        mind_id: Owning mind. Default ``"default"`` for backward-
+            compat with un-migrated producers; multi-mind producers
+            (FrameNormalizer post-Phase 5.A.2) pass the configured
+            mind_id of their owning AudioCaptureTask.
     """
     with _lock:
-        _buffer.append(snr_db)
+        _get_or_create_buffer_locked(mind_id).append(snr_db)
 
 
-def window_summary() -> RecentSnrSummary:
-    """Read the current rolling p50 + count without clearing.
+def window_summary(*, mind_id: str = _DEFAULT_MIND) -> RecentSnrSummary:
+    """Read the current rolling p50 + count for ``mind_id`` without clearing.
+
+    Args:
+        mind_id: Mind whose buffer to read. Default ``"default"`` for
+            backward-compat with un-migrated consumers.
 
     Returns:
         :class:`RecentSnrSummary`. ``count == 0`` indicates no
@@ -92,7 +145,8 @@ def window_summary() -> RecentSnrSummary:
         STT confidence unmodified in that case.
     """
     with _lock:
-        snapshot = list(_buffer)
+        buf = _per_mind_buffers.get(mind_id)
+        snapshot = list(buf) if buf is not None else []
     count = len(snapshot)
     if count == 0:
         return RecentSnrSummary(p50_db=0.0, count=0)
@@ -102,11 +156,11 @@ def window_summary() -> RecentSnrSummary:
 
 
 def reset_for_tests() -> None:
-    """Clear the buffer.
+    """Clear every per-mind buffer.
 
-    Test-only helper. Production code does NOT clear the buffer —
+    Test-only helper. Production code does NOT clear buffers —
     the rolling window's purpose is to span utterance boundaries
     so transcription-time queries always have recent context.
     """
     with _lock:
-        _buffer.clear()
+        _per_mind_buffers.clear()

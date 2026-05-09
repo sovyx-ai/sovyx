@@ -401,6 +401,7 @@ class FrameNormalizer:
         wiener_entropy_threshold: float = 0.5,
         resample_peak_check_enabled: bool = False,
         phase_inversion_auto_recovery_enabled: bool = False,
+        mind_id: str = "default",
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -431,6 +432,13 @@ class FrameNormalizer:
         self._source_channels = source_channels
         self._source_format = source_format
         self._passthrough = source_rate == _TARGET_RATE and source_channels == 1
+        # Phase 5.A.2 — multi-mind keying. Forwarded to the per-frame
+        # observability aggregators (_snr_heartbeat / _noise_floor_trending)
+        # so heartbeat stats per-mind don't merge across minds on
+        # multi-mind hosts. Defaults to ``"default"`` for legacy callers
+        # (health probes / standalone AGC2 builders) that aren't bound
+        # to a specific mind.
+        self._mind_id = mind_id
 
         gcd = math.gcd(source_rate, _TARGET_RATE)
         self._up = _TARGET_RATE // gcd
@@ -1015,18 +1023,24 @@ class FrameNormalizer:
         # ``voice_pipeline_heartbeat``. Same filter as the
         # OTel histogram above (caller guarantees finite,
         # non-floor samples) so the percentile pair stays
-        # consistent with the metric.
-        record_snr_sample(snr_db=snr_db)
+        # consistent with the metric. Phase 5.A.2 mind_id
+        # threading: per-mind keying so multi-mind hosts get
+        # per-mind heartbeat aggregation instead of a merged
+        # default-bucket pile-up.
+        record_snr_sample(snr_db=snr_db, mind_id=self._mind_id)
         # T4.36 — feed the read-only rolling buffer the
         # orchestrator queries at transcription completion
         # to compute the SNR-aware confidence factor. The
         # buffer is independent of the heartbeat drain so
         # the transcription path always has recent context.
+        # Phase 5.A.2 — same per-mind keying as the heartbeat
+        # aggregator above; the orchestrator's transcription path
+        # reads via ``window_summary(mind_id=...)`` to match.
         from sovyx.voice.health._recent_snr import (
             record_sample as record_recent_snr,
         )
 
-        record_recent_snr(snr_db=snr_db)
+        record_recent_snr(snr_db=snr_db, mind_id=self._mind_id)
         # T4.38 — feed the long-horizon noise-floor trend
         # tracker. The estimator's ``noise_floor_estimate``
         # property exposes the linear minimum-power tracker
@@ -1039,7 +1053,10 @@ class FrameNormalizer:
         noise_power = self._snr_estimator.noise_floor_estimate
         if noise_power is not None and noise_power > 0.0:
             noise_floor_db = float(10.0 * np.log10(noise_power / _INT16_FULL_SCALE_SQ))
-            record_noise_floor_sample(noise_floor_db=noise_floor_db)
+            # Phase 5.A.2 mind_id threading — same per-mind keying as
+            # the SNR sample above; the orchestrator's heartbeat reads
+            # via ``compute_drift(mind_id=...)`` to match.
+            record_noise_floor_sample(noise_floor_db=noise_floor_db, mind_id=self._mind_id)
 
     @property
     def noise_suppressor(self) -> NoiseSuppressor | None:
