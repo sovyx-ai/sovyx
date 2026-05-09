@@ -50,6 +50,10 @@ from sovyx.voice.vad import VADEvent, VADState
 
 _FRAME_LEN = 512
 _ORCH_LOGGER = "sovyx.voice.pipeline._orchestrator"
+# Phase 5.F.19 — heartbeat methods extracted to ``_heartbeat_mixin``;
+# the heartbeat log records now emit from that module's logger. Tests
+# capturing heartbeats MUST listen on both loggers (anti-pattern #20).
+_HEARTBEAT_LOGGER = "sovyx.voice.pipeline._heartbeat_mixin"
 
 
 def _silence_frame() -> np.ndarray:
@@ -91,7 +95,7 @@ def _heartbeats_of(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
     return [
         r.msg
         for r in caplog.records
-        if r.name == _ORCH_LOGGER
+        if r.name in (_ORCH_LOGGER, _HEARTBEAT_LOGGER)
         and isinstance(r.msg, dict)
         and r.msg.get("event") == "voice_pipeline_heartbeat"
     ]
@@ -126,6 +130,7 @@ class TestHeartbeatContinuesDuringSttParking:
         ``_HEARTBEAT_INTERVAL_S`` real wall-clock seconds per tick.
         """
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        caplog.set_level(logging.INFO, logger=_HEARTBEAT_LOGGER)
         pipeline = _make_pipeline()
 
         # Capture the real ``asyncio.sleep`` BEFORE patching so the
@@ -185,6 +190,7 @@ class TestHeartbeatStopsWhenPipelineStops:
     ) -> None:
         """``stop`` produces zero subsequent heartbeats."""
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        caplog.set_level(logging.INFO, logger=_HEARTBEAT_LOGGER)
         pipeline = _make_pipeline()
         await pipeline.start()
         # Yield once so the spawn's ``_runner`` reaches its
@@ -223,7 +229,7 @@ class TestHeartbeatStopsWhenPipelineStops:
         post_stop_heartbeats = [
             r.msg
             for r in caplog.records[stop_complete_idx + 1 :]
-            if r.name == _ORCH_LOGGER
+            if r.name in (_ORCH_LOGGER, _HEARTBEAT_LOGGER)
             and isinstance(r.msg, dict)
             and r.msg.get("event") == "voice_pipeline_heartbeat"
         ]
@@ -242,6 +248,7 @@ class TestHeartbeatCarriesSnapshotVadProbability:
     ) -> None:
         """Update snapshot fields from a fake feed_frame; assert emit reports them."""
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        caplog.set_level(logging.INFO, logger=_HEARTBEAT_LOGGER)
         pipeline = _make_pipeline()
         await pipeline.start()
         # Cancel the timer so we control emission timing — the
@@ -291,6 +298,7 @@ class TestHeartbeatCarriesSnapshotVadProbability:
         a real "VAD said zero" reading.
         """
         caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        caplog.set_level(logging.INFO, logger=_HEARTBEAT_LOGGER)
         pipeline = _make_pipeline()
         await pipeline.start()
         # Cancel the timer for deterministic control.
