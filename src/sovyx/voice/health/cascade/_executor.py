@@ -1197,139 +1197,17 @@ async def _try_combo(
         return synthetic
 
 
-def _make_result(
-    *,
-    endpoint_guid: str,
-    winning_combo: Combo | None,
-    winning_probe: ProbeResult | None,
-    attempts: list[ProbeResult],
-    attempts_count: int,
-    budget_exhausted: bool,
-    source: str,
-) -> CascadeResult:
-    return CascadeResult(
-        endpoint_guid=endpoint_guid,
-        winning_combo=winning_combo,
-        winning_probe=winning_probe,
-        attempts=tuple(attempts),
-        attempts_count=attempts_count,
-        budget_exhausted=budget_exhausted,
-        source=source,
-    )
-
-
-def _compute_diagnosis_histogram(attempts: Sequence[ProbeResult]) -> dict[str, int]:
-    """Build ``{diagnosis_value: count}`` from a list of cascade attempts.
-
-    Phase 6 / T6.20 — operators page on
-    :data:`voice.cascade.exhausted` and need ONE log line that
-    summarises the failure-mode distribution across N attempts. The
-    per-attempt ``voice_cascade_attempt`` lines + the existing
-    OTel ``voice_health_cascade_attempts`` counter give the drill-
-    down; the histogram is the at-a-glance triage signal.
-
-    Empty / missing attempts return ``{}`` defensively. The cascade
-    in production always has ≥ 1 attempt before exhaustion (every
-    platform cascade table is non-empty), but the budget-exhausted
-    site can fire with zero attempts when the deadline trips on the
-    first iteration — the empty histogram is the correct surface
-    for that case.
-
-    Diagnosis enum values are :class:`StrEnum` so ``.value`` returns
-    the canonical lowercase wire form (``"healthy"``, ``"no_signal"``,
-    etc.) — same shape monitoring tooling already consumes from the
-    per-attempt log lines.
-
-    Returns:
-        Dict mapping diagnosis-value strings to integer counts.
-        Iteration order matches first-seen order in ``attempts``;
-        ``json.dumps`` sorts by key, so the wire shape is stable
-        across boots regardless of attempt-order randomness.
-    """
-    histogram: dict[str, int] = {}
-    for attempt in attempts:
-        key = attempt.diagnosis.value
-        histogram[key] = histogram.get(key, 0) + 1
-    return histogram
-
-
-def _combo_tag(combo: Combo) -> str:
-    """Compact string representation for structured log fields."""
-    excl = "excl" if combo.exclusive else "shared"
-    return (
-        f"{combo.host_api}/{combo.sample_rate}Hz/{combo.channels}ch/"
-        f"{combo.sample_format}/{excl}/{combo.frames_per_buffer}f"
-    )
-
-
-_LOG_DETAIL_MAX_CHARS = 512
-"""Cap on ``error_detail`` truncation in cascade/probe events (T1).
-
-Matches the cap used by ``anomaly.latency_spike`` so structured fields
-stay within OTLP attribute-size limits without surprising operators.
-"""
-
-
-def _truncate_detail(detail: str | None) -> str:
-    """Clamp ``detail`` for structured log fields; safe for ``None``."""
-    if not detail:
-        return ""
-    if len(detail) <= _LOG_DETAIL_MAX_CHARS:
-        return detail
-    return detail[: _LOG_DETAIL_MAX_CHARS - 1] + "…"
-
-
-def _log_probe_call(
-    *,
-    endpoint_guid: str,
-    attempt: int,
-    device_index: int,
-    combo: Combo,
-    mode: ProbeMode,
-    attempt_budget_s: float,
-) -> None:
-    """Emit ``voice_cascade_probe_call`` before every probe invocation (T1).
-
-    Uniform across cascade/pinned/store paths so post-mortem log greps
-    see the same structured key set regardless of which source fed the
-    probe call.
-    """
-    logger.info(
-        "voice_cascade_probe_call",
-        endpoint=endpoint_guid,
-        attempt=attempt,
-        device_index=device_index,
-        combo_host_api=combo.host_api,
-        combo_sample_rate=combo.sample_rate,
-        combo_channels=combo.channels,
-        combo_sample_format=combo.sample_format,
-        combo_exclusive=combo.exclusive,
-        combo_auto_convert=combo.auto_convert,
-        combo_frames_per_buffer=combo.frames_per_buffer,
-        mode=str(mode),
-        attempt_budget_s=attempt_budget_s,
-    )
-
-
-def _log_probe_result(
-    *,
-    endpoint_guid: str,
-    attempt: int,
-    device_index: int,
-    combo: Combo,
-    result: ProbeResult,
-) -> None:
-    """Emit ``voice_cascade_probe_result`` after every probe invocation (T1)."""
-    logger.info(
-        "voice_cascade_probe_result",
-        endpoint=endpoint_guid,
-        attempt=attempt,
-        device_index=device_index,
-        combo_host_api=combo.host_api,
-        combo_sample_rate=combo.sample_rate,
-        diagnosis=str(result.diagnosis),
-        rms_db=result.rms_db,
-        callbacks_fired=result.callbacks_fired,
-        duration_ms=result.duration_ms,
-        error_detail=_truncate_detail(result.error),
-    )
+# Phase 5.F.7 god-file split: 6 internal helpers + _LOG_DETAIL_MAX_CHARS
+# constant extracted to :mod:cascade._executor_helpers. Re-exported
+# below so every internal call site (run_cascade + run_cascade_for_candidates +
+# _try_combo) resolves the names via standard module-namespace lookup.
+# Anti-pattern #16 + #20.
+from sovyx.voice.health.cascade._executor_helpers import (  # noqa: E402  F401
+    _LOG_DETAIL_MAX_CHARS,
+    _combo_tag,
+    _compute_diagnosis_histogram,
+    _log_probe_call,
+    _log_probe_result,
+    _make_result,
+    _truncate_detail,
+)
