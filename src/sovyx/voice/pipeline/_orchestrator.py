@@ -835,7 +835,6 @@ class VoicePipeline(
     # stays accessible via self.<name> through MRO; no caller-side change.
     # Anti-pattern #16 — Phase 5.F.25.
 
-
     # ── Utterance-ID identity methods extracted to ``_utterance_id_mixin.py`` ──
     # ``current_utterance_id`` (property) + ``_mint_new_utterance_id``
     # + ``_clear_utterance_id`` now live on
@@ -860,7 +859,6 @@ class VoicePipeline(
     # all forward-declared in TYPE_CHECKING block so MRO resolves to
     # Heartbeat / ListenerWireup / TtsCancelChain mixins at runtime.
     # Anti-pattern #16 / #32 case (b) Phase 5.F.28.
-
 
     # -- Runtime listener wire-up (mission Phase 1b) -------------------------
     #
@@ -1833,7 +1831,6 @@ class VoicePipeline(
     # self._record_frame(...) from FrameRecordingMixin via MRO
     # (anti-pattern #32 case (b) forward-declared in the new mixin
     # TYPE_CHECKING block). Anti-pattern #16 — Phase 5.F.26.
-
 
     def reset(self) -> None:
         """Reset the pipeline to IDLE state (for testing or error recovery)."""

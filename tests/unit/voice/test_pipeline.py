@@ -4460,8 +4460,9 @@ class TestCoordinatorPendingTimeoutT114:
         deadline AND the invocation count matches, the watchdog
         force-clears the flag so subsequent triggers can fire.
         """
-        from sovyx.voice.pipeline import _orchestrator as _orch_mod
-        from sovyx.voice.pipeline import _bypass_coordinator_mixin as _bypass_mixin_mod  # Phase 5.F.24
+        from sovyx.voice.pipeline import (
+            _bypass_coordinator_mixin as _bypass_mixin_mod,  # Phase 5.F.24
+        )
 
         # Shrink the timeout so the test runs fast.
         monkeypatch.setattr(_bypass_mixin_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
@@ -4491,8 +4492,9 @@ class TestCoordinatorPendingTimeoutT114:
         invocation would clear the flag of a SUBSEQUENT one,
         breaking the new coordinator's lifecycle.
         """
-        from sovyx.voice.pipeline import _orchestrator as _orch_mod
-        from sovyx.voice.pipeline import _bypass_coordinator_mixin as _bypass_mixin_mod  # Phase 5.F.24
+        from sovyx.voice.pipeline import (
+            _bypass_coordinator_mixin as _bypass_mixin_mod,  # Phase 5.F.24
+        )
 
         monkeypatch.setattr(_bypass_mixin_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
 
@@ -4518,8 +4520,9 @@ class TestCoordinatorPendingTimeoutT114:
         T1.23 outer-finally, so the flag is already False. Watchdog
         wakes, sees False, no-ops.
         """
-        from sovyx.voice.pipeline import _orchestrator as _orch_mod
-        from sovyx.voice.pipeline import _bypass_coordinator_mixin as _bypass_mixin_mod  # Phase 5.F.24
+        from sovyx.voice.pipeline import (
+            _bypass_coordinator_mixin as _bypass_mixin_mod,  # Phase 5.F.24
+        )
 
         monkeypatch.setattr(_bypass_mixin_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
 
@@ -4546,8 +4549,9 @@ class TestCoordinatorPendingTimeoutT114:
         """
         import logging as _logging
 
-        from sovyx.voice.pipeline import _orchestrator as _orch_mod
-        from sovyx.voice.pipeline import _bypass_coordinator_mixin as _bypass_mixin_mod  # Phase 5.F.24
+        from sovyx.voice.pipeline import (
+            _bypass_coordinator_mixin as _bypass_mixin_mod,  # Phase 5.F.24
+        )
 
         monkeypatch.setattr(_bypass_mixin_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
 
@@ -4582,8 +4586,9 @@ class TestCoordinatorPendingTimeoutT114:
         raise — the watchdog catches CancelledError + returns. A
         fresh watchdog spawns on the next deaf-signal trigger.
         """
-        from sovyx.voice.pipeline import _orchestrator as _orch_mod
-        from sovyx.voice.pipeline import _bypass_coordinator_mixin as _bypass_mixin_mod  # Phase 5.F.24
+        from sovyx.voice.pipeline import (
+            _bypass_coordinator_mixin as _bypass_mixin_mod,  # Phase 5.F.24
+        )
 
         # Long enough that we can cancel before the deadline fires.
         monkeypatch.setattr(_bypass_mixin_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 30.0)

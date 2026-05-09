@@ -30,7 +30,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sovyx.voice.pipeline import _listener_wireup_mixin as listener_mixin_module
-from sovyx.voice.pipeline import _orchestrator as module_under_test
 from sovyx.voice.pipeline._config import VoicePipelineConfig
 from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
