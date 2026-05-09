@@ -45,9 +45,9 @@ from sovyx.voice.pipeline._events import (
     TTSStartedEvent,
     WakeWordDetectedEvent,
 )
+from sovyx.voice.pipeline._frame_recording_mixin import FrameRecordingMixin
 from sovyx.voice.pipeline._frame_types import (
     BargeInInterruptionFrame,
-    CaptureRestartFrame,
     EndFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -245,7 +245,12 @@ _SPEAKER_DRIFT_RATIO_THRESHOLD = _VoiceTuning().pipeline_speaker_drift_ratio_thr
 ``VoiceTuningConfig.pipeline_speaker_drift_ratio_threshold``."""
 
 
-class VoicePipeline(UtteranceIdentityMixin, WakeWordRouterMixin, HeartbeatMixin):
+class VoicePipeline(
+    FrameRecordingMixin,
+    UtteranceIdentityMixin,
+    WakeWordRouterMixin,
+    HeartbeatMixin,
+):
     """Orchestrates the complete voice pipeline.
 
     Lifecycle (SPE-010 §8):
@@ -651,66 +656,13 @@ class VoicePipeline(UtteranceIdentityMixin, WakeWordRouterMixin, HeartbeatMixin)
         self._current_utterance_id: str = ""
 
     # ── Step 13 Ring 6 frame instrumentation helper ─────────────────
-
-    def _record_frame(self, frame: PipelineFrame) -> None:
-        """Stamp utterance_id + record the frame on the state machine.
-
-        Mission §1.1 Hybrid Option C: observability-only. Frame
-        recording is best-effort — any exception during recording
-        (e.g. state machine lock contention under chaos injection) is
-        absorbed so the orchestrator's authoritative state mutation
-        path is never blocked.
-
-        Pre-condition: ``frame.timestamp_monotonic`` is set by the
-        caller (typically ``time.monotonic()`` at the call site so the
-        timestamp matches the real transition moment, not this helper's
-        invocation moment).
-        """
-        try:
-            # Frames are frozen dataclasses — to set utterance_id we
-            # construct a copy via dataclasses.replace. The cost is one
-            # allocation per recording, well below the bounded ring's
-            # heartbeat budget.
-            from dataclasses import replace
-
-            stamped = replace(frame, utterance_id=self._current_utterance_id)
-            self._state_machine.record_frame(stamped)
-        except Exception as exc:  # noqa: BLE001 — observability isolation
-            logger.debug(
-                "voice.pipeline.frame_record_skipped",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-
-    def record_capture_restart(self, frame: CaptureRestartFrame) -> None:
-        """Public cross-component channel for :class:`CaptureRestartFrame`.
-
-        T32 — the capture-task restart methods (``request_*_restart``
-        on :class:`RestartMixin`) live OUTSIDE the orchestrator but
-        emit observability frames into the same bounded ring buffer
-        the orchestrator owns. Per CLAUDE.md anti-pattern #29 the
-        frame is observability-only — does NOT replace the
-        boolean-flag + ``VoicePipelineState`` authoritative state.
-
-        Method is kept narrow on purpose: it accepts ONLY
-        :class:`CaptureRestartFrame` instances rather than the
-        general ``PipelineFrame`` parent class, so the public
-        cross-component surface stays minimal. Other frame types
-        continue to flow through the orchestrator-internal
-        :meth:`_record_frame` path.
-
-        Best-effort recording per :meth:`_record_frame`'s contract —
-        any exception during state-machine record (lock contention,
-        ring overflow under chaos injection) is absorbed so the
-        capture-task restart path is never blocked by observability.
-
-        Args:
-            frame: The :class:`CaptureRestartFrame` to record. Caller
-                MUST set ``timestamp_monotonic`` at the actual
-                transition moment (typically just before the
-                ring-buffer epoch increment in the restart method).
-        """
-        self._record_frame(frame)
+    #
+    # ``_record_frame`` + ``record_capture_restart`` extracted to
+    # :class:`sovyx.voice.pipeline._frame_recording_mixin.FrameRecordingMixin`,
+    # mounted via the multi-mixin host above. Methods stay accessible
+    # via instance dispatch through MRO for the 11 internal callers
+    # + 1 external caller (``voice/capture/_restart_mixin.py`` T32).
+    # Anti-pattern #16 — Phase 5.F.22.
 
     def reset_coordinator_after_failover(self) -> None:
         """Clear the deaf-detection latch after a runtime device-rebind.
