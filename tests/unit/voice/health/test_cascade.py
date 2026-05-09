@@ -1225,6 +1225,12 @@ class TestQuarantineKillSwitch:
 
 
 _CASCADE_EXECUTOR_LOGGER = "sovyx.voice.health.cascade._executor"
+# Phase 5.F.18 — the cascade-walk phase helpers (pinned/store/cascade walk)
+# moved to ``_executor_phases.py``; their structured-log events now fire
+# under the phases logger. The caplog filter accepts both names so events
+# from either layer surface in the test record list.
+_CASCADE_PHASES_LOGGER = "sovyx.voice.health.cascade._executor_phases"
+_CASCADE_LOGGERS = (_CASCADE_EXECUTOR_LOGGER, _CASCADE_PHASES_LOGGER)
 
 
 def _events_of(
@@ -1236,7 +1242,7 @@ def _events_of(
         r.msg
         for r in caplog.records
         if (
-            r.name == _CASCADE_EXECUTOR_LOGGER
+            r.name in _CASCADE_LOGGERS
             and isinstance(r.msg, dict)
             and r.msg.get("event") == event_name
         )
@@ -1327,7 +1333,8 @@ class TestDiagnosisHistogramEmission:
     ) -> None:
         import logging
 
-        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.ERROR, logger=_logger)
         # Every cascade entry returns DEVICE_BUSY → table exhausts.
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.DEVICE_BUSY)])
         result = await _run(probe_fn=probe)
@@ -1347,7 +1354,8 @@ class TestDiagnosisHistogramEmission:
     ) -> None:
         import logging
 
-        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.ERROR, logger=_logger)
 
         # Plan: WASAPI/exclusive → APO_DEGRADED, everything else → DEVICE_BUSY.
         # No HEALTHY anywhere → table exhausts; histogram surfaces the split.
@@ -1379,7 +1387,8 @@ class TestDiagnosisHistogramEmission:
     ) -> None:
         import logging
 
-        caplog.set_level(logging.WARNING, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.WARNING, logger=_logger)
 
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.DEVICE_BUSY)])
 
@@ -1406,7 +1415,8 @@ class TestDiagnosisHistogramEmission:
     ) -> None:
         import logging
 
-        caplog.set_level(logging.WARNING, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.WARNING, logger=_logger)
 
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.NO_SIGNAL)])
 
@@ -1440,7 +1450,8 @@ class TestDiagnosisHistogramEmission:
         # success (which would spam Prometheus with healthy noise).
         import logging
 
-        caplog.set_level(logging.WARNING, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.WARNING, logger=_logger)
 
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.HEALTHY)])
         await _run(probe_fn=probe)
@@ -1464,7 +1475,8 @@ class TestUserActionableEmission:
     ) -> None:
         import logging
 
-        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.ERROR, logger=_logger)
         # Every cascade attempt returns DEVICE_BUSY → homogeneous +
         # the diagnosis IS in the remediation map.
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.DEVICE_BUSY)])
@@ -1488,7 +1500,8 @@ class TestUserActionableEmission:
     ) -> None:
         import logging
 
-        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.ERROR, logger=_logger)
 
         # Mixed diagnoses — too ambiguous for a confident user-facing hint.
         def _is_excl(c: Combo) -> bool:
@@ -1515,7 +1528,8 @@ class TestUserActionableEmission:
         # Homogeneous UNKNOWN — diagnosis is not in the map → no hint.
         import logging
 
-        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.ERROR, logger=_logger)
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.UNKNOWN)])
         await _run(probe_fn=probe)
         assert _events_of(caplog, "voice_cascade_user_actionable") == []
@@ -1530,7 +1544,8 @@ class TestUserActionableEmission:
         # fires for operators; T6.12 stays silent.
         import logging
 
-        caplog.set_level(logging.WARNING, logger=_CASCADE_EXECUTOR_LOGGER)
+        for _logger in _CASCADE_LOGGERS:
+            caplog.set_level(logging.WARNING, logger=_logger)
 
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.DEVICE_BUSY)])
         t = {"now": 0.0}
