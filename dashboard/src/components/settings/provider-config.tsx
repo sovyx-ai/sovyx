@@ -30,6 +30,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PricingSourceBanner } from "@/components/settings/pricing-source-banner";
 
 /* ── Types ── */
 
@@ -388,6 +389,14 @@ export function ProviderConfig() {
               )}
             </div>
           </div>
+        )}
+
+        {/* ── Fallback pricing banner (issue #45) ── */}
+        {selectedProvider && selectedModel && (
+          <PricingSourceBanner
+            provider={selectedProvider}
+            model={selectedModel}
+          />
         )}
 
         {/* ── Active summary + Save ── */}

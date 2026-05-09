@@ -2187,3 +2187,25 @@ export function isWizardCalibrationTerminal(
     status === "fallback"
   );
 }
+
+// ── LLM pricing-info (issue #45) ──
+
+/**
+ * Pricing source classification — mirrors ``sovyx.llm.pricing.PricingSource``.
+ *
+ * - ``exact`` — model is in the per-model PRICING table; rates are authoritative.
+ * - ``provider_default`` — model unknown but provider default is used; rates
+ *   are an estimate at the provider's typical cost band.
+ * - ``global_default`` — neither model nor provider matched; rates fall back
+ *   to a Sonnet-class default. Cost reports may be wildly off.
+ */
+export type PricingSource = "exact" | "provider_default" | "global_default";
+
+/** GET /api/providers/pricing-info response */
+export interface PricingInfoResponse {
+  model: string;
+  provider: string;
+  input_per_1m_usd: number;
+  output_per_1m_usd: number;
+  source: PricingSource;
+}

@@ -52,6 +52,11 @@
     "ollamaStep1": "Install Ollama from ollama.com",
     "ollamaStep3": "Click \"Refresh\" below"
   },
+  "pricing": {
+    "fallbackProviderDefault": "Cost estimates use provider-default rates for this model.",
+    "fallbackGlobalDefault": "Cost estimates use a global-default rate for this model.",
+    "fallbackBody": "Reports show ${{input}} / ${{output}} per 1M tokens — these are estimates, not authoritative rates from the provider. Add the model to the pricing table for exact tracking."
+  },
   "mind": {
     "identity": "Mind Identity",
     "name": "Name",

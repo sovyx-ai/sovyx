@@ -52,6 +52,11 @@
     "ollamaStep1": "Instala Ollama desde ollama.com",
     "ollamaStep3": "Haz clic en \"Actualizar\" abajo"
   },
+  "pricing": {
+    "fallbackProviderDefault": "Las estimaciones de coste usan tarifas predeterminadas del proveedor para este modelo.",
+    "fallbackGlobalDefault": "Las estimaciones de coste usan una tarifa global predeterminada para este modelo.",
+    "fallbackBody": "Los informes muestran ${{input}} / ${{output}} por 1M tokens — son estimaciones, no tarifas autoritativas del proveedor. Añade el modelo a la tabla de precios para un seguimiento exacto."
+  },
   "mind": {
     "identity": "Identidad de la Mente",
     "name": "Nombre",

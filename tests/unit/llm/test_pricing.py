@@ -13,8 +13,11 @@ from sovyx.llm.pricing import (
     DEFAULT_PRICING,
     PRICING,
     PROVIDER_DEFAULT_PRICING,
+    PricingSource,
     compute_cost,
     get_pricing,
+    get_pricing_with_source,
+    resolve_pricing_source,
 )
 
 
@@ -141,3 +144,62 @@ class TestPricingBaseline:
         assert PROVIDER_DEFAULT_PRICING["deepseek"] == (0.28, 0.42)
         assert PROVIDER_DEFAULT_PRICING["xai"] == (2.0, 6.0)
         assert PROVIDER_DEFAULT_PRICING["google"] == (0.30, 2.50)
+
+
+class TestPricingSource:
+    """Issue #45 — fallback pricing source classification."""
+
+    def test_known_model_is_exact(self) -> None:
+        assert resolve_pricing_source("gpt-4o") is PricingSource.EXACT
+
+    def test_known_model_with_provider_still_exact(self) -> None:
+        # Provider hint doesn't downgrade an exact match.
+        assert resolve_pricing_source("gpt-4o", provider="openai") is PricingSource.EXACT
+
+    def test_unknown_model_with_known_provider_is_provider_default(self) -> None:
+        assert (
+            resolve_pricing_source("vaporware-7b", provider="anthropic")
+            is PricingSource.PROVIDER_DEFAULT
+        )
+
+    def test_unknown_model_no_provider_is_global_default(self) -> None:
+        assert resolve_pricing_source("vaporware-7b") is PricingSource.GLOBAL_DEFAULT
+
+    def test_unknown_model_unknown_provider_is_global_default(self) -> None:
+        assert (
+            resolve_pricing_source("vaporware-7b", provider="totally-fake")
+            is PricingSource.GLOBAL_DEFAULT
+        )
+
+    def test_none_model_is_global_default(self) -> None:
+        assert resolve_pricing_source(None) is PricingSource.GLOBAL_DEFAULT
+
+
+class TestGetPricingWithSource:
+    def test_known_model_returns_exact_with_real_rate(self) -> None:
+        price_in, price_out, source = get_pricing_with_source("gpt-4o")
+        assert (price_in, price_out) == PRICING["gpt-4o"]
+        assert source is PricingSource.EXACT
+
+    def test_unknown_model_with_provider_uses_fallback(self) -> None:
+        provider = "anthropic"
+        provider_default = PROVIDER_DEFAULT_PRICING[provider]
+        price_in, price_out, source = get_pricing_with_source(
+            "vaporware",
+            fallback=provider_default,
+            provider=provider,
+        )
+        assert (price_in, price_out) == provider_default
+        assert source is PricingSource.PROVIDER_DEFAULT
+
+    def test_unknown_everything_is_global_default(self) -> None:
+        price_in, price_out, source = get_pricing_with_source("vaporware")
+        assert (price_in, price_out) == DEFAULT_PRICING
+        assert source is PricingSource.GLOBAL_DEFAULT
+
+    def test_pricing_source_enum_values(self) -> None:
+        # StrEnum guarantees stable serialization across xdist
+        # (anti-pattern #9 in CLAUDE.md).
+        assert PricingSource.EXACT.value == "exact"
+        assert PricingSource.PROVIDER_DEFAULT.value == "provider_default"
+        assert PricingSource.GLOBAL_DEFAULT.value == "global_default"

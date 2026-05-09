@@ -24,6 +24,26 @@ Sources:
 
 from __future__ import annotations
 
+from enum import StrEnum
+
+
+class PricingSource(StrEnum):
+    """Origin of a pricing tuple returned by :func:`get_pricing`.
+
+    - ``EXACT`` — the model is in :data:`PRICING` and rates are authoritative.
+    - ``PROVIDER_DEFAULT`` — the model is unknown but the provider is in
+      :data:`PROVIDER_DEFAULT_PRICING`; rates are an estimate at the provider's
+      typical cost band.
+    - ``GLOBAL_DEFAULT`` — neither model nor provider matched; rates fall back
+      to :data:`DEFAULT_PRICING` (Sonnet-class). Cost reports may be wildly
+      off for cheap or expensive providers.
+    """
+
+    EXACT = "exact"
+    PROVIDER_DEFAULT = "provider_default"
+    GLOBAL_DEFAULT = "global_default"
+
+
 # ── Per-model pricing (USD per 1M tokens) ──────────────────────────────
 #
 # Keep sorted within each provider block.
@@ -105,6 +125,33 @@ PROVIDER_DEFAULT_PRICING: dict[str, tuple[float, float]] = {
 }
 
 
+def resolve_pricing_source(
+    model: str | None,
+    *,
+    provider: str | None = None,
+) -> PricingSource:
+    """Classify which pricing tier :func:`get_pricing` would resolve.
+
+    Mirrors the lookup logic without computing a cost — callers use this
+    to decide whether to surface a fallback warning to the operator.
+
+    Args:
+        model: Model identifier, or ``None`` if unknown.
+        provider: Provider name (e.g. ``"anthropic"``). If supplied and the
+            model is unknown but the provider is in
+            :data:`PROVIDER_DEFAULT_PRICING`, the source is
+            :attr:`PricingSource.PROVIDER_DEFAULT`.
+
+    Returns:
+        :class:`PricingSource` describing which table answered the lookup.
+    """
+    if model is not None and model in PRICING:
+        return PricingSource.EXACT
+    if provider and provider in PROVIDER_DEFAULT_PRICING:
+        return PricingSource.PROVIDER_DEFAULT
+    return PricingSource.GLOBAL_DEFAULT
+
+
 def get_pricing(
     model: str | None,
     *,
@@ -125,6 +172,23 @@ def get_pricing(
     if model is not None and model in PRICING:
         return PRICING[model]
     return fallback if fallback is not None else DEFAULT_PRICING
+
+
+def get_pricing_with_source(
+    model: str | None,
+    *,
+    fallback: tuple[float, float] | None = None,
+    provider: str | None = None,
+) -> tuple[float, float, PricingSource]:
+    """Return ``(input, output, source)`` for *model* in one call.
+
+    Convenience wrapper for callers that need both the rates and the
+    classification (e.g. dashboard endpoints that surface a warning when
+    *source* is not :attr:`PricingSource.EXACT`).
+    """
+    source = resolve_pricing_source(model, provider=provider)
+    price_in, price_out = get_pricing(model, fallback=fallback)
+    return price_in, price_out, source
 
 
 def compute_cost(

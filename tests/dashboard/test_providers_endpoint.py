@@ -279,3 +279,92 @@ class TestPutProviders:
             headers={**auth, "Content-Type": "application/json"},
         )
         assert resp.status_code == 422
+
+
+class TestPricingInfoEndpoint:
+    """GET /api/providers/pricing-info — issue #45 fallback pricing surface."""
+
+    def test_known_model_returns_exact(self, app: TestClient, auth: dict[str, str]) -> None:
+        # No registry needed — pricing lookup is pure (driven by tables).
+        app.app.state.mind_config = MindConfig(name="Test")  # type: ignore[union-attr]
+        resp = app.get(
+            "/api/providers/pricing-info?model=gpt-4o&provider=openai",
+            headers=auth,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model"] == "gpt-4o"
+        assert data["provider"] == "openai"
+        assert data["source"] == "exact"
+        assert data["input_per_1m_usd"] == 2.5
+        assert data["output_per_1m_usd"] == 10.0
+
+    def test_unknown_model_known_provider_returns_provider_default(
+        self, app: TestClient, auth: dict[str, str]
+    ) -> None:
+        app.app.state.mind_config = MindConfig(name="Test")  # type: ignore[union-attr]
+        resp = app.get(
+            "/api/providers/pricing-info?model=vaporware-7b&provider=anthropic",
+            headers=auth,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["source"] == "provider_default"
+        # Anthropic provider default is the conservative Sonnet rate.
+        assert data["input_per_1m_usd"] == 3.0
+        assert data["output_per_1m_usd"] == 15.0
+
+    def test_unknown_everything_returns_global_default(
+        self, app: TestClient, auth: dict[str, str]
+    ) -> None:
+        app.app.state.mind_config = MindConfig(name="Test")  # type: ignore[union-attr]
+        resp = app.get(
+            "/api/providers/pricing-info?model=vaporware&provider=fake-corp",
+            headers=auth,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["source"] == "global_default"
+        assert data["input_per_1m_usd"] == 3.0
+        assert data["output_per_1m_usd"] == 15.0
+
+    def test_no_query_params_uses_active_mind_config(
+        self, app: TestClient, auth: dict[str, str]
+    ) -> None:
+        mind = MindConfig(name="Test")
+        mind.llm.default_provider = "openai"
+        mind.llm.default_model = "gpt-4o-mini"
+        app.app.state.mind_config = mind  # type: ignore[union-attr]
+        resp = app.get("/api/providers/pricing-info", headers=auth)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model"] == "gpt-4o-mini"
+        assert data["provider"] == "openai"
+        assert data["source"] == "exact"
+
+    def test_no_mind_config_returns_global_default(
+        self, app: TestClient, auth: dict[str, str]
+    ) -> None:
+        # Without a MindConfig and without query params, both fields
+        # collapse to empty strings — source must be global_default.
+        app.app.state.mind_config = None  # type: ignore[union-attr]
+        resp = app.get("/api/providers/pricing-info", headers=auth)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model"] == ""
+        assert data["provider"] == ""
+        assert data["source"] == "global_default"
+
+    def test_response_shape_is_pinned(self, app: TestClient, auth: dict[str, str]) -> None:
+        # Frontend zod schema requires these exact keys; freezing here
+        # catches accidental rename/drop in future edits.
+        app.app.state.mind_config = MindConfig(name="Test")  # type: ignore[union-attr]
+        resp = app.get("/api/providers/pricing-info?model=gpt-4o", headers=auth)
+        assert resp.status_code == 200
+        assert set(resp.json().keys()) == {
+            "model",
+            "provider",
+            "input_per_1m_usd",
+            "output_per_1m_usd",
+            "source",
+        }

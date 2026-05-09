@@ -572,3 +572,106 @@ class TestContextWindowEquivalent:
         # claude-sonnet → equivalent gpt-4o → OpenAI provider
         result = router.get_context_window("claude-sonnet-4-20250514")
         assert result == 128_000
+
+
+class TestPricingFallbackWarn:
+    """Issue #45 — _warn_pricing_fallback_once dedup behaviour.
+
+    Sovyx logging routes through structlog, which doesn't always surface
+    structured events to ``caplog`` under stdlib's WARNING dispatch
+    (the ProcessorFormatter chain emits via stdout). Tests use
+    ``structlog.testing.capture_logs`` for the canonical capture — it
+    intercepts the structlog pipeline directly.
+    """
+
+    def test_unknown_model_with_known_provider_logs_provider_default(
+        self,
+        cost_guard: CostGuard,
+        event_bus: AsyncMock,
+    ) -> None:
+        import structlog.testing
+
+        provider = _mock_provider("anthropic")
+        router = LLMRouter([provider], cost_guard, event_bus)
+
+        with structlog.testing.capture_logs() as cap:
+            router._warn_pricing_fallback_once("vaporware-9000", "anthropic")
+
+        matching = [e for e in cap if e.get("event") == "llm.pricing.fallback_used"]
+        assert len(matching) == 1
+        entry = matching[0]
+        assert entry["model"] == "vaporware-9000"
+        assert entry["provider"] == "anthropic"
+        assert entry["source"] == "provider_default"
+        assert "vaporware-9000" in router._logged_fallback_models
+
+    def test_known_model_does_not_log(
+        self,
+        cost_guard: CostGuard,
+        event_bus: AsyncMock,
+    ) -> None:
+        import structlog.testing
+
+        provider = _mock_provider("anthropic")
+        router = LLMRouter([provider], cost_guard, event_bus)
+
+        with structlog.testing.capture_logs() as cap:
+            router._warn_pricing_fallback_once("gpt-4o", "openai")
+
+        # Exact-match models never warn — the model is in the table.
+        assert not any(e.get("event") == "llm.pricing.fallback_used" for e in cap)
+        assert "gpt-4o" not in router._logged_fallback_models
+
+    def test_dedup_emits_once_per_model(
+        self,
+        cost_guard: CostGuard,
+        event_bus: AsyncMock,
+    ) -> None:
+        import structlog.testing
+
+        provider = _mock_provider("anthropic")
+        router = LLMRouter([provider], cost_guard, event_bus)
+
+        with structlog.testing.capture_logs() as cap:
+            for _ in range(5):
+                router._warn_pricing_fallback_once("vaporware-9000", "anthropic")
+
+        # Five calls with the same unknown model must produce a single log.
+        matching = [e for e in cap if e.get("event") == "llm.pricing.fallback_used"]
+        assert len(matching) == 1
+
+    def test_empty_model_is_no_op(
+        self,
+        cost_guard: CostGuard,
+        event_bus: AsyncMock,
+    ) -> None:
+        import structlog.testing
+
+        provider = _mock_provider("anthropic")
+        router = LLMRouter([provider], cost_guard, event_bus)
+
+        with structlog.testing.capture_logs() as cap:
+            router._warn_pricing_fallback_once("", "anthropic")
+
+        # Empty model name (defensive — should never happen in practice
+        # but stream() can pass "" via fallback chain) must not log
+        # nor pollute the dedup set.
+        assert "" not in router._logged_fallback_models
+        assert not any(e.get("event") == "llm.pricing.fallback_used" for e in cap)
+
+    def test_global_default_emits_with_correct_source(
+        self,
+        cost_guard: CostGuard,
+        event_bus: AsyncMock,
+    ) -> None:
+        import structlog.testing
+
+        provider = _mock_provider("fake-corp")
+        router = LLMRouter([provider], cost_guard, event_bus)
+
+        with structlog.testing.capture_logs() as cap:
+            router._warn_pricing_fallback_once("vaporware", "fake-corp")
+
+        matching = [e for e in cap if e.get("event") == "llm.pricing.fallback_used"]
+        assert len(matching) == 1
+        assert matching[0]["source"] == "global_default"

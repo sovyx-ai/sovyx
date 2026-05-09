@@ -18,7 +18,12 @@ from sovyx.engine.errors import CostLimitExceededError, ProviderUnavailableError
 from sovyx.engine.events import ThinkCompleted, ThinkStreamStarted
 from sovyx.llm.circuit import CircuitBreaker
 from sovyx.llm.models import LLMResponse, LLMStreamChunk
-from sovyx.llm.pricing import compute_cost, get_pricing
+from sovyx.llm.pricing import (
+    PricingSource,
+    compute_cost,
+    get_pricing,
+    resolve_pricing_source,
+)
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
 from sovyx.observability.tracing import get_tracer
@@ -267,6 +272,31 @@ class LLMRouter:
             )
             for p in providers
         }
+        # Dedup set for fallback-pricing warnings — the warning flood without
+        # this is one log per LLM call when a model is missing from PRICING.
+        self._logged_fallback_models: set[str] = set()
+
+    def _warn_pricing_fallback_once(self, model: str, provider: str) -> None:
+        """Emit a structured warning the first time a model lands on a fallback rate.
+
+        Idempotent per (model) — subsequent calls with the same model are
+        silent. Operators see one entry per session per unknown model in
+        ``logger=sovyx.llm.router`` at WARNING level, plus the dashboard
+        widget exposes the same classification via
+        ``GET /api/providers/pricing-info``.
+        """
+        if not model or model in self._logged_fallback_models:
+            return
+        source = resolve_pricing_source(model, provider=provider)
+        if source is PricingSource.EXACT:
+            return
+        self._logged_fallback_models.add(model)
+        logger.warning(
+            "llm.pricing.fallback_used",
+            model=model,
+            provider=provider,
+            source=source.value,
+        )
 
     def add_provider(self, provider: LLMProvider) -> None:
         """Hot-register a new provider at runtime.
@@ -470,6 +500,7 @@ class LLMRouter:
                         circuit.record_success()
 
                     # Record cost
+                    self._warn_pricing_fallback_once(response.model, provider.name)
                     await self._cost_guard.record(
                         response.cost_usd, response.model, conversation_id
                     )
@@ -743,6 +774,10 @@ class LLMRouter:
                 final_chunk.model or chosen_model,
                 final_chunk.tokens_in,
                 final_chunk.tokens_out,
+            )
+            self._warn_pricing_fallback_once(
+                final_chunk.model or chosen_model or "",
+                chosen_provider.name,
             )
             await self._cost_guard.record(
                 cost, final_chunk.model or chosen_model or "", conversation_id

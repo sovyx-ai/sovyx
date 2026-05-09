@@ -75,6 +75,62 @@ async def get_providers(request: Request) -> JSONResponse:
     return JSONResponse({"providers": providers_out, "active": active})
 
 
+@router.get("/providers/pricing-info")
+async def get_pricing_info(
+    request: Request,
+    model: str | None = None,
+    provider: str | None = None,
+) -> JSONResponse:
+    """Return pricing rates and source classification for *model*.
+
+    Resolves the active default model + provider from ``MindConfig`` when
+    either query parameter is omitted, so the dashboard can ask "what does
+    the currently-selected model cost?" with no arguments.
+
+    Response shape::
+
+        {
+          "model": "claude-sonnet-4-20250514",
+          "provider": "anthropic",
+          "input_per_1m_usd": 3.0,
+          "output_per_1m_usd": 15.0,
+          "source": "exact"  // or "provider_default" / "global_default"
+        }
+
+    The ``source`` field is the contract surface for the dashboard fallback
+    banner: anything other than ``"exact"`` means cost reports for this
+    model are estimated, not authoritative (issue #45).
+    """
+    from sovyx.llm.pricing import (
+        PROVIDER_DEFAULT_PRICING,
+        get_pricing_with_source,
+    )
+
+    mind_config = getattr(request.app.state, "mind_config", None)
+
+    if not model and mind_config is not None:
+        model = mind_config.llm.default_model
+    if not provider and mind_config is not None:
+        provider = mind_config.llm.default_provider
+
+    fallback = PROVIDER_DEFAULT_PRICING.get(provider) if provider else None
+    price_in, price_out, source = get_pricing_with_source(
+        model or None,
+        fallback=fallback,
+        provider=provider or None,
+    )
+
+    return JSONResponse(
+        {
+            "model": model or "",
+            "provider": provider or "",
+            "input_per_1m_usd": price_in,
+            "output_per_1m_usd": price_out,
+            "source": source.value,
+        }
+    )
+
+
 @router.put("/providers")
 async def update_provider(request: Request) -> JSONResponse:
     """Change active LLM provider and model at runtime.

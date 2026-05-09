@@ -1667,3 +1667,27 @@ export const VoiceStatusResponseSchema = z
     pipeline: z.object({ running: z.boolean() }),
   })
   .passthrough();
+
+// ── LLM pricing-info (issue #45) ──
+
+/**
+ * GET /api/providers/pricing-info — pricing rates and source classification
+ * for the active (or queried) model.
+ *
+ * ``source`` is the contract surface for the dashboard fallback banner:
+ * anything other than ``"exact"`` means cost reports for this model are
+ * estimated from a provider/global default, not authoritative.
+ */
+export const PricingSourceSchema = z.enum([
+  "exact",
+  "provider_default",
+  "global_default",
+]);
+
+export const PricingInfoResponseSchema = z.object({
+  model: z.string(),
+  provider: z.string(),
+  input_per_1m_usd: z.number(),
+  output_per_1m_usd: z.number(),
+  source: PricingSourceSchema,
+});
