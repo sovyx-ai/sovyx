@@ -19,7 +19,6 @@ from sovyx.voice._mm_notification_client import (
 from sovyx.voice._mm_notification_client import (
     create_listener as create_mm_notification_listener,
 )
-from sovyx.voice._observability_pii import mint_utterance_id
 from sovyx.voice._speaker_consistency import (
     SpeakerConsistencyMonitor,
     compute_spectral_centroid,
@@ -89,6 +88,7 @@ from sovyx.voice.pipeline._heartbeat_mixin import HeartbeatMixin
 from sovyx.voice.pipeline._output_queue import AudioOutputQueue
 from sovyx.voice.pipeline._state import VoicePipelineState
 from sovyx.voice.pipeline._state_machine import PipelineStateMachine
+from sovyx.voice.pipeline._utterance_id_mixin import UtteranceIdentityMixin
 from sovyx.voice.pipeline._wake_word_mixin import WakeWordRouterMixin
 
 if TYPE_CHECKING:
@@ -245,7 +245,7 @@ _SPEAKER_DRIFT_RATIO_THRESHOLD = _VoiceTuning().pipeline_speaker_drift_ratio_thr
 ``VoiceTuningConfig.pipeline_speaker_drift_ratio_threshold``."""
 
 
-class VoicePipeline(WakeWordRouterMixin, HeartbeatMixin):
+class VoicePipeline(UtteranceIdentityMixin, WakeWordRouterMixin, HeartbeatMixin):
     """Orchestrates the complete voice pipeline.
 
     Lifecycle (SPE-010 §8):
@@ -990,63 +990,14 @@ class VoicePipeline(WakeWordRouterMixin, HeartbeatMixin):
         WARN events for the per-rejection trace."""
         return self._false_wake_rejected_count
 
-    @property
-    def current_utterance_id(self) -> str:
-        """Trace ID of the in-flight utterance, or ``""`` between turns.
-
-        Read-only accessor for downstream components (LLM router, TTS
-        engine, observability bridges) that want to stamp the same
-        trace context on their own structured logs / spans without
-        re-deriving it. Empty string when the pipeline is IDLE — by
-        construction, the orchestrator clears the field at every
-        terminal back-to-IDLE transition.
-        """
-        return self._current_utterance_id
-
-    # -- Per-utterance trace ID (Ring 6 trace contract) ----------------------
-
-    def _mint_new_utterance_id(self) -> str:
-        """Mint a fresh UUID4 for the next utterance and stash it.
-
-        Called at every utterance boundary (wake-word detected,
-        no-wake recording start, external ``speak`` without prior
-        context). Safe to call when an id is already set — the new
-        one replaces the previous (covers the barge-in path where
-        the prior utterance is being torn down at the same moment
-        the new one starts). Returns the minted id for the caller's
-        immediate use (event stamping, log emission), avoiding a
-        second attribute read on the hot path.
-        """
-        new_id = mint_utterance_id()
-        self._current_utterance_id = new_id
-        return new_id
-
-    def _clear_utterance_id(self) -> None:
-        """Reset the current utterance id back to the empty sentinel.
-
-        Called at every terminal back-to-IDLE transition (TTS
-        completed, error path, false-wake rejection, empty
-        transcription) so the next utterance is guaranteed a fresh
-        mint instead of re-using the prior trace. Idempotent —
-        safe to call when already empty.
-
-        Phase 8 / T8.10 — also resets the per-turn ``_current_mind_id``
-        back to the orchestrator's config default. The next IDLE
-        path's wake-word detection re-resolves the matched mind via
-        the router (if wired) before the next downstream emission.
-        """
-        self._current_utterance_id = ""
-        # Reset per-turn mind context to the config default so the
-        # next turn's WakeWordDetectedEvent starts clean.
-        self._current_mind_id = self._config.mind_id
-        # v0.32.3 Phase 3.B.1 — drop any THINKING anchor that the prior
-        # turn left dangling (e.g. a barge-in cancelled the speech chain
-        # before ``speak()``/``flush_stream()`` ran their End-frame
-        # emit). Without this reset, the next turn's End frame would
-        # carry an ``elapsed_ms`` measured against the OLD turn's
-        # THINKING start. The next THINKING entry resets the anchor
-        # for the next turn, but only if this site clears the leak.
-        self._llm_thinking_start_monotonic = None
+    # ── Utterance-ID identity methods extracted to ``_utterance_id_mixin.py`` ──
+    # ``current_utterance_id`` (property) + ``_mint_new_utterance_id``
+    # + ``_clear_utterance_id`` now live on
+    # :class:`sovyx.voice.pipeline._utterance_id_mixin.UtteranceIdentityMixin`,
+    # mounted via the multi-mixin host above. Methods stay resolvable
+    # via ``self.current_utterance_id`` / ``self._mint_new_utterance_id()``
+    # / ``self._clear_utterance_id()`` through MRO. Anti-pattern #16 —
+    # Phase 5.F.21.
 
     # ``_notify_wake_word_false_fire`` extracted to
     # ``_wake_word_mixin.py`` (see WakeWordRouterMixin docstring +
