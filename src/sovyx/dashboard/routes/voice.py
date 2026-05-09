@@ -410,6 +410,44 @@ class VoiceModelDownloadProgressResponse(BaseModel):
     retry_after_seconds: int | None = None
 
 
+# ── Phase 5.D group C — Typed responses for ``*-history`` family ─────
+
+
+class VoiceFrameHistoryResponse(BaseModel):
+    """``/api/voice/frame-history`` payload — typed-frame ring buffer slice.
+
+    ``frames`` carries the serialised ring-buffer entries in oldest-first
+    order. Each entry is a dict produced by
+    :func:`sovyx.voice.pipeline._frame_types._frame_to_dict` (which
+    delegates to :func:`dataclasses.asdict`); the dict shape is
+    intentionally variant because the ring stores 8+ frame subclasses
+    (UserStartedSpeakingFrame, TranscriptionFrame,
+    BargeInInterruptionFrame, …) — a closed model on each entry would
+    grow with every frame-type addition. Frontend zod schemas
+    discriminate at use-time on ``frame_type``.
+    """
+
+    frames: list[dict[str, Any]] = Field(default_factory=list)
+    total_recorded: int = 0
+    limit_applied: int
+
+
+class VoiceRestartHistoryResponse(BaseModel):
+    """``/api/voice/restart-history`` payload — capture-restart ring slice.
+
+    Same wire shape conventions as :class:`VoiceFrameHistoryResponse`,
+    but only ``CaptureRestartFrame`` subclass entries are included
+    (filtered by the route). Newest-first order so the dashboard
+    timeline renders top-down. ``total`` is the FULL count of restart
+    frames in the bounded ring (≤ 256 by default); ``limit`` is the
+    cap applied to ``frames``.
+    """
+
+    frames: list[dict[str, Any]] = Field(default_factory=list)
+    total: int = 0
+    limit: int
+
+
 def _resolve_engine_config(request: Request) -> EngineConfig | None:
     """Pull EngineConfig from the FastAPI app state (best-effort)."""
     return getattr(request.app.state, "engine_config", None)
@@ -644,11 +682,15 @@ async def post_voice_forget(
     )
 
 
-@router.get("/frame-history")
+@router.get(
+    "/frame-history",
+    response_model=VoiceFrameHistoryResponse,
+    responses={HTTP_503_SERVICE_UNAVAILABLE: {"description": "Engine not running"}},
+)
 async def get_voice_frame_history(
     request: Request,
     limit: int = 100,
-) -> JSONResponse:
+) -> VoiceFrameHistoryResponse | JSONResponse:
     """Return the recent typed frames recorded by the voice pipeline.
 
     Mission §1.1 Hybrid Option C — Pipecat-aligned typed frames
@@ -697,20 +739,22 @@ async def get_voice_frame_history(
     # ``bounded_limit`` frames.
     selected = history[-bounded_limit:] if bounded_limit < total else history
     serialised = [_frame_to_dict(f) for f in selected]
-    return JSONResponse(
-        {
-            "frames": serialised,
-            "total_recorded": total,
-            "limit_applied": bounded_limit,
-        },
+    return VoiceFrameHistoryResponse(
+        frames=serialised,
+        total_recorded=total,
+        limit_applied=bounded_limit,
     )
 
 
-@router.get("/restart-history")
+@router.get(
+    "/restart-history",
+    response_model=VoiceRestartHistoryResponse,
+    responses={HTTP_503_SERVICE_UNAVAILABLE: {"description": "Engine not running"}},
+)
 async def get_voice_restart_history(
     request: Request,
     limit: int = 50,
-) -> JSONResponse:
+) -> VoiceRestartHistoryResponse | JSONResponse:
     """Return recent ``CaptureRestartFrame`` entries from the pipeline ring buffer.
 
     Voice Windows Paranoid Mission §C — capture-task restart events
@@ -771,12 +815,10 @@ async def get_voice_restart_history(
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
     if not registry.is_registered(VoicePipeline):
-        return JSONResponse(
-            {
-                "frames": [],
-                "total": 0,
-                "limit": bounded_limit,
-            },
+        return VoiceRestartHistoryResponse(
+            frames=[],
+            total=0,
+            limit=bounded_limit,
         )
     pipeline = registry.get(VoicePipeline)
     restart_frames = [f for f in pipeline.frame_history if isinstance(f, CaptureRestartFrame)]
@@ -785,12 +827,10 @@ async def get_voice_restart_history(
     # the top by default. ``frame_history`` is a deque ordered by
     # insertion (oldest first), so we take the tail and reverse.
     selected = list(reversed(restart_frames[-bounded_limit:]))
-    return JSONResponse(
-        {
-            "frames": [_frame_to_dict(f) for f in selected],
-            "total": total,
-            "limit": bounded_limit,
-        },
+    return VoiceRestartHistoryResponse(
+        frames=[_frame_to_dict(f) for f in selected],
+        total=total,
+        limit=bounded_limit,
     )
 
 
