@@ -207,6 +207,45 @@ class LinuxAudioServiceMonitor:
             services=sorted(self._services),
         )
 
+    async def _post_up_health_check(self) -> bool:
+        """Verify PipeWire / PulseAudio is accepting connections post-UP.
+
+        F2-H04 (audit §3.K) — ``systemctl is-active`` reports ``active``
+        the moment the daemon's main process is alive, but PortAudio
+        capture-stream re-opens still fail for ~hundreds of
+        milliseconds after a restart cascade because the daemon hasn't
+        finished re-publishing its node graph. Wave 2 wire-up gates the
+        UP-event emission on a ``pactl info`` round-trip (1 s ceiling)
+        so the dashboard / pipeline don't react to a healthy systemctl
+        signal while the audio path is still dead.
+
+        Returns ``True`` when ``pactl info`` exits 0 within 1.0 s,
+        ``False`` on timeout, ``pactl`` missing, OSError, or non-zero
+        exit. Returning ``False`` means the caller MUST defer the UP
+        event to the next poll round.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "pactl",
+                "info",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except (FileNotFoundError, OSError):
+            return False
+        try:
+            rc = await asyncio.wait_for(proc.wait(), timeout=1.0)
+        except TimeoutError:
+            # Don't leak the subprocess on timeout — kill it explicitly
+            # so the next poll round isn't competing with a zombie.
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+                await proc.wait()
+            return False
+        except OSError:
+            return False
+        return rc == 0
+
     async def stop(self) -> None:
         self._started = False
         task = self._task
