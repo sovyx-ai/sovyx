@@ -208,9 +208,17 @@ describe("LogsPage", () => {
     // The page closes any previously-opened streaming WS once it
     // commits to the legacy path. Verify every captured instance is
     // closed (readyState 3 = CLOSED) — none are still live.
-    expect(
-      MockWebSocket.instances.every((ws) => ws.readyState === 3),
-    ).toBe(true);
+    //
+    // v0.38.1 — wrap in waitFor: the close happens in a separate
+    // effect tick from the legacy-fallback badge render, and Linux CI
+    // hits the assertion before the close has propagated. Local
+    // Windows happens to win the race; v0.37.0 publish.yml flagged
+    // this as the only red test (see CI run 25674269310).
+    await waitFor(() => {
+      expect(
+        MockWebSocket.instances.every((ws) => ws.readyState === 3),
+      ).toBe(true);
+    });
   });
 
   it("clear button empties the entries panel", async () => {
