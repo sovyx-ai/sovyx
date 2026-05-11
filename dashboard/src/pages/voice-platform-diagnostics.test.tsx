@@ -14,7 +14,9 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@/test/test-utils";
-import VoicePlatformDiagnosticsPage from "./voice-platform-diagnostics";
+import VoicePlatformDiagnosticsPage, {
+  BypassTierStatusCard,
+} from "./voice-platform-diagnostics";
 import type { PlatformDiagnosticsResponse } from "@/types/api";
 
 /* ── Mock API ── */
@@ -469,5 +471,68 @@ describe("BypassTierStatusCard", () => {
     // Tier 1: 3/4 = 75%, Tier 3: 8/10 = 80%.
     expect(screen.getByText("75%")).toBeInTheDocument();
     expect(screen.getByText("80%")).toBeInTheDocument();
+  });
+});
+
+/* ── BypassTierStatusCard direct render (W3.B5 — F2-M04 §3.G) ─── */
+//
+// The page-level tests above render the card via VoicePlatformDiagnosticsPage,
+// which couples the bypass-tier fetch to the platform-diagnostics fetch
+// graph. The audit's §3.G acceptance for F-503 asks for a DIRECT render
+// of the subcomponent so a future export of the card to another page
+// (or a refactor that detaches it from the platform-diagnostics fetch
+// chain) keeps a stable acceptance contract on the card itself.
+
+describe("BypassTierStatusCard — direct render (W3.B5)", () => {
+  it("renders the loading spinner before the snapshot resolves", () => {
+    mockGet.mockImplementation(() => new Promise(() => undefined));
+    render(<BypassTierStatusCard />);
+    expect(screen.getByTestId("bypass-tier-loading")).toBeInTheDocument();
+  });
+
+  it("renders the error panel when the snapshot rejects with an ApiError", async () => {
+    mockGet.mockRejectedValueOnce(new Error("HTTP 503: voice routes disabled"));
+    render(<BypassTierStatusCard />);
+    await waitFor(() => {
+      expect(screen.getByTestId("bypass-tier-error")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/HTTP 503/)).toBeInTheDocument();
+  });
+
+  it("renders the populated card when the snapshot resolves", async () => {
+    mockGet.mockResolvedValueOnce({
+      current_bypass_tier: 2,
+      tier1_raw_attempted: 3,
+      tier1_raw_succeeded: 2,
+      tier2_host_api_rotate_attempted: 4,
+      tier2_host_api_rotate_succeeded: 3,
+      tier3_wasapi_exclusive_attempted: 0,
+      tier3_wasapi_exclusive_succeeded: 0,
+    });
+    render(<BypassTierStatusCard />);
+    await waitFor(() => {
+      expect(screen.getByTestId("bypass-tier-status-card")).toBeInTheDocument();
+    });
+    // Tier 2 engaged → "Tier 2 engaged" pill renders.
+    expect(screen.getByText(/tier 2 engaged/i)).toBeInTheDocument();
+    // Tier 1: 2/3 ≈ 66.6% → 67% (round-half-to-even). Tier 3: 0/0 → em-dash.
+    expect(screen.getByText("67%")).toBeInTheDocument();
+  });
+
+  it("renders the no-engagement pill when current_bypass_tier is null", async () => {
+    mockGet.mockResolvedValueOnce({
+      current_bypass_tier: null,
+      tier1_raw_attempted: 0,
+      tier1_raw_succeeded: 0,
+      tier2_host_api_rotate_attempted: 0,
+      tier2_host_api_rotate_succeeded: 0,
+      tier3_wasapi_exclusive_attempted: 0,
+      tier3_wasapi_exclusive_succeeded: 0,
+    });
+    render(<BypassTierStatusCard />);
+    await waitFor(() => {
+      expect(screen.getByTestId("bypass-tier-status-card")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/no bypass engaged/i)).toBeInTheDocument();
   });
 });
