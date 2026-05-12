@@ -134,6 +134,26 @@ _HW_ID_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_ID_RE = re.compile(r"^(?P<id>[A-Za-z][A-Za-z0-9_-]*)$")
+# v0.38.2 — Pattern 4: friendly-prefixed PortAudio names that EMBED
+# the canonical ``hw:N,M`` token in a parenthesised tail.
+# Example shapes seen in the wild on PipeWire-Linux + USB headsets:
+#
+#   "Razer BlackShark V2 Pro: USB Audio (hw:2,0)"
+#   "HD-Audio Generic: SN6180 Analog (hw:1,0)"
+#   "Some Name: USB Audio (plughw:3,0)"
+#
+# The PulseAudio/PipeWire-backed PortAudio host_api on Linux returns
+# names in this shape (verified by operator's
+# G_sovyx/api_voice_hardware_detect.json in the diag tarball
+# `sovyx-diag-...20260512T012059Z`). The first three patterns are
+# all start-anchored, so they don't match the friendly-prefixed
+# form — pre-v0.38.2 these names fell through to the surrogate hash,
+# preventing F2-M10 (USB walk + regex fallback) from ever being
+# reached. See
+# `LAUDO-voice-failover-root-cause-2026-05-12.md` §2 H2.
+_HW_TAIL_RE = re.compile(
+    r"\((?P<prefix>(?:plug)?hw):(?P<index>\d+)(?:,(?P<dev>\d+))?\)\s*$",
+)
 
 
 # PCI BDF in canonical form ``<domain>:<bus>:<device>.<function>``
@@ -345,6 +365,29 @@ def _parse_device_name(name: str, *, proc: Path) -> _CardLookup | None:
         bare_card_index: int | None = _lookup_card_index_by_id(card_id, proc=proc)
         if bare_card_index is not None:
             return _CardLookup(card_index=bare_card_index, pcm_device=None)
+
+    # Pattern 4 (v0.38.2): friendly-prefixed PortAudio names
+    # embedding ``(hw:N,M)`` or ``(plughw:N,M)`` in a tail.
+    # Operator's PipeWire-Linux device names take this shape
+    # (e.g., "Razer BlackShark V2 Pro: USB Audio (hw:2,0)") — the
+    # first 3 patterns above all use ``re.match`` which is start-
+    # anchored, so the friendly prefix prevented matching. This
+    # last-resort substring extraction recovers the canonical
+    # ``hw:N,M`` from the tail. See LAUDO §2 H2.
+    m = _HW_TAIL_RE.search(stripped)
+    if m is not None:
+        try:
+            tail_card_index = int(m.group("index"))
+        except ValueError:
+            return None
+        tail_dev: int | None = None
+        raw_tail_dev = m.group("dev")
+        if raw_tail_dev is not None:
+            try:
+                tail_dev = int(raw_tail_dev)
+            except ValueError:
+                tail_dev = None
+        return _CardLookup(card_index=tail_card_index, pcm_device=tail_dev)
 
     return None
 

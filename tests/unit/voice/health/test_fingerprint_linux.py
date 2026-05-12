@@ -300,6 +300,152 @@ class TestHdaInternalCodec:
         assert result == "{linux-pci-0000_01_01.0-0-capture}"
 
 
+class TestPortAudioFriendlyPrefixedNames:
+    """v0.38.2 — Pattern 4 (friendly-prefixed PortAudio names).
+
+    Pre-v0.38.2 ``_parse_device_name`` had three patterns
+    (``hw:N,M`` / ``<plug>:CARD=`` / bare-id) all using ``re.match``
+    (start-anchored). PortAudio's PulseAudio/PipeWire-backed Linux
+    names commonly take the shape
+    ``"<friendly>: <profile> (hw:N,M)"`` — the first 3 patterns
+    don't match these names and the fingerprint pipeline collapsed
+    to the surrogate hash, preventing F2-M10's USB walk + regex
+    fallback from EVER being reached. See
+    `LAUDO-voice-failover-root-cause-2026-05-12.md` §2 H2.
+
+    These tests pin Pattern 4: a tail extractor that finds
+    ``(hw:N,M)`` / ``(plughw:N,M)`` substrings inside the friendly-
+    prefixed name shape.
+    """
+
+    def test_h2_operator_razer_friendly_name_resolves_to_card_2(self, tmp_path: Path) -> None:
+        """Operator's exact device name from diag tarball.
+
+        From `G_sovyx/api_voice_hardware_detect.json`:
+            "Razer BlackShark V2 Pro: USB Audio (hw:2,0)"
+
+        Pre-v0.38.2 this returned ``None`` from `_parse_device_name`
+        → fingerprint cascaded to surrogate hash
+        ``{surrogate-55c423ce-...}`` (verified in operator's
+        `G_sovyx/api_voice_health.json` ComboStore dump).
+
+        v0.38.2 fix: Pattern 4 extracts ``hw:2,0`` from the tail
+        → resolves to card 2, PCM device 0 → fingerprint pipeline
+        proceeds to ``_read_bus_identity`` and produces the proper
+        ``{linux-usb-VID:PID-...}`` form (when sysfs is healthy).
+        """
+        proc = _build_proc_asound(
+            tmp_path,
+            cards=[(2, "Pro", "USB-Audio", "Razer BlackShark V2 Pro")],
+        )
+        sysfs = _build_sysfs_shell(tmp_path, [2])
+        resolver = _usb_resolver(
+            sysfs,
+            tmp_path,
+            card_to_usb_device={2: ("1532", "0543")},
+        )
+        # Operator's exact device name shape from the tarball.
+        entry = _make_entry(
+            "Razer BlackShark V2 Pro: USB Audio (hw:2,0)",
+            max_input=1,
+            max_output=0,
+        )
+        result = compute_linux_endpoint_fingerprint(
+            entry,
+            proc_asound=proc,
+            sysfs_class_sound=sysfs,
+            resolve_symlink=resolver,
+        )
+        # Expected: stable {linux-usb-VID:PID-PCM-direction} form,
+        # NOT a surrogate hash. Operator's Razer = 1532:0543.
+        assert result == "{linux-usb-1532:0543-0-capture}", (
+            f"v0.38.2 must extract hw:2,0 from operator's friendly-"
+            f"prefixed device name and produce stable USB fingerprint. "
+            f"Got: {result!r}. Pre-v0.38.2 returned None → surrogate."
+        )
+
+    def test_h2_operator_internal_mic_friendly_name_resolves_to_card_1(
+        self, tmp_path: Path
+    ) -> None:
+        """Operator's internal mic name from diag tarball.
+
+        From `G_sovyx/api_voice_hardware_detect.json`:
+            "HD-Audio Generic: SN6180 Analog (hw:1,0)"
+
+        Same Pattern 4 fix as the Razer test — but PCI bus, so the
+        fingerprint is ``{linux-pci-...}`` not ``{linux-usb-...}``.
+        Codec ID enrichment requires the codec#0 file in /proc/asound.
+        """
+        proc = _build_proc_asound(
+            tmp_path,
+            cards=[(1, "Generic", "HDA-Intel", "HD-Audio Generic")],
+            codecs={1: "14f15045"},  # Conexant SN6180 vendor:device
+        )
+        sysfs = _build_sysfs_shell(tmp_path, [1])
+        resolver = _pci_resolver(sysfs, card_to_bdf={1: "0000:04:00.6"})
+        entry = _make_entry(
+            "HD-Audio Generic: SN6180 Analog (hw:1,0)",
+            max_input=2,
+            max_output=0,
+        )
+        result = compute_linux_endpoint_fingerprint(
+            entry,
+            proc_asound=proc,
+            sysfs_class_sound=sysfs,
+            resolve_symlink=resolver,
+        )
+        # PCI BDF + codec id enrichment + PCM direction = stable.
+        assert result is not None
+        assert result.startswith("{linux-pci-")
+        assert "14F1:5045" in result  # Codec vendor:device, uppercased
+
+    def test_h2_plughw_tail_variant_also_resolves(self, tmp_path: Path) -> None:
+        """Pattern 4 also handles ``(plughw:N,M)`` tail variants."""
+        proc = _build_proc_asound(
+            tmp_path,
+            cards=[(3, "USB", "USB-Audio", "Generic USB")],
+        )
+        sysfs = _build_sysfs_shell(tmp_path, [3])
+        resolver = _usb_resolver(
+            sysfs,
+            tmp_path,
+            card_to_usb_device={3: ("05ac", "8406")},
+        )
+        entry = _make_entry(
+            "Some Vendor: Mic Profile (plughw:3,0)",
+            max_input=1,
+            max_output=0,
+        )
+        result = compute_linux_endpoint_fingerprint(
+            entry,
+            proc_asound=proc,
+            sysfs_class_sound=sysfs,
+            resolve_symlink=resolver,
+        )
+        assert result == "{linux-usb-05AC:8406-0-capture}"
+
+    def test_h2_friendly_name_without_tail_still_returns_none(self, tmp_path: Path) -> None:
+        """A friendly name with no ``hw:N,M`` tail correctly returns None.
+
+        Pattern 4 is a tail-search; names that don't have the
+        canonical shape still fall through to surrogate. Guards
+        against over-matching.
+        """
+        proc = _build_proc_asound(
+            tmp_path,
+            cards=[(0, "X", "DRV", "Some Card")],
+        )
+        sysfs = _build_sysfs_shell(tmp_path, [0])
+        entry = _make_entry("Razer BlackShark V2 Pro Mono", max_input=1)
+        # No hw:N,M anywhere → Pattern 4 doesn't match → None.
+        result = compute_linux_endpoint_fingerprint(
+            entry,
+            proc_asound=proc,
+            sysfs_class_sound=sysfs,
+        )
+        assert result is None
+
+
 class TestUsbAudio:
     """USB-audio devices — VID:PID fingerprint."""
 
