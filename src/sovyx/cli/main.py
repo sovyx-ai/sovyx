@@ -12,6 +12,11 @@ from rich.table import Table
 
 from sovyx import __version__
 from sovyx.cli._mind_resolver import resolve_mind_id
+
+# Side-effect import: registers `sovyx voice setup` on the voice_app
+# Typer group at module load (Phase 2.T2.1). The symbol itself is not
+# referenced from main.py; the bare import IS the registration.
+from sovyx.cli.commands import voice_setup as _voice_setup  # noqa: F401
 from sovyx.cli.commands.audit import audit_app
 from sovyx.cli.commands.brain_analyze import analyze_app
 from sovyx.cli.commands.dashboard import dashboard_app
