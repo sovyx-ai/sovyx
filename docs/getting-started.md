@@ -61,6 +61,46 @@ The name is required (1–64 chars, letters/digits/`_`/`-`, starts with a
 letter) and is lowercased for the filesystem path. `sovyx init MyMind`
 creates `~/.sovyx/mymind/mind.yaml`.
 
+#### Voice setup runs inline (new in v0.39.0)
+
+When `sovyx init` is invoked on an interactive shell, it pauses after
+creating the mind to let you pick a microphone. A table of capture
+devices is shown; type the index or a substring of the name to
+persist that choice to `mind.yaml`.
+
+```text
+Capture devices
+┌───┬──────────────────────────────┬─────────────────┬──────────┬─────────────────┐
+│ # │ Name                         │ Host API        │ Channels │ Sample rate (Hz)│
+├───┼──────────────────────────────┼─────────────────┼──────────┼─────────────────┤
+│ 0 │ Built-in Microphone          │ Windows WASAPI  │ 2        │ 44100           │
+│ 1 │ Razer BlackShark V2 Pro      │ Windows WASAPI  │ 1        │ 48000           │
+└───┴──────────────────────────────┴─────────────────┴──────────┴─────────────────┘
+Enter device # or name (or 'q' to abort): 1
+```
+
+You can:
+
+* **Skip the picker** with `sovyx init my-mind --skip-voice-setup` —
+  useful for scripted installs that configure the mic separately.
+* **Configure later** with `sovyx voice setup` (interactive) or
+  `sovyx voice setup --input-device "Razer" --non-interactive`
+  (scripted).
+* **Non-TTY shells** (CI / systemd / cron) auto-skip the picker and
+  print a hint pointing at the non-interactive flag.
+
+The same mic choice that the dashboard's voice-enable wizard
+persists is what `sovyx voice setup` writes — both paths share the
+same atomic config-write helper (`voice_input_device_name` +
+`voice_input_device_host_api` paired in `mind.yaml`).
+
+> **Why this matters:** `sovyx doctor voice --calibrate` reads
+> `voice_input_device_name` to know which mic to tune. Pre-v0.39.0 an
+> empty value silently fell into a heuristic ("first attenuated
+> ALSA card") which could pick the wrong device on multi-mic
+> machines. v0.39.0 makes the choice explicit; v0.40.0 will require
+> it as a hard prereq.
+
 ### 2. Set an API key
 
 Pick one provider and export its key. Sovyx auto-detects which one is present
@@ -212,6 +252,17 @@ cost budget (online, requires the daemon). Use `sovyx doctor --json` for
 machine-readable output.
 
 ### Voice not working? Auto-fix it (Linux)
+
+**Prerequisite (new in v0.39.0):** the calibrate flow reads
+`voice_input_device_name` from your `mind.yaml` to know which mic to
+tune. If `sovyx init` already ran the inline picker, you're set. If
+not, run `sovyx voice setup` first (or
+`sovyx voice setup --input-device "Razer" --non-interactive` from a
+script). On an interactive shell, `--calibrate` will offer to run
+the picker for you when the mic isn't yet configured. In v0.39.x a
+non-interactive run with an unconfigured mic falls back to a
+heuristic + warns; v0.40.0 will turn that warning into a hard
+error.
 
 If your microphone is silent or voice capture isn't working, run:
 

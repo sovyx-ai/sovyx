@@ -29,11 +29,41 @@ sovyx doctor voice --calibrate --show                # Read-only inspect last pr
 sovyx doctor voice --calibrate --rollback            # Restore prior profile (walks .bak.{1,2,3} chain)
 sovyx doctor voice --calibrate --evaluate-rules      # Preview which rules WOULD fire (no diag, no apply)
 sovyx doctor voice --calibrate --inspect-migration   # Print the migrated profile dict (post-schema-walk)
-sovyx doctor voice --calibrate --mind-id <id>        # Calibrate a specific mind (default: 'default')
+sovyx doctor voice --calibrate --mind-id <id>        # Calibrate a specific mind (auto-detected when one mind exists)
 sovyx doctor voice --calibrate --non-interactive     # Skip the interactive speech-prompt windows
 ```
 
 The `--calibrate` flow runs `--full-diag` internally, so it is Linux-only and requires `bash >= 4`. Use `sovyx doctor voice --full-diag` first to audit the forensic verdict, then `--calibrate` once you trust the input.
+
+## Mind resolution (Phase 1 of MISSION-voice-config-calibrate-enterprise-2026-05-13)
+
+`--mind-id` defaults to **None** (auto-detect single mind), NOT the literal string `"default"`. Resolution semantics:
+
+* Explicit `--mind-id <X>` with `<data_dir>/<X>/mind.yaml` present → use that mind.
+* `--mind-id` omitted + exactly one mind on disk → auto-detect, log `cli.mind_auto_detected`.
+* `--mind-id` omitted + 0 minds → error pointing at `sovyx init`.
+* `--mind-id` omitted + 2+ minds → error listing the available minds, requires explicit flag.
+* Any explicit name that doesn't match a real mind → error listing the available minds.
+
+This replaces the pre-v0.39.0 literal-`"default"` sentinel (anti-pattern #35 closure).
+
+## Mic prereq (Phase 4 of the same mission)
+
+The calibrate pipeline reads `voice_input_device_name` from the target mind's `mind.yaml` so it knows which physical capture device to tune. The prereq gate runs immediately after the TTY check and behaves differently depending on shell mode + LENIENT vs. STRICT version:
+
+| Shell mode | `voice_input_device_name` empty | `voice_input_device_name` set |
+|---|---|---|
+| **Interactive** | Inline `sovyx voice setup` picker runs; persisted choice is re-loaded; pipeline continues. Operator can abort with `q`. | Skip prereq, run pipeline directly. |
+| **Non-interactive (v0.39.x, LENIENT)** | WARN `voice.calibrate.prereq_lenient` emitted + yellow banner on stdout; heuristic fallback preserved (first-attenuated-ALSA-card). | Skip prereq, run pipeline directly. |
+| **Non-interactive (v0.40.0+, STRICT)** | Hard error with `EXIT_DOCTOR_VOICE_NOT_CONFIGURED`. Operator must pre-configure the mic via `sovyx voice setup --input-device 'NAME' --non-interactive` or pass an inline `--input-device` flag (Phase 5.T5.2). | Skip prereq, run pipeline directly. |
+
+The structured WARN payload (LENIENT mode) includes:
+
+* `mind_id` — which mind was being calibrated
+* `would_fail_in_strict: true` — telemetry signal for the STRICT flip
+* `action_required` — operator-readable remediation pointer
+
+Persistence path for the inline picker is `voice/calibration/_persist_device.persist_voice_input_device`, the same atomic helper the dashboard voice-enable endpoint uses — both writers commit through `ConfigEditor.set_scalar` (lock-per-path, temp-file + rename).
 
 `--show`, `--rollback`, `--evaluate-rules`, and `--inspect-migration` all require `--calibrate` and form a closed-enum mutex set (each is a distinct read-only inspection mode; pick one per invocation):
 
