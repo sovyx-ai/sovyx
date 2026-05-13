@@ -21,9 +21,11 @@ Coverage:
 from __future__ import annotations
 
 import re
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from sovyx.cli.main import app
@@ -66,6 +68,48 @@ def _strip_ansi(text: str) -> str:
 
 
 runner = CliRunner()
+
+
+# ====================================================================
+# Shared test scaffolding
+# ====================================================================
+
+
+def _seed_default_mind(sovyx_data: Path) -> None:
+    """Create ``<sovyx_data>/default/mind.yaml`` so ``resolve_mind_id``
+    auto-detects ``'default'`` for tests that operate on the legacy
+    mind name.
+
+    Tests that patch ``sovyx.cli.commands.doctor.Path.home`` to a
+    custom fake-home MUST call this helper (or seed their own mind
+    directory) before invoking the CLI — after Phase 1 (T1.2) the
+    resolver enumerates ``<data_dir>/<mind_id>/mind.yaml`` and errors
+    with ``typer.BadParameter`` when no mind exists.
+    """
+    default_dir = sovyx_data / "default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    (default_dir / "mind.yaml").write_text("name: default\nid: default\n", encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _stub_default_mind_home(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[Path, None, None]:
+    """Patch ``Path.home`` for the doctor module to a fake home that
+    already contains ``~/.sovyx/default/mind.yaml`` so the mind
+    resolver auto-detects ``default`` across this suite without
+    depending on the runner machine's real ``$HOME``.
+
+    Tests that need to override the fake-home (to seed calibration
+    profiles at a specific data_dir) MUST patch
+    ``sovyx.cli.commands.doctor.Path.home`` inside their own
+    ``with`` block AND call :func:`_seed_default_mind` against the
+    overridden data_dir — their inner patch wins over this autouse.
+    """
+    fake_home = tmp_path_factory.mktemp("default_mind_home")
+    _seed_default_mind(fake_home / ".sovyx")
+    with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+        yield fake_home
 
 
 # ====================================================================
@@ -736,6 +780,7 @@ class TestShow:
         fake_home = tmp_path / "home"
         sovyx_data = fake_home / ".sovyx"
         sovyx_data.mkdir(parents=True)
+        _seed_default_mind(sovyx_data)  # mind resolver prereq (Phase 1.T1.2)
 
         with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
             save_calibration_profile(_r10_profile(), data_dir=sovyx_data)
@@ -748,6 +793,7 @@ class TestShow:
     def test_show_when_no_profile_returns_failure(self, tmp_path: Path) -> None:
         fake_home = tmp_path / "home"
         fake_home.mkdir()
+        _seed_default_mind(fake_home / ".sovyx")  # mind resolver prereq
         with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
             result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--show"])
         assert result.exit_code != 0
@@ -768,6 +814,7 @@ class TestRollback:
         fake_home = tmp_path / "home"
         sovyx_data = fake_home / ".sovyx"
         sovyx_data.mkdir(parents=True)
+        _seed_default_mind(sovyx_data)  # mind resolver prereq (Phase 1.T1.2)
 
         # Two saves: first becomes the eventual .bak; second the
         # current. After rollback, the first lands back as canonical.
@@ -791,6 +838,7 @@ class TestRollback:
         fake_home = tmp_path / "home"
         sovyx_data = fake_home / ".sovyx"
         sovyx_data.mkdir(parents=True)
+        _seed_default_mind(sovyx_data)  # mind resolver prereq (Phase 1.T1.2)
 
         # Only one save -> no .bak exists.
         with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
@@ -1130,3 +1178,118 @@ class TestEvaluateRulesBehavior:
         # Downstream stages MUST be skipped on early failure.
         assert measurements_mock.call_count == 0
         assert evaluate_mock.call_count == 0
+
+
+# ====================================================================
+# Phase 1.T1.2 — mind resolver wire-up into `sovyx doctor voice --calibrate`
+# ====================================================================
+#
+# The legacy literal-"default" sentinel (anti-pattern #35 6th surface)
+# is replaced by `resolve_mind_id`. These tests pin the new contract:
+#
+# * Explicit `--mind-id <X>` is honored when `<X>/mind.yaml` exists.
+# * Auto-detect picks the single mind when --mind-id is omitted.
+# * Missing / ambiguous / zero-mind cases surface as actionable
+#   BadParameter errors instead of silently routing to a heuristic.
+#
+# The autouse `_stub_default_mind_home` fixture provides the "default"
+# baseline for all other tests in this module; these tests override
+# Path.home to exercise the non-default paths explicitly.
+
+
+class TestMindResolverWireup:
+    """Phase 1.T1.2 — `_run_voice_doctor` calls `resolve_mind_id` for calibrate."""
+
+    def test_explicit_mind_id_resolves_and_dispatches(self, tmp_path: Path) -> None:
+        """``--calibrate --show --mind-id jonny`` resolves to jonny, not default.
+
+        Asserts the calibrate dispatch chain reads from
+        ``<data_dir>/jonny/`` (not the hard-coded legacy ``default/``).
+        """
+        from sovyx.voice.calibration import save_calibration_profile
+
+        fake_home = tmp_path / "home"
+        sovyx_data = fake_home / ".sovyx"
+        sovyx_data.mkdir(parents=True)
+        # Seed a NON-default mind so the resolver MUST honor --mind-id.
+        jonny_dir = sovyx_data / "jonny"
+        jonny_dir.mkdir()
+        (jonny_dir / "mind.yaml").write_text("name: Jonny\nid: jonny\n", encoding="utf-8")
+        # Save a profile under the jonny mind id so --show has something
+        # to load. Without this the dispatch would error on profile load,
+        # masking the resolver-wireup signal we want to exercise.
+        from dataclasses import replace
+
+        jonny_profile = replace(_r10_profile(), mind_id="jonny")
+
+        with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+            save_calibration_profile(jonny_profile, data_dir=sovyx_data)
+            result = runner.invoke(
+                app,
+                ["doctor", "voice", "--calibrate", "--show", "--mind-id", "jonny"],
+            )
+        assert result.exit_code == 0, (
+            f"explicit --mind-id jonny must dispatch under jonny/; "
+            f"got exit {result.exit_code} output={result.output!r}"
+        )
+        assert "Calibration decisions" in result.output
+
+    def test_missing_mind_errors_with_actionable_message(self, tmp_path: Path) -> None:
+        """``--calibrate --mind-id ghost`` with no ``ghost/`` -> BadParameter."""
+        fake_home = tmp_path / "home"
+        sovyx_data = fake_home / ".sovyx"
+        sovyx_data.mkdir(parents=True)
+        _seed_default_mind(sovyx_data)  # so resolver has something to list
+
+        with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+            result = runner.invoke(
+                app,
+                ["doctor", "voice", "--calibrate", "--mind-id", "ghost"],
+            )
+        assert result.exit_code != 0
+        combined = _strip_ansi(result.output) + (
+            _strip_ansi(result.stderr) if result.stderr_bytes else ""
+        )
+        # Operator-readable: cite the bad mind id AND show available list.
+        assert "ghost" in combined
+        assert "default" in combined  # available-list surfaces the real mind
+        assert "not found" in combined.lower()
+
+    def test_no_mind_configured_points_at_init(self, tmp_path: Path) -> None:
+        """``--calibrate`` with empty data_dir -> BadParameter pointing at init."""
+        fake_home = tmp_path / "home"
+        sovyx_data = fake_home / ".sovyx"
+        sovyx_data.mkdir(parents=True)
+        # Deliberately do NOT seed any mind — empty .sovyx dir.
+
+        with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+            result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--non-interactive"])
+        assert result.exit_code != 0
+        combined = _strip_ansi(result.output) + (
+            _strip_ansi(result.stderr) if result.stderr_bytes else ""
+        )
+        assert "sovyx init" in combined
+        assert "no mind configured" in combined.lower()
+
+    def test_ambiguous_minds_require_explicit_flag(self, tmp_path: Path) -> None:
+        """``--calibrate`` with 2+ minds + no --mind-id -> BadParameter."""
+        fake_home = tmp_path / "home"
+        sovyx_data = fake_home / ".sovyx"
+        sovyx_data.mkdir(parents=True)
+        # Two minds present — resolver MUST refuse auto-detect.
+        for name in ("alpha", "bravo"):
+            mind_dir = sovyx_data / name
+            mind_dir.mkdir()
+            (mind_dir / "mind.yaml").write_text(f"name: {name}\nid: {name}\n", encoding="utf-8")
+
+        with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+            result = runner.invoke(app, ["doctor", "voice", "--calibrate", "--non-interactive"])
+        assert result.exit_code != 0
+        combined = _strip_ansi(result.output) + (
+            _strip_ansi(result.stderr) if result.stderr_bytes else ""
+        )
+        # Lists every available mind so the operator can pick one.
+        assert "alpha" in combined
+        assert "bravo" in combined
+        # Tells the operator to pass --mind-id.
+        assert "--mind-id" in combined

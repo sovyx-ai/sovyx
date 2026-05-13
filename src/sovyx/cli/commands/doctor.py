@@ -41,6 +41,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from sovyx.cli._mind_resolver import resolve_mind_id
 from sovyx.cli.rpc_client import DaemonClient
 from sovyx.engine._rpc_handlers import _load_mind_config_best_effort
 from sovyx.engine.config import EngineConfig
@@ -313,12 +314,14 @@ def doctor_voice(
         "profile in seconds. Linux-only (uses bash diag tools). "
         "Mutually exclusive with --fix and --full-diag.",
     ),
-    mind_id: str = typer.Option(
-        "default",
+    mind_id: str | None = typer.Option(
+        None,
         "--mind-id",
-        help="With --calibrate: the mind whose calibration to compute "
-        "(default: 'default'). The persisted profile lands at "
-        "<data_dir>/<mind_id>/calibration.json.",
+        help="With --calibrate: the mind whose calibration to compute. "
+        "Default: auto-detected when exactly one mind exists under "
+        "<data_dir>/. When multiple minds exist, --mind-id is required "
+        "and the command errors with the available-minds list. The "
+        "persisted profile lands at <data_dir>/<mind_id>/calibration.json.",
     ),
     explain: bool = typer.Option(
         False,
@@ -531,7 +534,7 @@ def _run_voice_doctor(
     full_diag: bool = False,
     non_interactive: bool = False,
     calibrate: bool = False,
-    mind_id: str = "default",
+    mind_id: str | None = None,
     explain: bool = False,
     show: bool = False,
     rollback: bool = False,
@@ -540,18 +543,35 @@ def _run_voice_doctor(
     evaluate_rules: bool = False,
     inspect_migration: bool = False,
 ) -> int:
-    """Execute the voice doctor flow. Returns the desired exit code."""
-    if calibrate and show:
-        return _run_voice_calibrate_show(mind_id=mind_id, explain=explain)
-    if calibrate and rollback:
-        return _run_voice_calibrate_rollback(mind_id=mind_id)
-    if calibrate and evaluate_rules:
-        return _run_voice_calibrate_evaluate_rules(mind_id=mind_id, explain=explain)
-    if calibrate and inspect_migration:
-        return _run_voice_calibrate_inspect_migration(mind_id=mind_id)
+    """Execute the voice doctor flow. Returns the desired exit code.
+
+    When ``calibrate`` is true, ``mind_id`` is resolved via
+    :func:`sovyx.cli._mind_resolver.resolve_mind_id` BEFORE dispatching
+    to any calibrate sub-handler — closes anti-pattern #35 at the CLI
+    boundary by replacing the legacy literal ``"default"`` sentinel
+    with an explicit filesystem-validated mind id (or an actionable
+    :class:`typer.BadParameter` when the value cannot be resolved).
+    """
+    # Resolve mind_id once for the calibrate dispatch chain. resolve_mind_id
+    # raises typer.BadParameter on any unresolvable input (missing mind,
+    # ambiguous, zero minds, empty string) and otherwise returns a MindId
+    # (NewType[str]) whose <data_dir>/<mind_id>/mind.yaml exists on disk.
+    # Branches below are exclusive — at most one fires per invocation —
+    # so the resolver runs at most once, with a typed-narrow local that
+    # downstream str-typed parameters accept cleanly.
+    resolved_mind_id: str
     if calibrate:
+        resolved_mind_id = resolve_mind_id(mind_id, Path.home() / ".sovyx")
+        if show:
+            return _run_voice_calibrate_show(mind_id=resolved_mind_id, explain=explain)
+        if rollback:
+            return _run_voice_calibrate_rollback(mind_id=resolved_mind_id)
+        if evaluate_rules:
+            return _run_voice_calibrate_evaluate_rules(mind_id=resolved_mind_id, explain=explain)
+        if inspect_migration:
+            return _run_voice_calibrate_inspect_migration(mind_id=resolved_mind_id)
         return _run_voice_calibrate(
-            mind_id=mind_id,
+            mind_id=resolved_mind_id,
             non_interactive=non_interactive,
             dry_run=dry_run,
             explain=explain,

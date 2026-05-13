@@ -23,14 +23,16 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from sovyx.cli.main import app
 from sovyx.voice.calibration import save_calibration_profile
-from tests.unit.cli.test_doctor_calibrate import _r10_profile
+from tests.unit.cli.test_doctor_calibrate import _r10_profile, _seed_default_mind
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -43,6 +45,21 @@ def _strip_ansi(text: str) -> str:
 
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _stub_default_mind_home(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[Path, None, None]:
+    """Phase 1.T1.2 — provide a fake $HOME with a seeded default mind
+    so the resolver auto-detects ``default`` for every test that does
+    not explicitly override ``Path.home``. Tests that override MUST
+    call :func:`_seed_default_mind` against their own fake data_dir.
+    """
+    fake_home = tmp_path_factory.mktemp("default_mind_home")
+    _seed_default_mind(fake_home / ".sovyx")
+    with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
+        yield fake_home
 
 
 # ====================================================================
@@ -106,6 +123,7 @@ class TestInspectMigrationHappyPath:
         fake_home = tmp_path / "home"
         sovyx_data = fake_home / ".sovyx"
         sovyx_data.mkdir(parents=True)
+        _seed_default_mind(sovyx_data)  # mind resolver prereq (Phase 1.T1.2)
 
         with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
             save_calibration_profile(_r10_profile(), data_dir=sovyx_data)
@@ -136,6 +154,10 @@ class TestInspectMigrationHappyPath:
         fake_home = tmp_path / "home"
         sovyx_data = fake_home / ".sovyx"
         sovyx_data.mkdir(parents=True)
+        # Mind resolver prereq (Phase 1.T1.2): seed the explicit per-mind dir.
+        custom_dir = sovyx_data / "meu-mind"
+        custom_dir.mkdir()
+        (custom_dir / "mind.yaml").write_text("name: meu-mind\nid: meu-mind\n", encoding="utf-8")
 
         custom = replace(_r10_profile(), mind_id="meu-mind")
         with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
@@ -169,6 +191,7 @@ class TestInspectMigrationFailureModes:
     def test_inspect_migration_no_profile_returns_failure(self, tmp_path: Path) -> None:
         fake_home = tmp_path / "home"
         fake_home.mkdir()
+        _seed_default_mind(fake_home / ".sovyx")  # mind resolver prereq
         # No save → no calibration.json on disk.
         with patch("sovyx.cli.commands.doctor.Path.home", return_value=fake_home):
             result = runner.invoke(
@@ -185,6 +208,8 @@ class TestInspectMigrationFailureModes:
         fake_home = tmp_path / "home"
         sovyx_data = fake_home / ".sovyx" / "default"
         sovyx_data.mkdir(parents=True)
+        # Mind resolver prereq (Phase 1.T1.2): default/ already exists; seed mind.yaml.
+        (sovyx_data / "mind.yaml").write_text("name: default\nid: default\n", encoding="utf-8")
         # Write garbage to the canonical path.
         (sovyx_data / "calibration.json").write_text("{not json", encoding="utf-8")
 
@@ -204,6 +229,8 @@ class TestInspectMigrationFailureModes:
         fake_home = tmp_path / "home"
         sovyx_data = fake_home / ".sovyx" / "default"
         sovyx_data.mkdir(parents=True)
+        # Mind resolver prereq (Phase 1.T1.2): default/ already exists; seed mind.yaml.
+        (sovyx_data / "mind.yaml").write_text("name: default\nid: default\n", encoding="utf-8")
         # Write a profile that claims a future schema version. The
         # other fields don't matter — the migration walker rejects on
         # version comparison BEFORE attempting any field access.
