@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sovyx import __version__
+from sovyx.cli._mind_resolver import resolve_mind_id
 from sovyx.cli.commands.audit import audit_app
 from sovyx.cli.commands.brain_analyze import analyze_app
 from sovyx.cli.commands.dashboard import dashboard_app
@@ -239,7 +240,18 @@ def init(
 
 
 @app.command()
-def start() -> None:  # pragma: no cover
+def start(
+    mind_id: str | None = typer.Option(
+        None,
+        "--mind-id",
+        help=(
+            "Mind to start the daemon under. Default: auto-detected "
+            "when exactly one mind exists at <data_dir>/<mind>/mind.yaml; "
+            "required when multiple minds exist. Errors with the "
+            "available-minds list when the value cannot be resolved."
+        ),
+    ),
+) -> None:  # pragma: no cover
     """Start the Sovyx daemon."""
     # ``--foreground`` was removed 2026-05-02 (mission pre-wake-word T02).
     # The flag was declared but never honoured — ``sovyx start`` already
@@ -252,38 +264,40 @@ def start() -> None:  # pragma: no cover
         console.print("[red]Sovyx daemon is already running[/red]")
         raise typer.Exit(1)
 
+    # Phase 1.T1.5 — resolve the target mind via the shared primitive
+    # BEFORE going async, so typer.BadParameter renders cleanly at the
+    # command boundary without partial bootstrap state. Replaces the
+    # legacy inline filesystem scan that silently fell back to a default
+    # ``MindConfig(name="Sovyx")`` when no mind.yaml existed —
+    # anti-pattern #35 6th-surface closure for ``sovyx start``.
+    from sovyx.engine.config import load_engine_config
+    from sovyx.mind.config import MindConfig
+
+    system_yaml = Path.home() / ".sovyx" / "system.yaml"
+    config = load_engine_config(config_path=system_yaml if system_yaml.exists() else None)
+    resolved_mind_id = resolve_mind_id(mind_id, config.database.data_dir)
+    mind_yaml_path = config.database.data_dir / resolved_mind_id / "mind.yaml"
+
+    import yaml  # noqa: PLC0415 — local; loaded only when start command fires
+
+    with open(mind_yaml_path, encoding="utf-8") as f:  # noqa: PTH123
+        mind_data = yaml.safe_load(f)
+    if not isinstance(mind_data, dict) or not mind_data:
+        raise typer.BadParameter(
+            f"{mind_yaml_path} is empty or not a YAML mapping. "
+            f"Re-run `sovyx init` to repair the mind config.",
+            param_hint="--mind-id",
+        )
+    mind_config = MindConfig(**mind_data)
+
     console.print("[bold]Starting Sovyx daemon...[/bold]")
 
     from sovyx.engine.bootstrap import bootstrap
-    from sovyx.engine.config import load_engine_config
     from sovyx.engine.events import EventBus
     from sovyx.engine.lifecycle import LifecycleManager
     from sovyx.engine.rpc_server import DaemonRPCServer
-    from sovyx.mind.config import MindConfig
 
     async def _start() -> None:
-        system_yaml = Path.home() / ".sovyx" / "system.yaml"
-        config = load_engine_config(config_path=system_yaml if system_yaml.exists() else None)
-        mind_config = MindConfig(name="Sovyx")  # v0.1: single mind
-
-        # Load mind.yaml — discover first mind directory
-        mind_yaml: Path | None = None
-        data_dir = config.database.data_dir
-        if data_dir.exists():
-            for child in sorted(data_dir.iterdir()):
-                candidate = child / "mind.yaml"
-                if child.is_dir() and candidate.exists():
-                    mind_yaml = candidate
-                    break
-
-        if mind_yaml is not None and mind_yaml.exists():
-            import yaml
-
-            with open(mind_yaml) as f:  # noqa: PTH123
-                mind_data = yaml.safe_load(f)
-            if mind_data:
-                mind_config = MindConfig(**mind_data)
-
         registry = await bootstrap(config, [mind_config])
         event_bus = await registry.resolve(EventBus)
 
