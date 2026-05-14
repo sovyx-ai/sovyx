@@ -6,7 +6,399 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.32.1 below)
+(none — every shipped delta is in v0.41.1 below)
+
+## [0.41.1] — 2026-05-14
+
+Documentation patch — closes 4 BLOCKING gaps surfaced by the
+2026-05-13 consolidated audit
+(`docs-internal/GAPS-CONSOLIDATED-2026-05-13.md` §1):
+
+### Added
+
+- ``docs/plugin-developer-guide.md`` — new file. Practical recipe
+  for writing a Sovyx plugin: project layout, ``@tool`` decorator
+  details, ``PluginContext`` shape, BrainAccess API reference,
+  EventBusAccess / SandboxedHttpClient / SandboxedFsAccess usage,
+  testing pattern with stub PluginContext, upgrade guide for the
+  v0.41.0 BrainAccess ``mind_id`` keyword-only contract. Closes
+  the broken link from ``docs/getting-started.md:361`` that has
+  been dangling since the file was first referenced.
+
+### Changed
+
+- ``docs/modules/voice-calibration.md`` — renamed *Signing model*
+  section to *Profile signing mode (axis 2 — distinct from the
+  prereq gate above)* and added a callout disambiguating it from
+  the v0.40.0 prereq STRICT flip. The two STRICT axes were
+  conflatable in the prior wording; readers arriving post-v0.40.0
+  could mistake the (shipped) prereq STRICT for the (still-LENIENT)
+  profile signing mode. Status verified at HEAD against
+  ``_signing.py:240`` per ``feedback_no_speculation``.
+
+### Documented (no code change)
+
+- This CHANGELOG backfills entries for v0.32.28 through v0.41.0
+  (eighteen releases). Prior to this commit the changelog stopped
+  at v0.32.1 — operators upgrading across that gap had no
+  release-notes view of breaking changes (notably the v0.41.0
+  ``BrainAccess`` constructor change), exit codes
+  (``EXIT_DOCTOR_VOICE_NOT_CONFIGURED=6`` shipped v0.40.0), or
+  new CLI surfaces (``sovyx voice setup`` shipped v0.39.0). Each
+  backfilled entry is derived from the tagged commit body — see
+  ``git log v0.32.1..v0.41.0 -- pyproject.toml`` for the source.
+
+## [0.41.0] — 2026-05-13
+
+Plugin BrainAccess mind-scope closure — anti-pattern #35 surface
+in the plugin layer. Mission spec:
+``docs-internal/missions/MISSION-plugin-mind-scope-2026-05-13.md``.
+
+### Changed (BREAKING — plugin SDK)
+
+- ``BrainAccess.__init__`` now requires ``mind_id`` as a keyword-
+  only argument with no default. Previous versions implicitly
+  bound BrainAccess to the ``"default"`` mind sentinel at
+  construction time, which caused plugin writes to land in the
+  ``default`` mind even when the operator had configured a
+  non-default mind. Closes a privacy + correctness gap.
+- ``PluginManager`` now threads the loaded mind's id into the
+  ``PluginContext`` factory at plugin-load time, so the
+  per-mind daemon loop's mind id flows automatically to every
+  ``BrainAccess`` instance the manager constructs.
+
+### Migration
+
+- Plugins that consume ``context.brain`` (the overwhelming
+  majority): no change required — the manager builds BrainAccess
+  on your behalf with the correct mind id.
+- Custom ``PluginContext`` factories or test fixtures that
+  construct ``BrainAccess`` directly: add
+  ``mind_id=<MindId>`` keyword to the constructor call. See
+  ``docs/plugin-developer-guide.md`` §"Upgrade — v0.41.0
+  BrainAccess ``mind_id`` keyword-only".
+
+### Future work
+
+- Multi-mind plugin invocation context (per-call mind binding
+  instead of per-load) is tracked in
+  ``docs-internal/missions/MISSION-plugin-context-multi-mind-FUTURE.md``
+  and activates when multi-mind daemon support lands.
+
+## [0.40.1] — 2026-05-13
+
+Phase 6.T6.3 observability — dashboard ``_shared`` fallback paths
+now emit a structured WARN
+(``dashboard.shared.fallback_default_mind``) when a request lands
+without an explicit mind-id and falls back to ``default``. Closes
+the last gap of MISSION-voice-config-calibrate-enterprise: future
+operators triaging "phantom default mind" reports can grep for the
+event to confirm no caller has slipped past the resolver.
+
+### Added
+
+- ``_shared.resolve_active_mind_id_for_request`` emits WARN on
+  every fallback path. Six new tests cover the event contract.
+
+## [0.40.0] — 2026-05-13
+
+Phase 5 — voice calibrate prereq gate STRICT flip. Mission:
+``docs-internal/missions/MISSION-voice-calibrate-strict-flip-2026-05-13.md``.
+
+### Changed (BREAKING — CLI exit semantics)
+
+- ``sovyx doctor voice --calibrate`` now hard-exits with exit code
+  ``EXIT_DOCTOR_VOICE_NOT_CONFIGURED = 6`` and a 3-line remediation
+  banner when the prereq gate detects no configured input device.
+  Previous versions (Phase 4 LENIENT, v0.39.2) emitted a WARN and
+  attempted to auto-detect — that auto-detection masked legitimate
+  configuration errors as silent failures.
+
+### Added
+
+- ``--input-device <name>`` escape hatch on ``doctor voice
+  --calibrate``. Inline-configures the named device, persists it to
+  the resolved mind's ``mind.yaml``, then continues with calibration.
+  Supports substring match against the PortAudio device list; non-
+  interactive sessions (``--non-interactive`` or CI) require the
+  device to match exactly one entry.
+
+### Documentation
+
+- ``docs/getting-started.md`` + ``docs/modules/voice-calibration.md``
+  + ``docs/modules/voice-setup.md`` updated to reflect STRICT
+  semantics, exit code 6, and the ``--input-device`` flag.
+
+### Notes
+
+- Phase 5 shipped same-day as v0.39.2 Phase 4 LENIENT. The
+  documented 1-week telemetry-soak gate (``Gate 1``) was
+  operator-authorised override per
+  ``feedback_full_autonomous_authority``. Recorded in the mission's
+  §10 and the v0.41.0 operator validation backlog.
+
+## [0.39.2] — 2026-05-13
+
+Phase 1-4 + T6.1 of MISSION-voice-config-calibrate-enterprise —
+anti-pattern #35 sixth recorded surface closed. Mission:
+``docs-internal/missions/MISSION-voice-config-calibrate-enterprise-2026-05-13.md``.
+
+### Added
+
+- ``sovyx voice setup`` command (``src/sovyx/cli/commands/voice.py``).
+  Interactive picker over the PortAudio device list with substring
+  match against an optional ``--input-device`` flag; persists choice
+  to the active mind's ``mind.yaml`` under ``voice_input_device_name``.
+- ``sovyx init`` now invokes ``voice setup`` inline at the end of
+  mind creation; new ``--skip-voice-setup`` flag preserves the
+  pre-Phase-2 non-interactive flow for CI / scripted installs.
+- Shared mind resolver primitive in ``src/sovyx/cli/_mind_resolver.py``
+  — single source of truth for resolving the active mind from
+  ``--mind-id`` / config / sentinel-fallback. Wired into ``sovyx
+  start``, ``doctor voice --calibrate``, ``voice train-wake-word``,
+  ``voice generate-signing-key``.
+- Calibrate prereq gate LENIENT (Phase 4 — WARN-only). Verifies a
+  configured input device before launching calibration; logs
+  ``voice.calibrate.prereq_warn`` when none is found but still
+  continues. STRICT flip arrives in v0.40.0.
+- Daemon sentinel WARN extensions in
+  ``src/sovyx/voice/factory/__init__.py``: when the factory is
+  invoked with the ``"default"`` mind-id sentinel, emit
+  ``voice.factory.input_device_unconfigured`` + sister events at the
+  top wire-up so operators can detect callers that bypassed the
+  resolver.
+
+### Fixed (CI red unblocks; historical version detail)
+
+- v0.39.0 → v0.39.1: ruff SIM117 nested-with flatten in
+  ``test_voice_train_t813.py`` + ``--unattached`` flag pre-empts the
+  mind-resolver during test execution to avoid runner ``~/.sovyx``
+  state leakage (anti-pattern #23 test-hermeticity surface).
+- v0.39.1 → v0.39.2: ``test_device_enum_fallthrough`` Windows-CI
+  flake fixed via logger-spy refactor — ``structlog.testing.capture_logs``
+  doesn't route to pytest's ``caplog`` on Windows, so the test now
+  attaches a spy handler explicitly.
+
+## [0.39.0] — 2026-05-13
+
+Phases 1-3 of MISSION-voice-config-calibrate-enterprise (anti-pattern
+#35 sixth surface — voice subsystem). Tagged separately from v0.39.2
+because v0.39.0 + v0.39.1 surfaced CI red before publish; both tags
+are kept as forensic trail. User-visible content was finalised in
+v0.39.2 — refer there for the consolidated changes shipped under the
+``0.39.x`` series.
+
+## [0.38.3] — 2026-05-13
+
+Voice failover root-cause closure — Path 3 fix.
+
+### Fixed
+
+- ``runtime select_alternative_endpoint`` now excludes the
+  ``OS_DEFAULT`` virtual alias from candidate enumeration. Path 3
+  of the v0.38.2 LAUDO (``docs-internal/missions/LAUDO-voice-failover-root-cause-2026-05-12.md``).
+  When the prior fix shipped, the virtual alias still leaked back
+  into the candidate set at the runtime selection step; this commit
+  closes it at the runtime layer too.
+
+## [0.38.2] — 2026-05-12
+
+Voice failover root-cause fix — 3-bug class closed in one release.
+LAUDO: ``docs-internal/missions/LAUDO-voice-failover-root-cause-2026-05-12.md``.
+
+### Fixed
+
+- **Path 1** — ``_resolve_input_entry`` now raises on int / str-
+  not-matching instead of silently falling back to OS default.
+  Symptom: ``sovyx start`` would happily begin capture on the OS
+  default device when the configured device name didn't match the
+  PortAudio list, producing the operator-reported "fala e LLM não
+  responde" failure.
+- **Path 2** — ``EscapeBypass`` now refuses to target ``OS_DEFAULT``
+  virtual alias. Previously the bypass tier system would treat the
+  alias as a normal candidate and attempt to assert WASAPI exclusive
+  mode against it, which the audio stack silently no-ops.
+- **F2-M10 retro** — ``_parse_device_name`` handles PortAudio
+  friendly-prefixed names (e.g. ``"Microphone (USB Audio Device)"``)
+  by bumping the USB-ancestor walk limit + adding a name-fallback
+  step.
+
+## [0.38.1] — 2026-05-12
+
+CI red unblock. ``publish.yml`` v0.38.0 tag failed on a vitest WS-
+closed assertion timing flake and a typer ANSI-output substring
+match.
+
+### Fixed
+
+- ``dashboard/src/...logs.test.tsx`` — wrap WS-closed assertion in
+  ``waitFor`` so the assertion polls rather than asserts at the
+  microtask boundary.
+- ``tests/unit/cli/`` — strip ANSI escape sequences before
+  substring assertions on typer CLI output (was failing under the
+  CI's TTY-detection branch).
+
+## [0.38.0] — 2026-05-11
+
+Voice integrity audit Wave 3 — closes the cross-WS race in
+``SessionRegistry.acquire_exclusive`` + remaining coverage in the
+wizard / pipeline / store layers. Audit memory:
+``project_voice_integrity_audit_2026_05_09.md``.
+
+### Added
+
+- ``SessionRegistry.exclusive_lock`` context manager (F2-H01
+  foundation, ``src/sovyx/voice/_session_registry.py``).
+- Voice routes wire SessionRegistry.acquire_exclusive into the
+  wizard + WS reject path (F2-H01 wire-up). New tests cover
+  concurrent VU + recorder regression.
+- Direct render tests for ``BypassTierStatusCard``,
+  ``DeviceContentionBanner``, ``VoiceSetupModal`` (happy + 5 error
+  paths), and 7 actions / retry coverage on the ``voiceHealth``
+  store slice.
+
+### Changed
+
+- ``_parse_device_name`` (fingerprint) bumps the USB ancestor walk
+  limit + adds a name fallback (F2-M10).
+- ``/proc/asound/cards`` TOCTOU log upgraded WARN→WARNING (F2-M09).
+- Linux APO detector splits the error log by stderr keyword
+  (F2-M08).
+
+### Fixed
+
+- Closed ``pytest.skip`` dead-code at ``test_pipeline.py:3248``
+  (F2-M06).
+- Windows full-suite skip for ``concurrent_open`` wizard file path
+  (W3.A3 follow-up).
+
+## [0.37.0] — 2026-05-10
+
+Voice integrity audit Wave 2 UX closure. F2-C01 (contention banner
+zod) + F2-M03 (Piper locale match) + F2-H04 (PipeWire UP gate).
+
+### Added
+
+- Zod schemas for ``/api/voice/enable`` response — frontend now
+  surfaces a typed ``DeviceContentionBanner`` on rejection.
+- ``piper_locale_match`` doctor probe — flags when the operator's
+  spoken language doesn't align with the auto-selected Piper voice.
+- ``_post_up_health_check`` helper — gates Linux audio-service UP
+  on a follow-up ``pactl info`` verify (foundation for the
+  F2-H04 wire-up).
+
+### Changed
+
+- ``VoiceSetupModal`` uses the new zod schema +
+  ``DeviceContentionBanner`` directly.
+- Piper voice derivation now driven by spoken-language catalog
+  (``recommended_piper_voice_for(language)``).
+- Linux audio-service UP detection gated on ``pactl info`` verify
+  (F2-H04 wire-up); LENIENT pending operator telemetry per
+  ``feedback_staged_adoption``.
+
+### Fixed
+
+- ESLint guard against ``JSON.parse(*.message)`` in dashboard
+  (F2-C01 flip + bug class close).
+
+## [0.36.0] — 2026-05-09
+
+Voice integrity audit Wave 1 closure. F2-C02 (constant-time WS
+auth) + F2-H02/H03/H05 + F2-M01.
+
+### Added
+
+- Zod runtime validation on ``/api/voice/status`` + ``/api/voice/models``
+  responses (F2-H02).
+
+### Fixed
+
+- ``Path.read_text`` in calibration wrapped in ``asyncio.to_thread``
+  (F2-H03 — anti-pattern #14).
+- Wizard ``captured_frames`` now thread-safe via ``queue.Queue``
+  (F2-M01).
+
+## [0.35.2] — 2026-05-09
+
+Voice wizard concurrent-open fix. Unifies the wizard test-record
+path with the live VU path via SessionRegistry handoff so a second
+operator opening the wizard while the first is recording no longer
+both grab the same input stream.
+
+## [0.35.1] — 2026-05-09
+
+``publish.yml`` red unblock — Piper ``download_available`` + ruff
+format. v0.35.0 tag itself shipped the user-facing voice TTS UX
+work; this patch corrects the build pipeline.
+
+## [0.35.0] — 2026-05-09
+
+Onda 3 — voice TTS UX (#38, #39).
+
+### Added
+
+- **Piper auto-download** — ``sovyx`` resolves the configured Piper
+  voice on first use, fetches the ONNX model + JSON catalog from
+  the public release, caches under ``data_dir/piper/<voice>/``, and
+  surfaces progress on the dashboard. Removes the prior
+  contributor-only step of placing the file manually.
+- **TTS engine choice** — operators can pick the TTS engine
+  (``piper`` / ``kokoro``) via ``mind.yaml`` ``voice_tts_engine``
+  field; the wizard surfaces both options.
+- Setup-wizard screenshot section in ``docs/getting-started.md``
+  (#41).
+
+## [0.34.0] — 2026-05-09
+
+Onda 2 — cost breakdown by cognitive phase (#43).
+
+### Added
+
+- ``CostGuard.record`` accepts a ``phase`` tag
+  (``think`` / ``reflect`` / ``dream`` / ``act`` / ``safety`` /
+  ``pii_guard`` / ``financial_gate`` / ``contradiction``). The
+  dashboard surfaces a per-phase token + USD breakdown chart so
+  operators can attribute spend to the cognitive sub-system that
+  drove it (e.g. "dream consumed 38% of yesterday's tokens").
+
+## [0.33.0] — 2026-05-09
+
+Onda 1 — cost visibility (#42 / #44 / #45).
+
+### Added
+
+- ``CostGuard`` monthly budget cap (#42) — operators set
+  ``cost.monthly_usd_cap`` in ``mind.yaml``; the router refuses
+  paid calls once the cap is reached (free / local-model paths
+  remain available).
+- Cached input tokens tracked with discounted pricing (#44) —
+  Anthropic + OpenAI cache-read tokens are now metered separately
+  from full-price input tokens so the per-conversation USD figure
+  matches the provider invoice.
+- Fallback pricing source surfaced to the dashboard (#45) — when
+  the model is missing from the bundled pricing table, the
+  router's fallback pricing source (``provider-default`` or
+  ``operator-override``) is surfaced on the cost row so the
+  number is interpretable.
+
+## [0.32.28] — 2026-05-09
+
+Phase 5.F closure — voice ``_orchestrator.py`` god-file split into
+12 Mixin subclasses (LifecycleMixin, SpeechStreamingMixin,
+TtsCancelChainMixin, PublicAccessorsMixin, BypassCoordinatorMixin,
+ListenerWireupMixin, FrameRecordingMixin, UtteranceIdentityMixin,
+WakeWordRouterMixin, HeartbeatMixin, …) per anti-pattern #16 +
+#32. Public surface stable — every API is re-exported via the
+parent package and existing test patches updated in the same
+commit per anti-pattern #20. Plus Phase 5.E (Finding 7): removed
+``mind_id`` sentinel default on the voice pipeline factory in
+favour of the documented WARN pattern from anti-pattern #35
+mitigation set.
+
+Internal version bumps v0.32.2 → v0.32.27 (each a single Phase 5
+sub-step) were not separately tagged — only v0.32.28 carries the
+GitHub release tag for the consolidated Phase 5 closure.
 
 ## [0.32.1] — 2026-05-08
 

@@ -135,18 +135,48 @@ Decisions are partitioned at apply time:
 
 Schema versioning is explicit: a profile written under `schema_version=1` only loads on a Sovyx that supports `schema_version=1`. Incompatible versions raise `CalibrationProfileLoadError`; operators regenerate via `--calibrate` rather than relying on silent migration.
 
-## Signing model (LENIENT default; STRICT opt-in until v0.32.0+)
+## Profile signing mode (axis 2 — distinct from the prereq gate above)
 
-| Mode | Status (v0.31.x) | Missing signature | Invalid signature |
+> **Two STRICT axes — do not conflate.** The
+> [§Mic prereq](#mic-prereq-phase-4-of-the-same-mission) section
+> above documents the prereq gate, which flipped STRICT in
+> **v0.40.0** (exit code `EXIT_DOCTOR_VOICE_NOT_CONFIGURED=6`) and
+> gates the `--calibrate` invocation on a configured input device. The *profile signing mode* documented
+> here is a different axis: it governs how the loader handles
+> calibration profiles that were generated previously and may carry
+> an Ed25519 signature. It still defaults LENIENT at the current
+> HEAD; flip status is tracked separately.
+
+| Mode | Status | Missing signature | Invalid signature |
 |---|---|---|---|
-| LENIENT | **default** | warn + accept | warn + accept |
+| LENIENT | **default** (verified at HEAD: `_signing.py:240`) | warn + accept | warn + accept |
 | STRICT | opt-in (`mode=Mode.STRICT` argument) | raise `CalibrationProfileLoadError` | raise |
 
-**Why STRICT is not yet the default:** STRICT-by-default would break every existing v0.30.x..v0.31.x Sovyx install — the only key-generation path today is `scripts/dev/generate_calibration_signing_key.py` (dev-only), so operators reading the public docs have no zero-friction way to produce a signing key. Flipping STRICT default before wizard-driven key generation lands would force every operator to drop into a contributor workflow.
+**Why signing-mode STRICT is not yet the default:** flipping
+signing-mode STRICT-by-default would break every Sovyx install whose
+existing calibration profile was generated before the operator
+opted into the wizard-driven key-gen flow. The dashboard wizard
+ships an operator-driven Ed25519 key-gen + persistence flow; fresh
+installs that complete the wizard get a signed profile and can run
+STRICT cleanly. Existing installs continue under LENIENT until the
+operator opts in (env override + key gen) or regenerates via
+`--calibrate --signing-key <path>` post-upgrade. See `_signing.py`
+module docstring for the canonical narrative.
 
-**STRICT default flip gate (v0.32.0+):** the dashboard wizard ships an operator-driven Ed25519 key-gen + persistence flow, after which fresh installs get STRICT default + signed profiles automatically. Existing installs continue under LENIENT until the operator opts in (env override + key gen) or regenerates via `--calibrate --signing-key <path>` post-upgrade. See `_signing.py` module docstring for the canonical narrative.
+**Operators wanting signing-mode STRICT today:** generate a key
+via the wizard or `scripts/dev/generate_calibration_signing_key.py`,
+pass `--signing-key <path>` at calibrate time, and load with
+`mode=Mode.STRICT` in any custom integration code. Production
+deployments wanting fleet-wide STRICT operation should follow the
+staged rotation procedure in
+[contributing/voice-kb-rotation.md](../contributing/voice-kb-rotation.md)
+(per CLAUDE.md anti-pattern #26).
 
-**Operators wanting STRICT today:** generate a key via the dev script, pass `--signing-key <path>` at calibrate time, and load with `mode=Mode.STRICT` in any custom integration code. Production deployments wanting fleet-wide STRICT operation should wait for v0.32.0+ to avoid the operational pain of manual key distribution.
+**Flip tracking:** the signing-mode LENIENT→STRICT flip is gated
+on telemetry-validated LENIENT operation across the fleet (per
+`feedback_staged_adoption`). Status at HEAD: LENIENT. The flip
+itself is being planned in a follow-up mission; this doc updates
+when the flip lands.
 
 ## Telemetry
 
