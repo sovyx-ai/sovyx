@@ -6,7 +6,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.42.0 below)
+(none — every shipped delta is in v0.42.1 below)
+
+## [0.42.1] — 2026-05-14
+
+KB signing telemetry foundation + multi-mind GA reconciliation —
+closes the last 2 gaps from
+``GAPS-CONSOLIDATED-2026-05-13.md`` (§2.6 + §3.6). Doc-only commit;
+structural closure via 2 new mission specs + observability event
+documentation.
+
+### Documented (§2.6 — KB profile signing LENIENT→STRICT staged adoption)
+
+- Two events documented in ``docs/observability.md``
+  §"Pending catalog promotion (post-v0.39.0)":
+  - ``voice.kb.signature.accepted`` (DEBUG) — fires on every
+    successful KB profile signature verification. Emitted from
+    ``_signing.py:275``.
+  - ``voice.kb.signature.invalid`` (WARN) — fires on all
+    non-ACCEPTED verdicts (``REJECTED_NO_SIGNATURE``,
+    ``REJECTED_BAD_SIGNATURE``, ``REJECTED_MALFORMED_SIGNATURE``,
+    ``REJECTED_NO_TRUSTED_KEY``). Payload carries ``verdict`` +
+    ``mode``. Emitted from ``_signing.py:282``. This is the
+    **flip-gate telemetry** for the LENIENT→STRICT default
+    transition planned in the new staged-adoption mission.
+- No code change at HEAD — the events were already emitting at
+  v0.40.x; v0.42.1 documents them. The KB signing default stays
+  ``Mode.LENIENT`` until the operator soak captures the verdict
+  distribution per the mission's Phase 2.
+
+### Documented (§3.6 — multi-mind GA path reconciliation)
+
+- Master voice mission's v0.31.0 multi-mind GA target reconciled
+  in ``docs-internal/archive/INDEX.md`` Active-missions table.
+  The version-target diverged from HEAD reality (HEAD is v0.42.x;
+  the multi-mind code surface is shipped) but T8.11 + T8.22
+  remain as structural closures rather than blockers.
+- ``MISSION-multi-mind-ga-audio-isolation-2026-05-14.md`` spawned
+  (gitignored) — focused on the technical T8.22 work (audio-frame
+  routing property tests under concurrent multi-mind load + RPC
+  churn stability + soak instrumentation). T8.11 (pretrained
+  wake-word ONNX pool) stays operator-owned (product scope per
+  ``feedback_full_autonomous_authority``).
+
+### Mission specs spawned (local-only, ``docs-internal/`` gitignored)
+
+- ``MISSION-kb-signing-strict-flip-2026-05-14.md`` — 4-phase
+  staged adoption plan with explicit Gate 1 close-out form per
+  ``feedback_staged_adoption`` Addendum 2026-05-13. Phase 1
+  shipped (this commit); Phase 2 operator soak; Phase 3 default
+  flip gated on operator GO + verdict distribution; Phase 4
+  migration support (env override + wizard banner).
+- ``MISSION-multi-mind-ga-audio-isolation-2026-05-14.md`` — 4-
+  phase mission for T8.22. Phase 1 (instrumentation foundation);
+  Phase 2 (cross-mind audio isolation property tests); Phase 3
+  (operator 30-day soak); Phase 4 (multi-mind GA tag).
+
+### Notes
+
+- Predecessor: v0.42.0 (dashboard zod schema expansion).
+- This commit closes the last 2 of 22 gaps from the 2026-05-13
+  consolidated audit. **All 22 verified gaps now CLOSED.**
+- 4 of the closures (§2.6, §3.4, §3.6, this commit's mission
+  spawns) include structural follow-up mechanisms (mission spec
+  with Gate 1 close-out, telemetry counters surfaced in
+  observability docs, successor missions in Active-missions
+  table). Future-Claude inherits the trail; operator inherits the
+  Gate close-out forms.
+- Quality gates green: ruff (lint+format), mypy strict, bandit,
+  pytest (global), tsc, vitest. uv.lock regenerated for version
+  bump.
 
 ## [0.42.0] — 2026-05-14
 
