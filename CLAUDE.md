@@ -35,23 +35,44 @@ Sovereign Minds Engine — persistent AI companion with real memory, cognitive l
 
 ## Quality Gates (MANDATORY before any commit)
 
+**Use the forcing-function script — DO NOT run gates ad-hoc:**
+
+```bash
+./scripts/verify_gates.sh        # runs all 7 gates + verifies via summary lines
+```
+
+The script (`set -euo pipefail` + explicit `grep` on summary lines) replaces the ad-hoc invocation pattern below. Pre-v0.42.2 the ad-hoc pattern `pytest ... 2>&1 | tail -N` masked 6 real test failures across 4 cycles because the harness's exit-code reporting was unreliable when piped to tail without `pipefail`. See `feedback_ci_preflight.md` Addendum 2026-05-14 + `feedback_no_speculation.md` Addendum 2026-05-14 for the forensic detail.
+
+The 7 gates the script runs (in order):
+
 ```bash
 # Python (from repo root)
-uv lock --check                               # lockfile must match pyproject.toml
-uv run ruff check src/ tests/
-uv run ruff format --check src/ tests/
-uv run mypy src/                              # strict
-uv run bandit -r src/sovyx/ --configfile pyproject.toml
-uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30
-
+uv run ruff check src/ tests/                                          # 1. lint
+uv run ruff format --check src/ tests/                                 # 2. format
+uv run mypy src/                                                       # 3. type (strict)
+uv run bandit -r src/sovyx/ --configfile pyproject.toml                # 4. security
+uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30 -q    # 5. tests
 # Dashboard (from dashboard/)
-npx tsc -b tsconfig.app.json                  # zero new errors
-npx vitest run
+npx tsc -b tsconfig.app.json                                           # 6. dashboard type
+npx vitest run --reporter=dot                                          # 7. dashboard tests
+```
+
+Plus `uv lock --check` (verified separately when bumping). If running gates ad-hoc instead of via the script, you MUST grep the summary line — never trust the harness exit code alone:
+
+```bash
+# WRONG (4-cycle red precedent):
+uv run python -m pytest tests/ ... 2>&1 | tail -15        # tail eats pytest's exit 1
+
+# RIGHT:
+uv run python -m pytest tests/ ... 2>&1 | tee /tmp/log    # full output captured
+grep -qE '[0-9]+ failed' /tmp/log && echo "RED" && exit 1 # GREP exit is the gate
 ```
 
 If ANY gate fails, fix before committing. Never skip.
 
 **Version bump gotcha:** any change to `pyproject.toml` `version` requires `uv lock` to regenerate `uv.lock` — CI enforces `uv lock --check`.
+
+**Post-tag CI verification:** after `git push origin <tag>`, run `gh run list --workflow=publish.yml --limit 3` to confirm the previous tag passed BEFORE bumping the next one. Skipping this step shipped 6 tags atop a broken pipeline in the v0.41.x cycle.
 
 ## Repo Layout
 
