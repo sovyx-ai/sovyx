@@ -101,6 +101,7 @@ class TestBrainAccess:
             enforcer_all,
             write_allowed=True,
             plugin_name="test",
+            mind_id="test-mind",
         )
         results = await access.search("hello")
         assert len(results) == 1
@@ -120,6 +121,7 @@ class TestBrainAccess:
             enforcer_all,
             write_allowed=True,
             plugin_name="test",
+            mind_id="test-mind",
         )
         await access.search("query", limit=999)
         mock_brain.search.assert_called_once()
@@ -136,6 +138,7 @@ class TestBrainAccess:
             enforcer_none,
             write_allowed=False,
             plugin_name="test",
+            mind_id="test-mind",
         )
         with pytest.raises(PermissionDeniedError):
             await access.search("hello")
@@ -150,6 +153,7 @@ class TestBrainAccess:
             enforcer_all,
             write_allowed=True,
             plugin_name="weather",
+            mind_id="test-mind",
         )
         concept_id = await access.learn("rain today", "It's raining")
         assert concept_id == "concept-123"
@@ -167,6 +171,7 @@ class TestBrainAccess:
             enforcer_readonly,
             write_allowed=False,
             plugin_name="test",
+            mind_id="test-mind",
         )
         with pytest.raises(PermissionDeniedError):
             await access.learn("test", "content")
@@ -181,6 +186,7 @@ class TestBrainAccess:
             enforcer_all,
             write_allowed=False,
             plugin_name="test",
+            mind_id="test-mind",
         )
         with pytest.raises(PermissionDeniedError):
             await access.learn("test", "content")
@@ -195,6 +201,7 @@ class TestBrainAccess:
             enforcer_all,
             write_allowed=True,
             plugin_name="test",
+            mind_id="test-mind",
         )
         large_content = "x" * (_MAX_CONCEPT_CONTENT + 1)
         with pytest.raises(ValueError, match="10240"):
@@ -210,6 +217,7 @@ class TestBrainAccess:
             enforcer_all,
             write_allowed=True,
             plugin_name="test",
+            mind_id="test-mind",
         )
         await access.learn("item", "content", category="nonexistent_category")
         call_kwargs = mock_brain.learn_concept.call_args.kwargs
@@ -225,6 +233,7 @@ class TestBrainAccess:
             enforcer_all,
             write_allowed=True,
             plugin_name="test",
+            mind_id="test-mind",
         )
         await access.learn("item", "content", category="preference")
         call_kwargs = mock_brain.learn_concept.call_args.kwargs
@@ -337,6 +346,7 @@ class TestPluginContext:
             enforcer_all,
             write_allowed=True,
             plugin_name="test",
+            mind_id="test-mind",
         )
         ctx = PluginContext(
             plugin_name="test",

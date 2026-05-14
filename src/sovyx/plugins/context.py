@@ -26,6 +26,7 @@ if typing.TYPE_CHECKING:  # pragma: no cover
 
     from sovyx.brain.service import BrainService
     from sovyx.engine.events import Event, EventBus, EventHandler
+    from sovyx.engine.types import MindId
 
 logger = get_logger(__name__)
 
@@ -58,7 +59,7 @@ class BrainAccess:
         *,
         write_allowed: bool,
         plugin_name: str,
-        mind_id: str = "default",
+        mind_id: MindId,
     ) -> None:
         self._brain = brain
         self._enforcer = enforcer

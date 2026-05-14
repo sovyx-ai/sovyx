@@ -434,11 +434,63 @@ class TestEdgeCases:
             data_dir=tmp_path,
             granted_permissions={"weather": {"brain:read", "brain:write"}},
             discover_entry_points=False,
+            mind_id="test-mind",  # type: ignore[arg-type]
         )
         await mgr.load_single(FakeWeatherPlugin())
         loaded = mgr.get_plugin("weather")
         assert loaded is not None
         assert loaded.context.brain is not None
+
+    @pytest.mark.anyio()
+    async def test_load_brain_access_inherits_plugin_manager_mind_id(self, tmp_path: Path) -> None:
+        """MISSION-plugin-mind-scope-2026-05-13 T1 regression — the
+        plugin's BrainAccess MUST be scoped to the PluginManager's
+        configured mind_id (Option F load-time resolution), NOT the
+        legacy ``"default"`` sentinel. Pre-fix, every plugin queried
+        the phantom default mind regardless of the operator's real
+        mind. This test pins the closure.
+        """
+        mock_brain = MagicMock()
+        mgr = PluginManager(
+            brain=mock_brain,
+            data_dir=tmp_path,
+            granted_permissions={"weather": {"brain:read", "brain:write"}},
+            discover_entry_points=False,
+            mind_id="jonny",  # type: ignore[arg-type]
+        )
+        await mgr.load_single(FakeWeatherPlugin())
+        loaded = mgr.get_plugin("weather")
+        assert loaded is not None
+        assert loaded.context.brain is not None
+        # BrainAccess._mind_id is a private attribute; access via the
+        # closure path is the canonical way to verify the binding
+        # without coupling to public API surface (no method exposes the
+        # mind_id today). After the refactor this MUST be 'jonny',
+        # never 'default'.
+        assert loaded.context.brain._mind_id == "jonny"
+
+    def test_construction_rejects_brain_without_mind_id(self, tmp_path: Path) -> None:
+        """MISSION-plugin-mind-scope-2026-05-13 D-T0-3 fail-loud
+        contract: ``PluginManager(brain=X)`` without ``mind_id`` raises
+        ``ValueError`` at construction time. Operators cannot construct
+        a brain-enabled manager without committing to a mind scope —
+        eliminates the pre-fix silent ``"default"`` sentinel.
+        """
+        with pytest.raises(ValueError, match="requires mind_id when brain"):
+            PluginManager(
+                brain=MagicMock(),
+                data_dir=tmp_path,
+                discover_entry_points=False,
+            )
+
+    def test_construction_no_brain_no_mind_id_ok(self, tmp_path: Path) -> None:
+        """Counterpart to the fail-loud contract: ``brain=None`` does
+        NOT require ``mind_id``. Test fixtures that bootstrap a manager
+        without brain wiring (no BrainAccess will be granted) continue
+        to work without supplying a mind."""
+        # No exception raised.
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
+        assert mgr is not None
 
     @pytest.mark.anyio()
     async def test_load_with_event_bus(self, tmp_path: Path) -> None:

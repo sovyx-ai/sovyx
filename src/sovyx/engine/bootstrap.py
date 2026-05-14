@@ -872,6 +872,11 @@ async def bootstrap(
                 granted_permissions=plugins_cfg.get_all_granted_permissions(),
                 allow_third_party_plugins=engine_plugin_cfg.allow_third_party_plugins,
                 trusted_plugin_packages=list(engine_plugin_cfg.trusted_plugin_packages),
+                # MISSION-plugin-mind-scope-2026-05-13 D-T0-3 (Option F):
+                # plugins are mind-scoped at load time per the daemon's
+                # single-mind invariant. ``mind_id`` is the per-mind
+                # loop's current mind — already resolver-validated.
+                mind_id=mind_id,
             )
             loaded = await plugin_manager.load_all()
             if loaded:

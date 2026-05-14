@@ -69,6 +69,7 @@ if typing.TYPE_CHECKING:  # pragma: no cover
 
     from sovyx.brain.service import BrainService
     from sovyx.engine.events import EventBus
+    from sovyx.engine.types import MindId
     from sovyx.llm.models import ToolResult
     from sovyx.plugins.manifest import PluginManifest
 
@@ -185,6 +186,7 @@ class PluginManager:
         discover_entry_points: bool = True,
         allow_third_party_plugins: bool = False,
         trusted_plugin_packages: list[str] | None = None,
+        mind_id: MindId | None = None,
     ) -> None:
         """Initialize PluginManager.
 
@@ -205,11 +207,27 @@ class PluginManager:
                 (PEP 503 normalized). Only consulted when
                 ``allow_third_party_plugins=True``. Empty list with the
                 gate enabled still skips all third-party packages.
+            mind_id: The mind whose brain plugins query/mutate. REQUIRED
+                whenever ``brain`` is provided (BrainAccess is mind-
+                scoped at load time per `MISSION-plugin-mind-scope-2026-05-13`
+                D-T0-3 Option F). May be ``None`` only when ``brain`` is
+                also ``None`` (test fixtures with no brain wiring; no
+                BrainAccess will be granted to any plugin).
         """
         self._brain = brain
         self._event_bus = event_bus
         self._emitter = PluginEventEmitter(event_bus)
         self._data_dir = data_dir
+        self._mind_id = mind_id
+        if brain is not None and mind_id is None:
+            msg = (
+                "PluginManager requires mind_id when brain is provided. "
+                "Pass mind_id=<MindId> from the active mind context (see "
+                "engine/bootstrap.py per-mind loop). Plugins query brain "
+                "data scoped to this mind; the pre-Phase-1 'default' "
+                "sentinel fallback is removed."
+            )
+            raise ValueError(msg)
         self._enabled = enabled
         self._disabled = disabled or set()
         self._plugin_config = plugin_config or {}
@@ -356,16 +374,29 @@ class PluginManager:
             plugin_data = _Path.home() / ".sovyx" / "plugins" / name
         plugin_data.mkdir(parents=True, exist_ok=True)
 
-        # Build context
+        # Build context. Mission `MISSION-plugin-mind-scope-2026-05-13`
+        # D-T0-3 — BrainAccess is mind-scoped at LOAD time (Option F).
+        # Plugin author code stashes ``self._brain = context.brain``
+        # during ``setup()`` (verified at official/knowledge.py:163);
+        # per-invocation rebinding would force every plugin author to
+        # update their setup contract, so we resolve the active mind
+        # ONCE here against the daemon's single-mind invariant. Multi-
+        # mind future work (Phase 8 of skype-grade voice mission) will
+        # require re-architecting the plugin context lifecycle.
         brain_access: BrainAccess | None = None
         if self._brain and (
             Permission.BRAIN_READ.value in granted or Permission.BRAIN_WRITE.value in granted
         ):
+            # The constructor invariant enforces mind_id is non-None
+            # whenever brain is non-None; the type checker still wants
+            # the narrowing.
+            assert self._mind_id is not None
             brain_access = BrainAccess(
                 self._brain,
                 enforcer,
                 write_allowed=Permission.BRAIN_WRITE.value in granted,
                 plugin_name=name,
+                mind_id=self._mind_id,
             )
 
         events_access: EventBusAccess | None = None
