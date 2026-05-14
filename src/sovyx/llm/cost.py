@@ -30,6 +30,16 @@ _STATE_KEY = "cost_guard_state"
 # Maximum entries in the cost log ring buffer (24h at ~5min interval ≈ 288).
 _MAX_COST_LOG = 288
 
+# Fallback bucket used when ``record()`` is called without an explicit
+# ``mind_id`` or ``provider``. Replaces the pre-v0.41.3 silent skip that
+# dropped per-mind / per-provider attribution when callers omitted the
+# field — anti-pattern #35 surface in the cost-tracking layer
+# (``GAPS-CONSOLIDATED-2026-05-13.md`` §2.5). Operators see ``_unresolved``
+# rows in the dashboard breakdown; this is the structural signal that a
+# caller path needs threading. Each unresolved call also emits a structured
+# WARN ``llm.cost.unresolved_attribution`` for trail-grade observability.
+_UNRESOLVED_BUCKET = "_unresolved"
+
 
 def _as_int(val: object) -> int:
     """Coerce an object to int (safe for values from dict[str, object])."""
@@ -496,13 +506,17 @@ class CostGuard:
             self._conversation_spend[conversation_id] = (
                 self._conversation_spend.get(conversation_id, 0.0) + cost
             )
-        # Track per-provider/mind/model/phase breakdowns
-        if provider:
-            self._provider_spend[provider] += cost
-            self._provider_tokens[provider] += tokens
-        if mind_id:
-            self._mind_spend[mind_id] += cost
-            self._mind_tokens[mind_id] += tokens
+        # Track per-provider/mind/model/phase breakdowns.
+        # Empty provider / mind_id buckets into ``_UNRESOLVED_BUCKET`` rather
+        # than silently dropping the attribution (pre-v0.41.3 behaviour was a
+        # silent ``if provider:`` / ``if mind_id:`` skip; see anti-pattern #35
+        # surface in ``GAPS-CONSOLIDATED-2026-05-13.md`` §2.5).
+        provider_key = provider or _UNRESOLVED_BUCKET
+        mind_key = mind_id or _UNRESOLVED_BUCKET
+        self._provider_spend[provider_key] += cost
+        self._provider_tokens[provider_key] += tokens
+        self._mind_spend[mind_key] += cost
+        self._mind_tokens[mind_key] += tokens
         if model:
             self._model_spend[model] += cost
         phase_key = phase or "unknown"
@@ -515,12 +529,26 @@ class CostGuard:
         ts_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
         self._cost_log.append((ts_ms, cost, model, self._daily_spend))
         self._dirty = True
+        # Structured WARN when caller path slipped past mind/provider
+        # resolution. Operators grep ``llm.cost.unresolved_attribution`` to
+        # find call sites that need threading.
+        if not provider or not mind_id:
+            logger.warning(
+                "llm.cost.unresolved_attribution",
+                provider_unresolved=not provider,
+                mind_unresolved=not mind_id,
+                cost=round(cost, 6),
+                model=model,
+                conversation_id=conversation_id,
+                phase=phase_key,
+                tokens=tokens,
+            )
         logger.debug(
             "cost_recorded",
             cost=round(cost, 6),
             model=model,
-            provider=provider or "unknown",
-            mind_id=mind_id or "default",
+            provider=provider_key,
+            mind_id=mind_key,
             phase=phase_key,
             tokens=tokens,
             cache_read=cache_read_tokens,

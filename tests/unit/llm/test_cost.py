@@ -1012,3 +1012,139 @@ class TestCacheTokenTracking:
         assert g._cache_read_tokens == 0
         assert g._cache_creation_tokens == 0
         assert g.get_breakdown("day").cache_read_tokens == 0
+
+
+class TestUnresolvedAttribution:
+    """``record()`` defensive behaviour when caller omits mind_id/provider.
+
+    Closes ``GAPS-CONSOLIDATED-2026-05-13.md`` §2.5 — pre-v0.41.3 the
+    method silently dropped per-mind / per-provider attribution when the
+    field was empty. v0.41.3 buckets to ``_UNRESOLVED_BUCKET`` and emits
+    a structured WARN so the silent surface becomes visible.
+    """
+
+    async def test_empty_mind_id_buckets_unresolved_and_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        warnings: list[tuple[str, dict[str, object]]] = []
+        monkeypatch.setattr(
+            _cost_mod.logger,
+            "warning",
+            lambda event, **kw: warnings.append((event, kw)),
+        )
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(
+            0.5,
+            "claude-sonnet-4-20250514",
+            "conv1",
+            provider="anthropic",
+            tokens=200,
+            # mind_id intentionally omitted — sentinel default ""
+        )
+
+        assert g._mind_spend["_unresolved"] == pytest.approx(0.5)
+        assert g._mind_tokens["_unresolved"] == 200
+        assert "_unresolved" not in g._provider_spend  # provider was explicit
+        assert any(
+            event == "llm.cost.unresolved_attribution"
+            and kw.get("mind_unresolved") is True
+            and kw.get("provider_unresolved") is False
+            for event, kw in warnings
+        )
+
+    async def test_empty_provider_buckets_unresolved_and_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        warnings: list[tuple[str, dict[str, object]]] = []
+        monkeypatch.setattr(
+            _cost_mod.logger,
+            "warning",
+            lambda event, **kw: warnings.append((event, kw)),
+        )
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(
+            0.3,
+            "gpt-4o",
+            "conv1",
+            mind_id="jonny",
+            tokens=100,
+            # provider intentionally omitted — sentinel default ""
+        )
+
+        assert g._provider_spend["_unresolved"] == pytest.approx(0.3)
+        assert g._provider_tokens["_unresolved"] == 100
+        assert g._mind_spend["jonny"] == pytest.approx(0.3)  # mind was explicit
+        assert "_unresolved" not in g._mind_spend
+        assert any(
+            event == "llm.cost.unresolved_attribution"
+            and kw.get("provider_unresolved") is True
+            and kw.get("mind_unresolved") is False
+            for event, kw in warnings
+        )
+
+    async def test_both_empty_buckets_both_with_single_warn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        warnings: list[tuple[str, dict[str, object]]] = []
+        monkeypatch.setattr(
+            _cost_mod.logger,
+            "warning",
+            lambda event, **kw: warnings.append((event, kw)),
+        )
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.7, "model-x", "conv1", tokens=50)
+
+        # Both sentinels triggered → both buckets carry the attribution.
+        assert g._provider_spend["_unresolved"] == pytest.approx(0.7)
+        assert g._mind_spend["_unresolved"] == pytest.approx(0.7)
+        # Single WARN emitted (not one per axis) — caller path is one slip,
+        # one log entry.
+        attr_warns = [w for w in warnings if w[0] == "llm.cost.unresolved_attribution"]
+        assert len(attr_warns) == 1
+        assert attr_warns[0][1]["provider_unresolved"] is True
+        assert attr_warns[0][1]["mind_unresolved"] is True
+
+    async def test_explicit_mind_and_provider_no_warn_no_unresolved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        warnings: list[tuple[str, dict[str, object]]] = []
+        monkeypatch.setattr(
+            _cost_mod.logger,
+            "warning",
+            lambda event, **kw: warnings.append((event, kw)),
+        )
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(
+            0.4,
+            "claude-haiku-4-5-20251001",
+            "conv1",
+            provider="anthropic",
+            mind_id="jonny",
+            tokens=400,
+        )
+
+        # Happy path preserved — explicit attribution flows into the
+        # right buckets, no WARN fires, no _unresolved leakage.
+        assert g._provider_spend["anthropic"] == pytest.approx(0.4)
+        assert g._mind_spend["jonny"] == pytest.approx(0.4)
+        assert "_unresolved" not in g._provider_spend
+        assert "_unresolved" not in g._mind_spend
+        assert not any(w[0] == "llm.cost.unresolved_attribution" for w in warnings)
+
+    async def test_unresolved_persists_through_breakdown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Silence the WARN spam so the test only exercises bucket behaviour.
+        monkeypatch.setattr(_cost_mod.logger, "warning", lambda *a, **kw: None)
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.2, "m", "conv1", tokens=10)
+        bd = g.get_breakdown("day")
+        # The fallback bucket surfaces on the dashboard breakdown — operators
+        # see a non-zero `_unresolved` row + know to thread mind_id upstream.
+        assert bd.by_mind.get("_unresolved") == pytest.approx(0.2)
+        assert bd.by_provider.get("_unresolved") == pytest.approx(0.2)

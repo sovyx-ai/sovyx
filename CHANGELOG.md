@@ -6,7 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.41.2 below)
+(none — every shipped delta is in v0.41.3 below)
+
+## [0.41.3] — 2026-05-14
+
+CostGuard defensive fix — closes
+``GAPS-CONSOLIDATED-2026-05-13.md`` §2.5 (anti-pattern #35 surface
+in the cost-tracking layer).
+
+### Fixed
+
+- ``CostGuard.record()`` no longer silently drops per-mind /
+  per-provider attribution when the caller omits ``mind_id`` or
+  ``provider``. Pre-v0.41.3 code (``src/sovyx/llm/cost.py:503-505``
+  + ``500-502``) used ``if mind_id:`` / ``if provider:`` guards
+  that silently bucketed nothing when the value was empty; the
+  per-mind breakdown on the dashboard could under-report by a
+  meaningful margin without anybody knowing. v0.41.3 buckets the
+  attribution into a new ``_unresolved`` row AND emits a structured
+  WARN ``llm.cost.unresolved_attribution`` carrying the call's
+  cost / model / conversation_id / phase. Operators see the
+  ``_unresolved`` row growing on the dashboard breakdown — that's
+  the structural signal that an upstream caller (typically the LLM
+  router) needs mind_id threaded through.
+
+### Added (observability)
+
+- New event ``llm.cost.unresolved_attribution`` (WARN level)
+  documented in ``docs/observability.md`` §"Pending catalog
+  promotion (post-v0.39.0)". Carries 7 payload fields; fires once
+  per ``record()`` call regardless of which axis (mind_id /
+  provider) is unresolved. Catalog promotion to
+  ``scripts/_gen_log_schemas.py`` deferred — same pattern as the
+  voice events shipped in v0.41.2.
+
+### Tests
+
+- 5 new tests in ``tests/unit/llm/test_cost.py`` covering: empty
+  mind_id → ``_unresolved`` bucket + WARN, empty provider →
+  ``_unresolved`` bucket + WARN, both empty → single WARN, happy
+  path (explicit attribution) preserved, ``_unresolved`` surfaces
+  on the breakdown ``by_mind`` / ``by_provider`` dashboards.
+
+### Notes
+
+- This is a defensive fix at the CostGuard layer. The upstream
+  router (``src/sovyx/llm/router.py``) currently omits ``mind_id``
+  at both ``record()`` call sites (lines 511 + 800); this commit
+  intentionally does NOT thread ``mind_id`` through 11+ router
+  callers across ``cognitive/`` + ``brain/`` + ``upgrade/``. Per
+  ``feedback_enterprise_only``, the defensive fix first makes the
+  silent surface visible; the upstream thread-through can ship as
+  a follow-up once the ``_unresolved`` bucket grows non-zero in
+  production telemetry. This stages the fix safely — smallest
+  correct change first, follow-up driven by data.
+- Predecessor: v0.41.2 (docs expansion — voice api-reference +
+  cli.md refresh + observability events).
 
 ## [0.41.2] — 2026-05-14
 
