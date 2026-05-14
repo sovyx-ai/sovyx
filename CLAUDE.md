@@ -35,11 +35,17 @@ Sovereign Minds Engine — persistent AI companion with real memory, cognitive l
 
 ## Quality Gates (MANDATORY before any commit)
 
-**Use the forcing-function script — DO NOT run gates ad-hoc:**
+**Mechanical forcing function — `git push` is REJECTED without proof:**
 
 ```bash
-./scripts/verify_gates.sh        # runs all 7 gates + verifies via summary lines
+./scripts/install_hooks.sh       # one-time setup per clone — installs pre-push hook
+./scripts/verify_gates.sh        # runs all 7 gates + writes .git/.last-gates-pass marker
+git push                         # hook validates marker fresh + HEAD-matched, else REJECTS
 ```
+
+The pre-push hook at `.githooks/pre-push` (activated by `install_hooks.sh` via `git config core.hooksPath .githooks`) makes the discipline mechanically impossible to bypass — every `git push` checks `.git/.last-gates-pass` for a HEAD-matching marker within the last 30 min (override via `SOVYX_GATES_MAX_AGE_SEC` env var).
+
+Escape hatch: `git push --no-verify` (git's standard contract). NEVER use without explicit operator approval + commit-body rationale documenting why the gate was skipped.
 
 The script (`set -euo pipefail` + explicit `grep` on summary lines) replaces the ad-hoc invocation pattern below. Pre-v0.42.2 the ad-hoc pattern `pytest ... 2>&1 | tail -N` masked 6 real test failures across 4 cycles because the harness's exit-code reporting was unreliable when piped to tail without `pipefail`. See `feedback_ci_preflight.md` Addendum 2026-05-14 + `feedback_no_speculation.md` Addendum 2026-05-14 for the forensic detail.
 
