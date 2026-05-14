@@ -58,7 +58,7 @@ class TestDashboardInfo:
         from sovyx.cli.commands.dashboard import dashboard_app
 
         config_dir = tmp_path / ".sovyx"
-        config_dir.mkdir()
+        config_dir.mkdir(exist_ok=True)
         (config_dir / "system.yaml").write_text("api:\n  host: '0.0.0.0'\n  port: 9999\n")
 
         monkeypatch.setattr("sovyx.cli.commands.dashboard.TOKEN_FILE", tmp_path / "token")
@@ -76,7 +76,7 @@ class TestDashboardInfo:
         from sovyx.cli.commands.dashboard import dashboard_app
 
         config_dir = tmp_path / ".sovyx"
-        config_dir.mkdir()
+        config_dir.mkdir(exist_ok=True)
         (config_dir / "system.yaml").write_text("{{invalid yaml!!")
 
         monkeypatch.setattr("sovyx.cli.commands.dashboard.TOKEN_FILE", tmp_path / "token")

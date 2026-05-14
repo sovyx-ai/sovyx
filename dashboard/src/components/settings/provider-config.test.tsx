@@ -154,10 +154,14 @@ describe("ProviderConfig", () => {
     fireEvent.click(screen.getByText("Save Changes"));
 
     await waitFor(() => {
-      expect(mockApi.put).toHaveBeenCalledWith("/api/providers", {
-        provider: "ollama",
-        model: "llama3.1:latest",
-      });
+      expect(mockApi.put).toHaveBeenCalledWith(
+        "/api/providers",
+        {
+          provider: "ollama",
+          model: "llama3.1:latest",
+        },
+        expect.objectContaining({ schema: expect.anything() }),
+      );
     });
   });
 

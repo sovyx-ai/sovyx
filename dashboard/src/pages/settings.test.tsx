@@ -457,6 +457,7 @@ describe("SettingsPage", () => {
       expect(mockApi.put).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({ log_level: "DEBUG" }),
+        expect.objectContaining({ schema: expect.anything() }),
       );
     });
   });

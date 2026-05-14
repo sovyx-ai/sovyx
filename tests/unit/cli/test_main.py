@@ -570,7 +570,7 @@ class TestPreflightWarningSurface:
         # CLI helper resolves to our fixture rather than the dev's home.
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows fallback
-        (tmp_path / ".sovyx").mkdir()
+        (tmp_path / ".sovyx").mkdir(exist_ok=True)
         write_preflight_warnings_file(
             [
                 {

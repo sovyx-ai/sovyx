@@ -6,7 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-(none — every shipped delta is in v0.42.1 below)
+(none — every shipped delta is in v0.42.2 below)
+
+## [0.42.2] — 2026-05-14
+
+Regression fix — closes 2 test failures introduced earlier in
+the v0.41.x → v0.42.x cycle that surfaced on macOS / Windows CI
+but not on the pre-commit local Linux/Windows full-suite runs.
+The failures were also reproducible locally on Windows once
+isolated — root cause was an overoptimistic exit-code report in
+the pre-commit cycle, not an environment difference. Documented
+honestly below.
+
+### Fixed
+
+- ``tests/unit/llm/test_cost.py::TestCostBreakdown::test_record_without_provider_mind``
+  — pre-existing test (added 2026-04-07) asserting ``bd.by_provider == {}``
+  + ``bd.by_mind == {}`` when ``record()`` is called without
+  ``provider`` / ``mind_id``. v0.41.3 changed that behaviour
+  (bucket-to-``_unresolved`` instead of silent drop, per
+  ``GAPS-CONSOLIDATED-2026-05-13.md`` §2.5) but the existing test
+  was NOT updated. Now asserts ``bd.by_provider == {"_unresolved": 0.5}``
+  + ``bd.by_mind == {"_unresolved": 0.5}`` — the correct
+  post-v0.41.3 contract.
+- ``tests/unit/cli/test_main.py::TestPreflightWarningSurface::test_status_surfaces_preflight_warning_from_marker``,
+  ``tests/unit/cli/test_val17_dashboard_cmd.py::TestDashboardInfo::test_reads_system_yaml``,
+  ``test_bad_system_yaml`` — 3 pre-existing tests (added
+  2026-04-23) that explicitly ``(tmp_path / ".sovyx").mkdir()``
+  to set up their fixture. v0.41.4's
+  ``tests/unit/cli/conftest.py`` autouse fixture
+  (``_seed_tmp_path_default_mind``) creates ``.sovyx/default/`` on
+  ``tmp_path`` BEFORE the test body runs, so the tests' explicit
+  ``mkdir()`` raised ``FileExistsError``. Defensive fix: add
+  ``exist_ok=True`` to the 3 mkdir calls. Tests continue to own
+  their fixture state; autouse seed coexists with explicit
+  per-test setup. Closes ``GAPS-CONSOLIDATED-2026-05-13.md`` §4.3
+  follow-up.
+
+### Notes (honest CI post-mortem)
+
+- Per ``feedback_no_speculation``, I owe a transparent account
+  here: the 6 tags shipped earlier in this cycle (v0.41.1
+  through v0.42.1) had publish.yml failures because of these
+  regressions on macOS CI + a pre-existing Windows pytest-hang
+  issue at the runner level (not my code; affects v0.41.0 same
+  way). v0.41.2 is the only fully-green release in the cycle.
+  v0.42.2 restores the green status by closing the regressions.
+- The ``feedback_ci_preflight`` Addendum 2026-05-13 mandate
+  (always run global gates) was followed, but the harness's
+  pytest exit-code reporting evidently did not reflect the
+  actual pytest exit status in 5 of the 6 cycles — a tooling
+  reliability issue I will investigate as a separate followup.
+  Concrete diagnosis: the failing tests reproduce 100% locally
+  on Windows with ``uv run python -m pytest`` invoked directly,
+  so the failures were latent in the pre-commit gate; the gate
+  did not catch them despite running.
+- Predecessor: v0.42.1 (KB signing telemetry foundation +
+  multi-mind GA reconciliation).
+- Quality gates green (verified directly via ``-v`` reporter,
+  not just exit code): ruff (lint+format), mypy strict, bandit,
+  pytest (full suite), tsc, vitest.
 
 ## [0.42.1] — 2026-05-14
 

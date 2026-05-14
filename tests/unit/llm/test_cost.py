@@ -429,14 +429,20 @@ class TestCostBreakdown:
             assert bd.by_mind == {}
 
     async def test_record_without_provider_mind(self) -> None:
-        """Record without provider/mind still tracks daily and model."""
+        """Record without provider/mind tracks daily/model AND buckets the
+        missing-axis attribution into ``_unresolved`` (v0.41.3 defensive fix
+        — anti-pattern #35 surface in cost-tracking layer per
+        ``GAPS-CONSOLIDATED-2026-05-13.md`` §2.5).
+        """
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
         await g.record(0.5, "model", "c1")
         assert g.get_daily_spend() == pytest.approx(0.5)
         bd = g.get_breakdown("day")
         assert bd.by_model["model"] == pytest.approx(0.5)
-        assert bd.by_provider == {}
-        assert bd.by_mind == {}
+        # v0.41.3: empty provider/mind no longer silently dropped — they
+        # land in the ``_unresolved`` bucket + emit a structured WARN.
+        assert bd.by_provider == {"_unresolved": pytest.approx(0.5)}
+        assert bd.by_mind == {"_unresolved": pytest.approx(0.5)}
 
 
 class TestProviderMindQueries:
