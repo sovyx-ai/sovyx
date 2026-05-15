@@ -95,6 +95,7 @@ from sovyx.voice.health.contract._probe_result import (
     ProbeHistoryEntry,
     ProbeResult,
     RemediationHint,
+    RmsSummary,
 )
 
 __all__ = [
@@ -144,6 +145,7 @@ __all__ = [
     "ProbeMode",
     "ProbeResult",
     "RemediationHint",
+    "RmsSummary",
     "ValidationGates",
     "VerificationRecord",
     "WatchdogState",

@@ -201,6 +201,7 @@ from sovyx.voice.capture._restart import (
 )
 from sovyx.voice.capture._restart_mixin import RestartMixin
 from sovyx.voice.capture._ring import RingMixin
+from sovyx.voice.health.contract import RmsSummary
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -218,6 +219,22 @@ if TYPE_CHECKING:
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
 logger = get_logger(__name__)
+
+
+def _compute_rms_summary(frames: Any) -> RmsSummary:  # noqa: ANN401 — numpy lazy
+    """Mission C1 §T1.2.a — aggregate RMS over a frame buffer.
+
+    Pure helper, no AudioCaptureTask state — ``asyncio.to_thread``-safe
+    per anti-pattern #14. Empty buffer yields :meth:`RmsSummary.empty`.
+    Reuses the canonical :func:`_rms_db_int16` so the RMS calculation
+    matches the per-frame value in :attr:`AudioCaptureTask.last_rms_db`.
+    """
+    if frames is None or len(frames) == 0:
+        return RmsSummary.empty()
+    return RmsSummary(
+        rms_db=_rms_db_int16(frames),
+        samples_observed=int(len(frames)),
+    )
 
 
 class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, RestartMixin):
@@ -511,6 +528,76 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         if normalizer is None:
             return
         normalizer.set_ducking_gain_db(gain_db)
+
+    async def recent_rms_db_summary(self, seconds: float) -> RmsSummary:
+        """Mission C1 §T1.2.a + §20.J — RMS summary over recent audio.
+
+        Consumes :meth:`tap_recent_frames` to get the post-normalization
+        buffer, then aggregates RMS via numpy in ``asyncio.to_thread``
+        (anti-pattern #14: NumPy FFT-equivalent CPU work must not block
+        the event loop).
+
+        Never raises — tap or compute failures collapse into
+        :meth:`RmsSummary.empty`. Callers MUST gate downstream decisions
+        on ``samples_observed > 0``.
+        """
+        if seconds <= 0:
+            return RmsSummary.empty()
+        try:
+            frames = await self.tap_recent_frames(seconds)
+        except Exception as exc:  # noqa: BLE001 — telemetry must never raise upward
+            logger.debug(
+                "recent_rms_db_summary_tap_failed",
+                seconds=seconds,
+                error=str(exc),
+            )
+            return RmsSummary.empty()
+        if frames.size == 0:
+            return RmsSummary.empty()
+        return await asyncio.to_thread(_compute_rms_summary, frames)
+
+    async def engage_frame_normalizer(self) -> None:
+        """Mission C1 §T1.8 — force stream reopen to engage FrameNormalizer.
+
+        Recovery action for :attr:`IntegrityVerdict.FORMAT_MISMATCH`.
+        :class:`FrameNormalizer._passthrough` is set at construction and
+        IMMUTABLE post-construction (per ``_frame_normalizer.py:434``);
+        a reopen renegotiates the source layout + reconstructs the
+        normalizer with the corrected target rate / channels.
+
+        Idempotent: if the current normalizer is already non-passthrough
+        the call is a no-op. The new event
+        ``audio_capture_resample_engagement_requested`` distinguishes
+        runtime re-engagement from the construction-time
+        ``audio_capture_resample_active`` (which fires whenever the
+        normalizer is instantiated with non-passthrough config — both
+        first open AND every restart).
+
+        Anti-pattern #35 — ``mind_id`` flows through via the existing
+        :meth:`request_shared_restart` path which rebuilds the
+        normalizer with ``self._pipeline.config.mind_id`` (see
+        ``_capture_task.py:625``); no sentinel risk here.
+        """
+        normalizer = self._normalizer
+        if normalizer is not None and not normalizer.is_passthrough:
+            logger.debug(
+                "audio_capture_resample_engagement_skipped_already_engaged",
+                input_device=self._input_device,
+                host_api=self._host_api_name,
+            )
+            return
+        logger.info(
+            "audio_capture_resample_engagement_requested",
+            input_device=self._input_device,
+            host_api=self._host_api_name,
+            current_passthrough=normalizer is None or normalizer.is_passthrough,
+        )
+        # Trigger a fresh open via the existing shared-restart path.
+        # The restart machinery rebuilds the FrameNormalizer with the
+        # current source layout — if the source has changed since the
+        # initial open (e.g. PipeWire renegotiated to native 48 kHz
+        # after a hotplug), the new normalizer will engage non-passthrough.
+        await self.request_shared_restart()
 
     # -- Lifecycle ------------------------------------------------------------
 

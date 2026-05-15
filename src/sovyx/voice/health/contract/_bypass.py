@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -396,6 +396,18 @@ class BypassContext:
     probe_fn: Callable[[], Awaitable[IntegrityResult]]
     current_device_index: int = -1
     current_device_kind: str = "unknown"
+    # Mission C1 §T1.4.a + §20.D — reference to the live VoicePipeline.
+    # Carried as Any to keep the contract module circular-import-free
+    # (VoicePipeline lives in sovyx.voice.pipeline._orchestrator which
+    # imports from health/contract). Consumers cast to VoicePipeline at
+    # use site. Optional default preserves backward compat with the
+    # bypass-strategy iterator and existing tests that construct
+    # BypassContext without a pipeline reference; the v0.44.0 VAD-
+    # frontend reset ladder (T1.4) requires this field to be populated
+    # so L1 (silero.reset()) / L2 (re-instantiate) mutate the LIVE
+    # pipeline VAD, NOT the probe's VAD (per capture_integrity.py:185-189
+    # cross-contamination guard).
+    pipeline_ref: Any | None = None
 
 
 @dataclass(frozen=True, slots=True)

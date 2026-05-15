@@ -213,6 +213,12 @@ class KernelInvalidatedRechecker:
             # Re-add to extend the TTL — the underlying state has not
             # cleared, so the user-visible "quarantined since" timer
             # should reflect the most recent failed recheck.
+            #
+            # Mission C1 §T1.7.a — pass derived_reason=None (default) so
+            # EndpointQuarantine.add() INHERITS the original verdict-
+            # derived class from the prior entry. The lifecycle re-add
+            # tag goes on ``reason`` ("watchdog_recheck") while the
+            # forensic-stable verdict tag survives on ``derived_reason``.
             self._quarantine.add(
                 endpoint_guid=entry.endpoint_guid,
                 device_friendly_name=entry.device_friendly_name,
@@ -220,6 +226,7 @@ class KernelInvalidatedRechecker:
                 host_api=entry.host_api,
                 reason="watchdog_recheck",
                 physical_device_id=entry.physical_device_id,
+                # derived_reason omitted → inherit (T1.7.a guarantee).
             )
             record_kernel_invalidated_event(
                 platform=result.combo.platform_key or "unknown",

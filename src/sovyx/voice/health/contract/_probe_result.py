@@ -38,7 +38,43 @@ __all__ = [
     "ProbeHistoryEntry",
     "ProbeResult",
     "RemediationHint",
+    "RmsSummary",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class RmsSummary:
+    """Rolling-window RMS summary computed by :meth:`CaptureTaskProto.recent_rms_db_summary`.
+
+    Mission C1 §T1.2.a + §20.J — the coordinator's VAD_FRONTEND_DEAD
+    signal-2 cross-check (§2.3) requires confirming that audio energy
+    was sustained above the APO floor across the recent window. The
+    per-frame :attr:`AudioCaptureTask.last_rms_db` is scalar; this
+    aggregate is computed on demand from the post-normalization ring
+    buffer.
+
+    Attributes:
+        rms_db: RMS over the requested window in dBFS. ``-120.0`` is
+            the canonical "empty / silent" floor (matches the integrity
+            probe convention at ``capture_integrity.py:_RMS_FLOOR_DB``).
+        samples_observed: Number of int16 samples the summary covers.
+            Zero when the ring buffer has no data for the requested
+            window (e.g. capture just started, or stream is being
+            reopened). Callers MUST gate downstream decisions on
+            ``samples_observed > 0`` to avoid acting on stale data.
+    """
+
+    rms_db: float
+    samples_observed: int
+
+    @classmethod
+    def empty(cls) -> RmsSummary:
+        """Canonical empty summary — RMS at floor, zero samples observed.
+
+        Used as the no-data sentinel by callers / fakes that cannot
+        produce a real summary (probe failure, stream not started).
+        """
+        return cls(rms_db=-120.0, samples_observed=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,3 +299,45 @@ class CaptureTaskProto(Protocol):
         ...
 
     def apply_mic_ducking_db(self, gain_db: float) -> None: ...
+
+    async def recent_rms_db_summary(self, seconds: float) -> RmsSummary:
+        """Mission C1 §T1.2.a — RMS summary over the recent ``seconds``.
+
+        Reads from the post-normalization ring buffer (same source
+        :meth:`tap_recent_frames` consumes) and aggregates into a single
+        :class:`RmsSummary`. The coordinator uses this as cross-check
+        signal-2 for :attr:`IntegrityVerdict.VAD_FRONTEND_DEAD` (§2.3):
+        the verdict is accepted only when both per-probe history (the
+        classifier's history-window check) AND per-frame rolling RMS
+        confirm sustained energy.
+
+        Never raises; tap / analysis hiccups collapse into
+        :meth:`RmsSummary.empty`. Implementations SHOULD offload the
+        numpy aggregation via ``asyncio.to_thread`` (anti-pattern #14).
+
+        Args:
+            seconds: Window size. Non-positive values return
+                :meth:`RmsSummary.empty` without touching the buffer.
+
+        Returns:
+            A :class:`RmsSummary` whose ``samples_observed`` callers
+            MUST check before acting on the ``rms_db`` value.
+        """
+        ...
+
+    async def engage_frame_normalizer(self) -> None:
+        """Mission C1 §T1.8 — force a stream reopen so FrameNormalizer
+        rebuilds against the current source layout.
+
+        Recovery action for :attr:`IntegrityVerdict.FORMAT_MISMATCH`.
+        The FrameNormalizer's ``is_passthrough`` state is set at
+        construction time and immutable thereafter
+        (``_frame_normalizer.py:434``); engagement requires a full
+        stream reopen which triggers FrameNormalizer reconstruction
+        with the renegotiated source rate / channel layout.
+
+        Idempotent: if the normalizer is already non-passthrough
+        (i.e. actively resampling / re-channeling) the call is a no-op
+        with a debug log. Callers may invoke unconditionally.
+        """
+        ...

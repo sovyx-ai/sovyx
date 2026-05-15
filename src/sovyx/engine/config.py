@@ -1214,6 +1214,20 @@ class VoiceTuningConfig(BaseSettings):
     # APO_DEGRADED's bypass-strategy ladder.
     integrity_history_window_probes: int = 5
 
+    # Mission C1 §T1.4.b + §20.I — AGC2 floor-lift cap for the VAD-frontend
+    # reset ladder L4 step. Bounds the maximum upward delta the reset
+    # ladder may apply to AGC2's speech-level target relative to the
+    # observed pre-lift level. Defends against the interaction with the
+    # Silero quiet-signal hallucination gate (vad.py:716-744): lifting
+    # too aggressively pulls a -70 dBFS noise floor into the band where
+    # Silero hallucinates speech, defeating T4.39 if the operator has
+    # quiet_signal_gate_enabled.
+    #
+    # 6.0 dB matches the typical mic-preamp gain bump operators apply
+    # manually for low-output USB mics; higher values risk pulling
+    # comfort noise into the VAD's response region.
+    vad_frontend_reset_max_gain_lift_db: float = 6.0
+
     # APO_DEGRADED quarantine — mirrors the KERNEL_INVALIDATED
     # precedent. When a strategy iterator exhausts without restoring
     # integrity, the endpoint is quarantined and the factory fails

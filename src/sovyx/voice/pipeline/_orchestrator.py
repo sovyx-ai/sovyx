@@ -734,6 +734,59 @@ class VoicePipeline(
             },
         )
 
+    async def reset_vad(self) -> None:
+        """Mission C1 §T1.4.a — clear the LIVE pipeline VAD's LSTM state.
+
+        L1 of the VAD-frontend reset ladder (§4.4 ADR-D4). Routes to
+        :meth:`SileroVAD.reset` which zeros the recurrent ``_LSTM_STATE``
+        + FSM scalars. Cost is bounded by a couple of numpy ``zeros((2,1,128))``
+        + scalar assignments — << 1 ms; runs inline rather than via
+        ``asyncio.to_thread`` (matches the pattern in the orchestrator's
+        coroutine-local utilities).
+
+        **Targets the LIVE pipeline VAD** — distinct from the
+        :class:`CaptureIntegrityProbe`'s separate VAD instance
+        (``capture_integrity.py:185-189`` cross-contamination guard).
+        Resetting the probe's VAD via :meth:`SileroVAD.reset` is a no-op
+        for operator deafness; this method gives the recovery ladder
+        access to the right instance.
+
+        Anti-pattern #14 — ``SileroVAD.reset`` is pure numpy zeroing,
+        bounded latency, no I/O; safe to invoke from the event loop
+        without ``to_thread`` offloading.
+        """
+        self._vad.reset()
+
+    async def swap_vad(self, new_vad: SileroVAD) -> None:
+        """Mission C1 §T1.4.a — atomically replace the LIVE pipeline VAD.
+
+        L2 of the VAD-frontend reset ladder (§4.4 ADR-D4). Called when
+        L1 :meth:`reset_vad` did not restore VAD responsiveness, meaning
+        the ONNX session state itself is corrupted and a fresh
+        :class:`SileroVAD` instantiation is required.
+
+        Atomic from the perspective of the inference path
+        (``feed_frame`` line ~965): Python assignment of ``self._vad`` is
+        a single bytecode op, so the inference loop will see either the
+        old or the new VAD, never a partial mix. The defensive
+        ``new_vad.reset()`` after the swap guarantees the new instance
+        starts in a clean LSTM state regardless of how the caller built
+        it.
+
+        The OLD instance is discarded — GC eventually frees its ONNX
+        session. Tests that need to assert "the OLD vad was replaced"
+        should snapshot ``self._vad`` BEFORE the call.
+
+        Args:
+            new_vad: A freshly-constructed :class:`SileroVAD` instance.
+                Construction (with ``asyncio.to_thread`` to honor
+                anti-pattern #14 on the ONNX session load) is the
+                caller's responsibility; this method only handles the
+                handoff.
+        """
+        self._vad = new_vad
+        new_vad.reset()
+
     # -- State property + saga lifecycle ------------------------------------
 
     @property

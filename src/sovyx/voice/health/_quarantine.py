@@ -106,6 +106,17 @@ class QuarantineEntry:
     expires_at_monotonic: float
     reason: str
     physical_device_id: str = ""
+    # Mission C1 §T1.7 + §20.M T1.7.a — verdict-derived quarantine
+    # reason class. During LENIENT (v0.44.x) the legacy ``reason`` field
+    # carries the pre-mission default (typically ``"apo_degraded"``)
+    # while ``derived_reason`` carries the verdict-driven value
+    # (``"apo_degraded"`` | ``"vad_frontend_dead"`` | ``"format_mismatch"``).
+    # Preserved across TTL re-extensions by :meth:`EndpointQuarantine.add`
+    # so the watchdog's recheck loop can route per-class even when the
+    # lifecycle re-add overwrites ``reason`` with ``"watchdog_recheck"``.
+    # STRICT flip in v0.45.0 promotes this to the primary ``reason`` and
+    # drops the legacy field.
+    derived_reason: str = ""
 
 
 class EndpointQuarantine:
@@ -202,6 +213,7 @@ class EndpointQuarantine:
         host_api: str = "",
         reason: str = "probe",
         physical_device_id: str = "",
+        derived_reason: str | None = None,
     ) -> QuarantineEntry:
         """Add ``endpoint_guid`` to quarantine and return the new entry.
 
@@ -216,6 +228,17 @@ class EndpointQuarantine:
         :meth:`is_quarantined_physical` can short-circuit a failover to
         another host-API alias of the same wedged driver. Empty means
         "legacy add" — only the ``endpoint_guid`` alias is guarded.
+
+        Mission C1 §T1.7.a — ``derived_reason`` carries the verdict-
+        driven reason class (see :class:`QuarantineEntry.derived_reason`
+        docstring). Pass ``None`` (the default) to INHERIT from any
+        prior entry for the same GUID; this preserves the forensic-
+        stable verdict tag across TTL re-extensions by the watchdog
+        rechecker (which legitimately re-adds with
+        ``reason="watchdog_recheck"`` but should not clobber the
+        original verdict class). Pass an explicit string to set a fresh
+        value (e.g., the CaptureIntegrityCoordinator passes the verdict-
+        derived value at first quarantine event).
 
         Evicts the oldest entry (by insertion order) when the store is
         at capacity.
@@ -254,6 +277,16 @@ class EndpointQuarantine:
                     "extend quarantine_s if recovery genuinely needs longer."
                 ),
             )
+        # Mission C1 §T1.7.a — derived_reason inheritance. When caller
+        # passes None (e.g. watchdog recheck re-add), look up the prior
+        # entry and preserve its derived_reason. Explicit empty string
+        # ("") is treated as "set fresh empty", NOT inherit — operators
+        # can clear the derived tag deliberately.
+        if derived_reason is None:
+            prior = self._entries.get(endpoint_guid)
+            resolved_derived_reason = prior.derived_reason if prior is not None else ""
+        else:
+            resolved_derived_reason = derived_reason
         entry = QuarantineEntry(
             endpoint_guid=endpoint_guid,
             device_friendly_name=device_friendly_name,
@@ -263,6 +296,7 @@ class EndpointQuarantine:
             expires_at_monotonic=now + self._quarantine_s,
             reason=reason,
             physical_device_id=physical_device_id,
+            derived_reason=resolved_derived_reason,
         )
         # Pop-and-reinsert keeps ordering stable whether this is a new
         # entry or a replacement — OrderedDict would otherwise preserve
@@ -559,9 +593,107 @@ def reset_default_quarantine() -> None:
     _SINGLETON = None
 
 
+# Mission C1 §T1.7.b + §20.M — centralized recheck-eligibility classifier.
+#
+# Two recheck loops consume quarantine entries:
+#
+#   1. ``watchdog._apo_recheck_loop`` (watchdog.py:541) — warm-probe
+#      reclassification of APO-class endpoints (the original purpose:
+#      a Voice Clarity APO may retire after a Windows Update, freeing
+#      the endpoint without operator action). Filtered to APO-class
+#      reasons only.
+#   2. ``_kernel_invalidated_recheck`` (this package's sibling module) —
+#      cold-probe re-attempt for kernel-invalidated endpoints. Iterates
+#      ALL entries without filtering today; Mission C1 §T2.1.a tightens
+#      this with the ``is_recheck_eligible`` filter so the new
+#      ``vad_frontend_dead`` / ``format_mismatch`` classes don't get
+#      re-probed (their recovery is via the reset ladder BEFORE
+#      quarantine, not via re-probe of a quarantined endpoint).
+#
+# Both classifiers operate on the verdict-derived reason value (or, for
+# pre-mission entries written before T1.7 lands, the legacy ``reason``
+# field). Frozensets keep the membership-test O(1).
+
+
+_APO_CLASS_REASONS: frozenset[str] = frozenset(
+    {
+        "apo_degraded",
+        # Mission C1 v0.44.0 — vad_frontend_dead is an APO-CLASS reason
+        # for purposes of the APO recheck loop ONLY because its recovery
+        # is mechanically similar (warm probe + see if state cleared).
+        # The cold-probe rechecker explicitly EXCLUDES it via
+        # is_recheck_eligible — see that helper's docstring.
+        "vad_frontend_dead",
+        "format_mismatch",
+    },
+)
+
+_RECHECK_INELIGIBLE_REASONS: frozenset[str] = frozenset(
+    {
+        # Mission C1 v0.44.0 — vad_frontend_dead is recovered by the
+        # VAD-frontend reset ladder which fires BEFORE quarantine. Once
+        # quarantined under this class, no cold-probe re-attempt will
+        # restore the endpoint (Silero session state is per-process; a
+        # fresh probe re-classifies dead). Only TTL expiry, operator-
+        # initiated doctor --fix, or daemon restart cures.
+        "vad_frontend_dead",
+        # Mission C1 v0.44.0 — format_mismatch is recovered by stream
+        # reopen (T1.8 engage_frame_normalizer). Same logic: re-probing
+        # the same endpoint won't change the underlying source layout.
+        "format_mismatch",
+    },
+)
+
+
+def is_apo_class_reason(reason: str) -> bool:
+    """True iff the quarantine reason routes to the APO recheck loop.
+
+    Mission C1 §T1.7.b — consumed by
+    ``watchdog._apo_recheck_loop`` (and any future warm-probe recheck
+    loop). The classifier centralizes the membership test so adding
+    new APO-class reasons in future versions only requires updating
+    ``_APO_CLASS_REASONS`` here.
+
+    Args:
+        reason: Either ``QuarantineEntry.derived_reason`` (post-T1.7
+            entries) or ``QuarantineEntry.reason`` fallback (pre-T1.7
+            entries). Empty string returns False.
+
+    Returns:
+        True iff ``reason`` is in the canonical APO-class set.
+    """
+    return reason in _APO_CLASS_REASONS
+
+
+def is_recheck_eligible(reason: str) -> bool:
+    """True iff the kernel-invalidated rechecker should re-probe this entry.
+
+    Mission C1 §T1.7.b — defensive filter for the cold-probe rechecker.
+    Reasons like ``vad_frontend_dead`` / ``format_mismatch`` are NOT
+    recheck-eligible because their recovery happens BEFORE quarantine
+    (via the reset ladder or stream reopen). A cold re-probe of the
+    quarantined endpoint will just re-detect the same dead state and
+    burn the rechecker's budget.
+
+    Args:
+        reason: Either ``QuarantineEntry.derived_reason`` (post-T1.7
+            entries) or ``QuarantineEntry.reason`` fallback (pre-T1.7
+            entries). Empty string returns True (legacy entries
+            without derived_reason default to recheck-eligible to
+            preserve pre-mission behavior).
+
+    Returns:
+        True iff the rechecker should attempt a cold probe; False to
+        skip the entry (it will expire on its own TTL).
+    """
+    return reason not in _RECHECK_INELIGIBLE_REASONS
+
+
 __all__ = [
     "EndpointQuarantine",
     "QuarantineEntry",
     "get_default_quarantine",
+    "is_apo_class_reason",
+    "is_recheck_eligible",
     "reset_default_quarantine",
 ]

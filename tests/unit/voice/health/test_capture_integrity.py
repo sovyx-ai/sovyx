@@ -40,6 +40,7 @@ from sovyx.voice.health.contract import (
     BypassVerdict,
     IntegrityResult,
     IntegrityVerdict,
+    RmsSummary,
 )
 
 # ── Test doubles ─────────────────────────────────────────────────────
@@ -128,6 +129,17 @@ class _FakeCaptureTask:
 
     def apply_mic_ducking_db(self, gain_db: float) -> None:  # pragma: no cover
         pass
+
+    # Mission C1 §T1.2.a + §T1.8 CaptureTaskProto extensions. Tests that
+    # need to exercise the coordinator-side history cross-check or the
+    # FORMAT_MISMATCH dispatch override these on a per-test basis.
+    async def recent_rms_db_summary(
+        self, seconds: float
+    ) -> RmsSummary:  # pragma: no cover  # noqa: ARG002
+        return RmsSummary.empty()
+
+    async def engage_frame_normalizer(self) -> None:  # pragma: no cover
+        return None
 
 
 @dataclass
