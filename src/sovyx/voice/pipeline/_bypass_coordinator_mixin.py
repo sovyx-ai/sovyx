@@ -85,6 +85,62 @@ _COORDINATOR_PENDING_TIMEOUT_S = _VoiceTuning().pipeline_coordinator_pending_tim
 ``VoiceTuningConfig.pipeline_coordinator_pending_timeout_seconds``."""
 
 
+# Mission C1 §20.M T1.6.b — verdict-classified terminal-latch predicate.
+# Defined module-level so tests can call it without instantiating
+# :class:`BypassCoordinatorMixin` and so the classification is single-
+# source-of-truth.
+_NON_TERMINAL_VERDICTS: frozenset[BypassVerdict] = frozenset(
+    {
+        # Ladder success — pipeline is healthy again, future heartbeats welcome.
+        BypassVerdict.VAD_FRONTEND_RESET_APPLIED_HEALTHY,
+        # Coordinator dispatch requests — factory consumer handles them;
+        # next deaf heartbeat re-evaluates whether the request fixed it.
+        BypassVerdict.CASCADE_REEVALUATION_REQUESTED,
+        BypassVerdict.NORMALIZER_ENGAGEMENT_REQUESTED,
+    },
+)
+"""Verdicts that, when present in ANY outcome of a coordinator
+invocation's return list, mark the outcome set as NON-terminal — the
+mixin must NOT latch ``_coordinator_terminated`` and must NOT emit
+``voice_apo_bypass_ineffective``. Every other verdict is terminal under
+the pre-mission semantics (any non-empty outcome ⇒ latch) — see
+:func:`_is_terminal_outcome_set` for the inverted predicate."""
+
+
+def _is_terminal_outcome_set(outcomes: Sequence[BypassOutcome]) -> bool:
+    """Return ``True`` iff the outcome set warrants latching
+    :attr:`_coordinator_terminated`.
+
+    Preserves the pre-mission semantics (``len(outcomes) > 0 → terminal``)
+    EXCEPT when the outcome set contains at least one Mission C1
+    non-terminal verdict:
+
+    * :attr:`BypassVerdict.VAD_FRONTEND_RESET_APPLIED_HEALTHY` — the
+      reset ladder recovered the live stream; pipeline is healthy again
+      and future deaf heartbeats are welcome.
+    * :attr:`BypassVerdict.CASCADE_REEVALUATION_REQUESTED` and
+      :attr:`BypassVerdict.NORMALIZER_ENGAGEMENT_REQUESTED` — the
+      coordinator dispatched a downstream request; the factory consumer
+      handles it and the next deaf heartbeat re-evaluates whether the
+      handler resolved the underlying fault.
+
+    All OTHER verdicts (APPLIED_HEALTHY / APPLIED_STILL_DEAD /
+    FAILED_TO_APPLY / REVERTED / NOT_APPLICABLE /
+    VAD_FRONTEND_RESET_APPLIED_STILL_DEAD) reach this predicate only
+    after strategy iteration OR ladder run — both of which conclude
+    with the coordinator either succeeding (APPLIED_HEALTHY) or
+    quarantining the endpoint (every other case). The mixin's terminal
+    latch is appropriate in both subcases.
+
+    Pre-mission this method was the implicit ``len(outcomes) > 0`` test
+    at line 315 — which silenced future heartbeats forever on any
+    non-empty outcome including benign dispatch requests. See §20.E.
+    """
+    if not outcomes:
+        return False
+    return not any(o.verdict in _NON_TERMINAL_VERDICTS for o in outcomes)
+
+
 class BypassCoordinatorMixin:
     """CaptureIntegrityCoordinator invocation delegation.
 
@@ -312,7 +368,33 @@ class BypassCoordinatorMixin:
                     # the pre-O2 tight-retry pattern.
                     return
 
-                self._coordinator_terminated = True
+                # Mission C1 §20.M T1.6.b — verdict-classified terminal
+                # latch. Pre-mission ANY non-empty outcome set latched
+                # ``_coordinator_terminated``, which would (a) silence
+                # all future deaf heartbeats forever, and (b) — combined
+                # with the line 355 ``applied_healthy is None`` branch —
+                # emit ``voice_apo_bypass_ineffective`` on benign
+                # coordinator dispatch outcomes (CASCADE_REEVALUATION_
+                # REQUESTED, NORMALIZER_ENGAGEMENT_REQUESTED), which are
+                # NOT failures and should not latch the mixin.
+                #
+                # Terminal verdicts (latch on):
+                # * APPLIED_HEALTHY (legacy strategy success)
+                # * ALL outcomes NOT_APPLICABLE (T6.15 unrecoverable)
+                # * Ladder exhausted (every outcome is APPLIED_STILL_DEAD
+                #   or VAD_FRONTEND_RESET_APPLIED_STILL_DEAD — no recovery
+                #   step worked, coordinator quarantined the endpoint)
+                #
+                # Non-terminal (do NOT latch):
+                # * CASCADE_REEVALUATION_REQUESTED (dispatch — driver
+                #   silent; failover IS the cascade re-walk, but the
+                #   pipeline itself may recover when failover binds a
+                #   surrogate, so future heartbeats are welcome)
+                # * NORMALIZER_ENGAGEMENT_REQUESTED (dispatch — stream
+                #   re-open in progress; next deaf heartbeat re-evaluates)
+                # * VAD_FRONTEND_RESET_APPLIED_HEALTHY (ladder success —
+                #   pipeline healthy again, future heartbeats welcome)
+                self._coordinator_terminated = _is_terminal_outcome_set(outcomes)
                 applied_healthy = next(
                     (o for o in outcomes if o.verdict is BypassVerdict.APPLIED_HEALTHY),
                     None,
@@ -344,6 +426,57 @@ class BypassCoordinatorMixin:
                             "voice.consecutive_deaf_warnings": invocation_counter_snapshot,
                             "voice.threshold": self._auto_bypass_threshold,
                         },
+                    )
+                    return
+
+                # Mission C1 §20.M T1.6.b — VAD-frontend ladder success
+                # is a distinct success path from the legacy
+                # APPLIED_HEALTHY: pipeline is healthy again but the
+                # coordinator did NOT latch terminated (per
+                # :func:`_is_terminal_outcome_set`) so future deaf
+                # heartbeats remain welcome. Emit a distinct event so
+                # dashboards can attribute Sovyx-side recovery (Silero
+                # reset / normalizer engage) separately from OS-side
+                # bypass success (Voice Clarity disable etc.).
+                ladder_healthy = next(
+                    (
+                        o
+                        for o in outcomes
+                        if o.verdict is BypassVerdict.VAD_FRONTEND_RESET_APPLIED_HEALTHY
+                    ),
+                    None,
+                )
+                if ladder_healthy is not None:
+                    logger.warning(
+                        "voice_vad_frontend_reset_activated",
+                        mind_id=self._config.mind_id,
+                        step=ladder_healthy.strategy_name,
+                        attempt_index=ladder_healthy.attempt_index,
+                        reason=ladder_healthy.detail,
+                        consecutive_deaf_warnings=invocation_counter_snapshot,
+                        threshold=self._auto_bypass_threshold,
+                        action="vad_frontend_reset_ladder",
+                        coordinator_terminated=self._coordinator_terminated,
+                    )
+                    return
+
+                # Mission C1 §20.M T1.6.b — non-terminal coordinator
+                # dispatch outcomes (CASCADE_REEVALUATION_REQUESTED,
+                # NORMALIZER_ENGAGEMENT_REQUESTED) are REQUESTS to the
+                # factory consumer, NOT failures. Emit an info-level
+                # observability event so dashboards see the dispatch
+                # without surfacing it as a bypass failure. Pre-mission
+                # this branch fell through to ``voice_apo_bypass_ineffective``
+                # + ``audio.apo.bypassed verdict=failure`` — the EXACT
+                # wrong dashboard signal for a benign coordinator
+                # request (see §20.E).
+                if not self._coordinator_terminated:
+                    logger.info(
+                        "voice.coordinator.dispatch_acknowledged",
+                        mind_id=self._config.mind_id,
+                        verdicts=[o.verdict.value for o in outcomes],
+                        consecutive_deaf_warnings=invocation_counter_snapshot,
+                        threshold=self._auto_bypass_threshold,
                     )
                     return
 

@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
@@ -39,7 +39,13 @@ from sovyx.voice.health._metrics import (
     record_bypass_strategy_verdict,
     record_capture_integrity_verdict,
 )
+from sovyx.voice.health._metrics_bypass_coordinator import (
+    record_coordinator_benign_skip,
+    record_coordinator_outcome,
+    record_quarantine_reason_dual_emit,
+)
 from sovyx.voice.health._quarantine import get_default_quarantine
+from sovyx.voice.health._vad_frontend_recovery import VADFrontendRecovery
 from sovyx.voice.health.bypass._strategy import BypassApplyError, BypassRevertError
 from sovyx.voice.health.contract import (
     BypassContext,
@@ -78,6 +84,31 @@ _MIN_SAMPLES_FOR_ANALYSIS = _VAD_WINDOW_SAMPLES * 4
 # Floor for log10(RMS) — matches :mod:`sovyx.voice._capture_task`. Kept
 # private so the two modules can diverge if a future bugfix needs it.
 _RMS_FLOOR_DB = -120.0
+
+
+# Mission C1 §T1.7 — terminal-verdict → quarantine derived-reason map.
+# Each :class:`IntegrityVerdict` that can reach
+# :meth:`CaptureIntegrityCoordinator._quarantine_endpoint` as a terminal
+# verdict maps to a low-cardinality reason string persisted on
+# :attr:`QuarantineEntry.derived_reason`. The legacy
+# :attr:`QuarantineEntry.reason` field stays ``"apo_degraded"`` for the
+# LENIENT v0.44.x cycle so downstream consumers (watchdog recheck,
+# dashboard, runtime failover) keep working unchanged; the v0.45.0
+# STRICT flip drops the legacy field and promotes ``derived_reason``.
+#
+# Verdicts NOT in this map (HEALTHY, VAD_MUTE, INCONCLUSIVE) MUST NEVER
+# reach :meth:`_quarantine_endpoint` — HEALTHY short-circuits before
+# dispatch, VAD_MUTE is a benign-skip return, INCONCLUSIVE retries.
+# Unknown verdicts fall through to :data:`_DEFAULT_QUARANTINE_REASON`
+# (the legacy ``"apo_degraded"``) so adding a future verdict without
+# explicit dispatch is forward-compatible.
+_VERDICT_TO_QUARANTINE_REASON: dict[IntegrityVerdict, str] = {
+    IntegrityVerdict.APO_DEGRADED: "apo_degraded",
+    IntegrityVerdict.DRIVER_SILENT: "driver_silent",
+    IntegrityVerdict.VAD_FRONTEND_DEAD: "vad_frontend_dead",
+    IntegrityVerdict.FORMAT_MISMATCH: "format_mismatch",
+}
+_DEFAULT_QUARANTINE_REASON = "apo_degraded"
 
 # Rolloff cumulative-energy fraction. 0.85 is the standard MIR choice
 # (librosa default); tightening below 0.85 makes the probe more
@@ -606,6 +637,7 @@ class CaptureIntegrityCoordinator:
         platform_key: str,
         tuning: VoiceTuningConfig | None = None,
         quarantine: EndpointQuarantine | None = None,
+        pipeline_ref: object | None = None,
     ) -> None:
         self._probe = probe
         self._strategies = tuple(strategies)
@@ -613,6 +645,15 @@ class CaptureIntegrityCoordinator:
         self._platform_key = platform_key
         self._tuning = tuning
         self._quarantine = quarantine if quarantine is not None else get_default_quarantine()
+        # Mission C1 §T1.4.a + §20.D — reference to the live VoicePipeline.
+        # Plumbed into every :class:`BypassContext` so the VAD-frontend
+        # reset ladder (T1.4) can mutate the LIVE pipeline VAD, NOT the
+        # probe's separate VAD instance (see ``capture_integrity.py``
+        # cross-contamination guard). Typed :class:`object` to keep this
+        # module's import surface circular-free; the ladder casts to a
+        # structural :class:`_PipelineWithVADReset` Protocol in
+        # ``_vad_frontend_recovery.py``.
+        self._pipeline_ref = pipeline_ref
         self._is_resolved = False
         self._lock = asyncio.Lock()
 
@@ -643,13 +684,131 @@ class CaptureIntegrityCoordinator:
                 verdict=before.verdict.value,
                 phase="pre_bypass",
             )
-            if before.verdict is IntegrityVerdict.HEALTHY:
-                logger.info(
-                    "capture_integrity_coordinator_false_alarm",
-                    endpoint_guid=context.endpoint_guid,
-                )
-                self._is_resolved = True
-                return []
+
+            # Mission C1 §T1.3 — pre-bypass verdict-router dispatch.
+            # Each verdict maps to a disjoint downstream remediation per
+            # anti-pattern #39(a). Only APO_DEGRADED and INCONCLUSIVE
+            # fall through to the strategy iteration loop below.
+            #
+            # §20.A — benign branches (VAD_MUTE) do NOT set
+            # ``_is_resolved``. The one-shot contract belongs to TERMINAL
+            # verdicts only; benign skips must remain responsive to the
+            # next legitimate deaf signal. The mixin's
+            # ``_coordinator_invocation_pending`` flag prevents tight-
+            # loop re-entry within a single invocation window.
+            #
+            # §20.B — :func:`assert_never` enforces mypy strict
+            # exhaustiveness: a future :class:`IntegrityVerdict` member
+            # added without explicit dispatch here is a type error.
+            match before.verdict:
+                case IntegrityVerdict.HEALTHY:
+                    logger.info(
+                        "capture_integrity_coordinator_false_alarm",
+                        endpoint_guid=context.endpoint_guid,
+                    )
+                    record_coordinator_benign_skip(
+                        verdict=before.verdict.value,
+                        reason="false_alarm",
+                    )
+                    self._is_resolved = True
+                    return []
+                case IntegrityVerdict.VAD_MUTE:
+                    # Benign — user not speaking. Re-probe will fire on
+                    # the next deaf heartbeat.
+                    logger.info(
+                        "capture_integrity_coordinator_benign_skip",
+                        verdict=before.verdict.value,
+                        endpoint_guid=context.endpoint_guid,
+                        reason="user_not_speaking",
+                    )
+                    record_coordinator_benign_skip(
+                        verdict=before.verdict.value,
+                        reason="user_not_speaking",
+                    )
+                    return []
+                case IntegrityVerdict.DRIVER_SILENT:
+                    # Driver open but not delivering — cascade re-walk
+                    # is the correct fix, not bypass. Factory consumer
+                    # routes through runtime failover (which IS the
+                    # cascade re-walk path).
+                    logger.warning(
+                        "capture_integrity_coordinator_request_cascade_reevaluation",
+                        verdict=before.verdict.value,
+                        endpoint_guid=context.endpoint_guid,
+                    )
+                    record_coordinator_outcome(
+                        verdict=BypassVerdict.CASCADE_REEVALUATION_REQUESTED.value,
+                        reason=before.verdict.value,
+                    )
+                    return [
+                        BypassOutcome(
+                            strategy_name="coordinator_dispatch",
+                            attempt_index=0,
+                            verdict=BypassVerdict.CASCADE_REEVALUATION_REQUESTED,
+                            integrity_before=before,
+                            integrity_after=None,
+                            elapsed_ms=0.0,
+                            detail=before.verdict.value,
+                        ),
+                    ]
+                case IntegrityVerdict.FORMAT_MISMATCH:
+                    # Frame shape / dtype reaching the VAD is wrong —
+                    # factory consumer engages :meth:`engage_frame_normalizer`
+                    # which forces a stream re-open. Coordinator does
+                    # NOT latch terminated; next deaf heartbeat
+                    # re-evaluates.
+                    logger.warning(
+                        "capture_integrity_coordinator_request_normalizer_engagement",
+                        verdict=before.verdict.value,
+                        endpoint_guid=context.endpoint_guid,
+                    )
+                    record_coordinator_outcome(
+                        verdict=BypassVerdict.NORMALIZER_ENGAGEMENT_REQUESTED.value,
+                        reason=before.verdict.value,
+                    )
+                    return [
+                        BypassOutcome(
+                            strategy_name="coordinator_dispatch",
+                            attempt_index=0,
+                            verdict=BypassVerdict.NORMALIZER_ENGAGEMENT_REQUESTED,
+                            integrity_before=before,
+                            integrity_after=None,
+                            elapsed_ms=0.0,
+                            detail=before.verdict.value,
+                        ),
+                    ]
+                case IntegrityVerdict.VAD_FRONTEND_DEAD:
+                    # Run the VAD-frontend reset ladder (T1.4). If any
+                    # step recovers, return ladder outcomes WITHOUT
+                    # setting ``_is_resolved`` (per §20.M T1.6.b: ladder
+                    # success is non-terminal — pipeline is healthy
+                    # again, future heartbeats welcome). If the ladder
+                    # exhausts, fall through to a verdict-derived
+                    # quarantine.
+                    ladder_outcomes = await self._run_vad_frontend_reset_ladder(
+                        context,
+                        before,
+                        tuning,
+                    )
+                    recovered = any(
+                        o.verdict is BypassVerdict.VAD_FRONTEND_RESET_APPLIED_HEALTHY
+                        for o in ladder_outcomes
+                    )
+                    if recovered:
+                        return ladder_outcomes
+                    self._quarantine_endpoint(
+                        before,
+                        tuning,
+                        terminal_verdict=before.verdict,
+                    )
+                    self._is_resolved = True
+                    return ladder_outcomes
+                case IntegrityVerdict.APO_DEGRADED | IntegrityVerdict.INCONCLUSIVE:
+                    # Existing strategy iteration loop owns these. Fall
+                    # through.
+                    pass
+                case _:
+                    assert_never(before.verdict)
 
             outcomes: list[BypassOutcome] = []
             max_attempts = max(1, int(tuning.bypass_strategy_max_attempts))
@@ -962,12 +1121,40 @@ class CaptureIntegrityCoordinator:
                 )
 
             # Strategy list exhausted without a HEALTHY outcome —
-            # quarantine the endpoint so the factory fails over.
-            self._quarantine_endpoint(before, tuning)
+            # quarantine the endpoint so the factory fails over. The
+            # terminal verdict is whatever fell through to iteration
+            # (APO_DEGRADED or INCONCLUSIVE); the verdict-driven map
+            # at :data:`_VERDICT_TO_QUARANTINE_REASON` resolves the
+            # ``derived_reason`` tag for downstream consumers.
+            self._quarantine_endpoint(
+                before,
+                tuning,
+                terminal_verdict=before.verdict,
+            )
             self._is_resolved = True
             return outcomes
 
     # -- internals ------------------------------------------------------
+
+    async def _run_vad_frontend_reset_ladder(
+        self,
+        context: BypassContext,
+        before: IntegrityResult,
+        tuning: VoiceTuningConfig,
+    ) -> list[BypassOutcome]:
+        """Mission C1 §T1.4 — dispatch to :class:`VADFrontendRecovery`.
+
+        Coordinator-owned thin wrapper: keeps the ladder module
+        constructor-free of coordinator references (which would
+        otherwise circular-import) and lets tests stub the ladder via
+        :meth:`patch.object` on this method.
+        """
+        ladder = VADFrontendRecovery(
+            probe=self._probe,
+            capture_task=self._capture_task,
+            tuning=tuning,
+        )
+        return await ladder.run(context, before)
 
     def _build_context(self) -> BypassContext:
         return BypassContext(
@@ -979,13 +1166,46 @@ class CaptureIntegrityCoordinator:
             probe_fn=lambda: self._probe.probe_warm(self._capture_task),
             current_device_index=self._capture_task.active_device_index,
             current_device_kind=self._capture_task.active_device_kind,
+            # Mission C1 §T1.4.a + §20.D — live pipeline ref for the
+            # VAD-frontend reset ladder. May be ``None`` for legacy
+            # coordinator construction sites (existing tests); ladder
+            # emits ``voice.vad_frontend_reset.missing_pipeline_ref``
+            # observability event in that case.
+            pipeline_ref=self._pipeline_ref,
         )
 
     def _quarantine_endpoint(
         self,
         last_probe: IntegrityResult,
         tuning: VoiceTuningConfig,
+        *,
+        terminal_verdict: IntegrityVerdict | None = None,
     ) -> None:
+        """Add :attr:`last_probe.endpoint_guid` to the endpoint quarantine.
+
+        Mission C1 §T1.7 — accepts the terminal :class:`IntegrityVerdict`
+        and maps it to a low-cardinality ``derived_reason`` via
+        :data:`_VERDICT_TO_QUARANTINE_REASON`. During the LENIENT
+        v0.44.x cycle the legacy :attr:`QuarantineEntry.reason` stays
+        ``"apo_degraded"`` so downstream consumers (watchdog APO recheck
+        loop, runtime failover, dashboard) keep working unchanged;
+        v0.45.0 STRICT flip promotes ``derived_reason`` to ``reason``
+        and drops the legacy field.
+
+        :func:`record_quarantine_reason_dual_emit` fires the calibration
+        counter whenever the derived reason diverges from the legacy
+        default — operators read it in Phase 3 (v0.44.2) to validate
+        the verdict→reason map before the STRICT flip.
+
+        Args:
+            last_probe: The terminal :class:`IntegrityResult` whose
+                endpoint is being quarantined.
+            tuning: Frozen :class:`VoiceTuningConfig` snapshot.
+            terminal_verdict: The :class:`IntegrityVerdict` that drove
+                the quarantine decision. ``None`` falls back to the
+                legacy default — only legacy call sites missing the
+                §T1.7 parameter; all new dispatch paths populate it.
+        """
         if not tuning.apo_quarantine_enabled:
             logger.warning(
                 "capture_integrity_coordinator_quarantine_disabled",
@@ -1000,6 +1220,11 @@ class CaptureIntegrityCoordinator:
                 device_name=self._capture_task.active_device_name,
             )
             return
+        derived_reason = (
+            _VERDICT_TO_QUARANTINE_REASON.get(terminal_verdict, _DEFAULT_QUARANTINE_REASON)
+            if terminal_verdict is not None
+            else _DEFAULT_QUARANTINE_REASON
+        )
         # The global quarantine's TTL is shared with KERNEL_INVALIDATED
         # (`kernel_invalidated_quarantine_s`). The APO-specific knob
         # :attr:`apo_quarantine_s` is consulted by the watchdog's
@@ -1010,16 +1235,22 @@ class CaptureIntegrityCoordinator:
             endpoint_guid=last_probe.endpoint_guid,
             device_friendly_name=self._capture_task.active_device_name,
             host_api=self._capture_task.host_api_name or "",
-            reason="apo_degraded",
+            reason=_DEFAULT_QUARANTINE_REASON,
+            derived_reason=derived_reason,
         )
         record_apo_degraded_event(
             platform=self._platform_key,
             action="quarantine",
         )
+        record_quarantine_reason_dual_emit(
+            legacy_reason=_DEFAULT_QUARANTINE_REASON,
+            derived_reason=derived_reason,
+        )
         logger.warning(
             "capture_integrity_coordinator_quarantined",
             endpoint_guid=last_probe.endpoint_guid,
-            reason="apo_degraded",
+            reason=_DEFAULT_QUARANTINE_REASON,
+            derived_reason=derived_reason,
         )
 
 

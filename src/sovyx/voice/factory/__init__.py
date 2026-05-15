@@ -157,7 +157,8 @@ class VoiceBundle:
 
 
 def _outcomes_have_applied_healthy(outcomes: list[BypassOutcome]) -> bool:
-    """Return True iff any outcome's verdict is :attr:`BypassVerdict.APPLIED_HEALTHY`.
+    """Return True iff any outcome reports recovery (legacy strategy
+    APPLIED_HEALTHY OR Mission C1 ladder VAD_FRONTEND_RESET_APPLIED_HEALTHY).
 
     Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04 §Phase 2 T2.6 —
     used by the deaf-signal closure to decide whether to invoke the
@@ -166,13 +167,45 @@ def _outcomes_have_applied_healthy(outcomes: list[BypassOutcome]) -> bool:
     otherwise the closure routes through
     :func:`sovyx.voice.health._runtime_failover._try_runtime_failover`.
 
+    Mission C1 §T1.6 extends the predicate to include
+    :attr:`BypassVerdict.VAD_FRONTEND_RESET_APPLIED_HEALTHY`: the
+    VAD-frontend reset ladder restored the live capture stream's
+    integrity at the Sovyx processing layer (Silero LSTM reset /
+    FrameNormalizer engagement) without invoking OS-side bypass — also
+    a recovery success that should skip runtime failover.
+
     Lazy-imports :class:`BypassVerdict` so the factory's import-time
     cost is unchanged for the (vast majority of) deaf-signal paths
     that don't get this far.
     """
     from sovyx.voice.health.contract import BypassVerdict
 
-    return any(o.verdict is BypassVerdict.APPLIED_HEALTHY for o in outcomes)
+    return any(
+        o.verdict
+        in (
+            BypassVerdict.APPLIED_HEALTHY,
+            BypassVerdict.VAD_FRONTEND_RESET_APPLIED_HEALTHY,
+        )
+        for o in outcomes
+    )
+
+
+def _outcomes_have_normalizer_engagement_request(
+    outcomes: list[BypassOutcome],
+) -> bool:
+    """Return True iff the coordinator dispatched
+    :attr:`BypassVerdict.NORMALIZER_ENGAGEMENT_REQUESTED`.
+
+    Mission C1 §T1.6 — these outcomes are REQUESTS to the factory
+    consumer (call
+    :meth:`AudioCaptureTask.engage_frame_normalizer`), NOT failures.
+    The deaf-signal closure dispatches the engagement and skips
+    runtime failover for them — the re-opened capture stream's next
+    deaf heartbeat re-evaluates.
+    """
+    from sovyx.voice.health.contract import BypassVerdict
+
+    return any(o.verdict is BypassVerdict.NORMALIZER_ENGAGEMENT_REQUESTED for o in outcomes)
 
 
 def _detect_os_noise_suppression(*, resolved_name: str | None = None) -> bool:
@@ -1085,12 +1118,46 @@ async def create_voice_pipeline(
         outcomes = await coordinator.handle_deaf_signal()
         outcomes_list = list(outcomes)
 
+        # Mission C1 §T1.6 — handle non-strategy dispatch outcomes from
+        # the coordinator's pre-bypass verdict router (T1.3). Each is a
+        # REQUEST for a disjoint downstream remediation that lives
+        # outside the OS-layer bypass cascade (per anti-pattern #39(a)).
+        #
+        # NORMALIZER_ENGAGEMENT_REQUESTED: frame shape / dtype reaching
+        # the VAD is wrong; call engage_frame_normalizer to force a
+        # stream re-open which rebuilds the FrameNormalizer on the new
+        # source layout. The next deaf heartbeat re-evaluates. Idempotent
+        # by contract — engage_frame_normalizer is a no-op when the
+        # normalizer is already non-passthrough.
+        #
+        # CASCADE_REEVALUATION_REQUESTED: driver-silent class; the
+        # correct fix IS cascade re-walk. We dispatch it to runtime
+        # failover (which picks the next non-quarantined boot candidate
+        # via cascade) — the existing failover branch below covers this
+        # case naturally, so no separate dispatch is needed here.
+        capture_task = capture_holder.get("task")
+        if _outcomes_have_normalizer_engagement_request(outcomes_list):
+            if capture_task is not None:
+                try:
+                    await capture_task.engage_frame_normalizer()
+                except Exception:  # noqa: BLE001 — engagement isolation
+                    logger.exception(
+                        "voice.coordinator.normalizer_engagement_failed",
+                        extra={"voice.mind_id": mind_id},
+                    )
+            else:
+                logger.warning(
+                    "voice.coordinator.normalizer_engagement_skipped_no_task",
+                    extra={"voice.mind_id": mind_id},
+                )
+
         # Mission §Phase 2 T2.6 — runtime hot-failover hook.
         #
         # When the coordinator returns a non-empty outcome list AND no
-        # outcome is APPLIED_HEALTHY, we are in the "ineffective" branch
-        # at _orchestrator.py::_invoke_deaf_signal — the same branch
-        # that pre-T2.6 emitted voice_apo_bypass_ineffective and
+        # outcome is APPLIED_HEALTHY (or VAD_FRONTEND_RESET_APPLIED_HEALTHY
+        # per Mission C1 §T1.6 extension), we are in the "ineffective"
+        # branch at _orchestrator.py::_invoke_deaf_signal — the same
+        # branch that pre-T2.6 emitted voice_apo_bypass_ineffective and
         # quarantined the endpoint without further runtime recovery.
         #
         # _try_runtime_failover ALWAYS emits voice.failover.attempted
@@ -1099,12 +1166,27 @@ async def create_voice_pipeline(
         # device-rebind only fires when
         # tuning.runtime_failover_on_quarantine_enabled=True.
         #
+        # Mission C1 §T1.6 — NORMALIZER_ENGAGEMENT_REQUESTED alone does
+        # NOT warrant failover: the engagement IS the fix (stream
+        # re-open). When the outcome set is exactly one
+        # NORMALIZER_ENGAGEMENT_REQUESTED entry, the engagement above
+        # already handled the dispatch and we skip the failover branch.
+        # CASCADE_REEVALUATION_REQUESTED on its own DOES warrant
+        # failover (failover IS the cascade re-walk).
+        only_normalizer_request = outcomes_list and all(
+            o.verdict.value == "normalizer_engagement_requested" for o in outcomes_list
+        )
+        should_failover = (
+            bool(outcomes_list)
+            and not _outcomes_have_applied_healthy(outcomes_list)
+            and not only_normalizer_request
+        )
         # Wrapped in try/except because runtime-failover failures must
         # NEVER break the deaf-signal callback (which itself runs from
         # the pipeline heartbeat path — an exception here would crash
         # the heartbeat task and freeze the state machine).
-        if outcomes_list and not _outcomes_have_applied_healthy(outcomes_list):
-            task = capture_holder.get("task")
+        if should_failover:
+            task = capture_task
             if task is not None:
                 try:
                     await _try_runtime_failover(
@@ -1274,6 +1356,10 @@ async def create_voice_pipeline(
         capture_task=capture_task,
         platform_key=platform_key,
         tuning=tuning,
+        # Mission C1 §T1.4.a + §20.D — plumb the LIVE pipeline ref so
+        # the VAD-frontend reset ladder mutates the live VAD instance,
+        # NOT the probe's separate (cross-contamination-guarded) VAD.
+        pipeline_ref=pipeline,
     )
     coordinator_holder["coordinator"] = coordinator
 

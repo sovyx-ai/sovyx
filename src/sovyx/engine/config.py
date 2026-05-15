@@ -1214,6 +1214,18 @@ class VoiceTuningConfig(BaseSettings):
     # APO_DEGRADED's bypass-strategy ladder.
     integrity_history_window_probes: int = 5
 
+    # Mission C1 §T1.4 + §10 — master kill switch for the VAD-frontend
+    # reset ladder (foundation-phase rollback gate per
+    # ``feedback_staged_adoption``). Default ``True`` ships the ladder
+    # live in v0.44.0 LENIENT; flipping to ``False`` via
+    # ``SOVYX_TUNING__VOICE__VAD_FRONTEND_RESET_ENABLED=false`` disables
+    # every L step so the coordinator's VAD_FRONTEND_DEAD dispatch
+    # returns empty outcomes (no recovery, falls through to runtime
+    # failover via the factory consumer's outcome inspection). Use only
+    # if Phase 3 telemetry surfaces a ladder-induced regression on
+    # operator hardware.
+    vad_frontend_reset_enabled: bool = True
+
     # Mission C1 §T1.4.b + §20.I — AGC2 floor-lift cap for the VAD-frontend
     # reset ladder L4 step. Bounds the maximum upward delta the reset
     # ladder may apply to AGC2's speech-level target relative to the
