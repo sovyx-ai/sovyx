@@ -1398,3 +1398,141 @@ class TestRuntimeFailoverCacheShortCircuit:
         assert cache.lookup("cycler-canonical", "ALSA") is None
 
         reset_default_probe_result_cache()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Mission C3 §T2.5 — frame-loss-window summary event
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestRuntimeFailoverFrameLossWindow:
+    """Mission C3 §T2.5 — ``voice.failover.frame_loss_window`` summary.
+
+    During a ladder run, the orchestrator's per-frame
+    ``voice.frame.drop_detected`` emit is gated (silent); the ladder's
+    completion path emits a SINGLE summary if drops occurred. If no
+    drops occurred, no summary event fires (zero-drop summaries are
+    observability noise).
+    """
+
+    @pytest.mark.asyncio()
+    async def test_summary_fires_when_drops_occurred_during_ladder(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When the orchestrator accumulated drops in
+        ``_frame_loss_during_ladder``, the success path emits the
+        summary with ``frames_dropped`` and ``duration_ms``.
+        """
+        from sovyx.voice.health._probe_result_cache import (
+            reset_default_probe_result_cache,
+        )
+
+        reset_default_probe_result_cache()
+        captured = _capture_logs(monkeypatch)
+        capture_task = _make_capture_task()
+
+        class _PreloadedPipeline:
+            def __init__(self) -> None:
+                self._config = MagicMock(mind_id=_MIND_ID)
+                self._current_mind_id = _MIND_ID
+                self._failover_ladder_in_progress = False
+                self._frame_loss_during_ladder: list[tuple[float, float]] = []
+                self._reset_called = False
+
+            def reset_coordinator_after_failover(self) -> None:
+                self._reset_called = True
+                # Simulate per-frame drops accumulating during the
+                # dispatch window (the orchestrator's emit-site gate
+                # would write here in production).
+                self._frame_loss_during_ladder.extend(
+                    [
+                        (0.150, 1000.5),
+                        (0.080, 1000.7),
+                        (0.200, 1000.9),
+                    ],
+                )
+
+        pipeline = _PreloadedPipeline()
+        tuning = VoiceTuningConfig(
+            runtime_failover_on_quarantine_enabled=True,
+            failover_intra_ladder_cooldown_s=0.0,
+        )
+        state = RuntimeFailoverState()
+        candidate = _make_target_entry(index=4, canonical_name="d-4")
+        success_result = DeviceChangeRestartResult(
+            verdict=DeviceChangeRestartVerdict.DEVICE_CHANGED_SUCCESS,
+            engaged=True,
+            target_device_index=4,
+            target_host_api="ALSA",
+            new_endpoint_guid="g",
+        )
+        capture_task.request_device_change_restart = AsyncMock(return_value=success_result)
+
+        with patch.object(
+            failover_mod,
+            "_resolve_target_safe",
+            return_value=(candidate, 1, None),
+        ):
+            await _try_runtime_failover(
+                capture_task=capture_task,
+                pipeline=pipeline,
+                tuning=tuning,
+                state=state,
+            )
+
+        summary = [kwargs for evt, kwargs in captured if evt == "voice.failover.frame_loss_window"]
+        assert len(summary) == 1
+        assert summary[0]["voice.duration_ms"] == 430.0
+        assert summary[0]["voice.frames_dropped"] == 3
+        assert summary[0]["voice.candidate_count"] == 1
+        assert summary[0]["voice.succeeded_candidate_index"] == 0
+        assert pipeline._frame_loss_during_ladder == []
+
+        reset_default_probe_result_cache()
+
+    @pytest.mark.asyncio()
+    async def test_no_summary_when_no_drops(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Zero-drop ladder MUST NOT emit ``frame_loss_window``."""
+        from sovyx.voice.health._probe_result_cache import (
+            reset_default_probe_result_cache,
+        )
+
+        reset_default_probe_result_cache()
+        captured = _capture_logs(monkeypatch)
+        capture_task = _make_capture_task()
+        pipeline = _make_pipeline()
+        tuning = VoiceTuningConfig(
+            runtime_failover_on_quarantine_enabled=True,
+            failover_intra_ladder_cooldown_s=0.0,
+        )
+        state = RuntimeFailoverState()
+        candidate = _make_target_entry(index=4, canonical_name="d-4")
+        success_result = DeviceChangeRestartResult(
+            verdict=DeviceChangeRestartVerdict.DEVICE_CHANGED_SUCCESS,
+            engaged=True,
+            target_device_index=4,
+            target_host_api="ALSA",
+            new_endpoint_guid="g",
+        )
+        capture_task.request_device_change_restart = AsyncMock(return_value=success_result)
+
+        with patch.object(
+            failover_mod,
+            "_resolve_target_safe",
+            return_value=(candidate, 1, None),
+        ):
+            await _try_runtime_failover(
+                capture_task=capture_task,
+                pipeline=pipeline,
+                tuning=tuning,
+                state=state,
+            )
+
+        summary = [evt for evt, _ in captured if evt == "voice.failover.frame_loss_window"]
+        assert summary == []
+
+        reset_default_probe_result_cache()

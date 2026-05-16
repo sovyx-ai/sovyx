@@ -702,6 +702,17 @@ async def _try_runtime_failover(
                 state.last_ladder_complete_monotonic = time.monotonic()
                 state.last_candidates_unreachable = list(candidates_unreachable)
 
+                # Mission C3 §T2.5 — emit the frame-loss summary BEFORE
+                # the ladder_complete event so dashboards see the
+                # window aggregate paired with the ladder verdict.
+                _emit_frame_loss_window_summary(
+                    pipeline=pipeline,
+                    ladder_id=ladder_id,
+                    candidates_tried=candidates_tried,
+                    succeeded_index=succeeded_index,
+                    mind_id=mind_id,
+                )
+
                 logger.info(
                     "voice.failover.ladder_complete",
                     **{
@@ -796,6 +807,15 @@ async def _try_runtime_failover(
         state.last_ladder_complete_monotonic = time.monotonic()
         state.last_candidates_unreachable = list(candidates_unreachable)
 
+        # Mission C3 §T2.5 — frame-loss summary for the exhausted path.
+        _emit_frame_loss_window_summary(
+            pipeline=pipeline,
+            ladder_id=ladder_id,
+            candidates_tried=candidates_tried,
+            succeeded_index=None,
+            mind_id=mind_id,
+        )
+
         logger.info(
             "voice.failover.ladder_complete",
             **{
@@ -818,12 +838,22 @@ def _safe_set_ladder_in_progress(pipeline: Any, *, value: bool) -> None:  # noqa
 
     Mission C3 §T1.1 step 8 — wrapped in try/except so a pipeline
     that does not accept arbitrary attribute writes (highly unusual)
-    cannot crash the failover closure. Phase 2 §T2.5 reads this flag
-    via ``getattr(pipeline, '_failover_ladder_in_progress', False)``
-    in the orchestrator's frame-drop emit site.
+    cannot crash the failover closure. Mission C3 §T2.5 reads this
+    flag via ``getattr(pipeline, '_failover_ladder_in_progress',
+    False)`` in the orchestrator's frame-drop emit site.
+
+    Also (Mission C3 §T2.5) initializes
+    ``pipeline._frame_loss_during_ladder = []`` on ladder entry so
+    the orchestrator's drop-detector accumulator has a stable list
+    to append into. On ladder exit, the list is preserved (the
+    ``voice.failover.frame_loss_window`` summary emit reads it just
+    before clearing the in-progress flag).
     """
     try:
         pipeline._failover_ladder_in_progress = value  # noqa: SLF001
+        if value:
+            # Fresh per-ladder accumulator.
+            pipeline._frame_loss_during_ladder = []  # noqa: SLF001
     except Exception as exc:  # noqa: BLE001 — observability hygiene only
         logger.debug(
             "voice.failover.ladder_flag_setattr_failed",
@@ -832,6 +862,54 @@ def _safe_set_ladder_in_progress(pipeline: Any, *, value: bool) -> None:  # noqa
             error=str(exc),
             error_type=type(exc).__name__,
         )
+
+
+def _emit_frame_loss_window_summary(
+    *,
+    pipeline: Any,  # noqa: ANN401
+    ladder_id: str,
+    candidates_tried: int,
+    succeeded_index: int | None,
+    mind_id: str,
+) -> None:
+    """Emit ``voice.failover.frame_loss_window`` summary if drops occurred.
+
+    Mission C3 §T2.5 — collapses the per-frame drops accumulated during
+    the ladder iteration into a SINGLE structured summary event with
+    ``total_gap_ms, frames_dropped, candidate_count``. Fires exactly
+    once per ladder run that had ≥ 1 drop; if no drops, no event
+    (NOT a zero-drop summary — observability hygiene).
+
+    Best-effort: any attribute access or read failure is silently
+    suppressed via ``contextlib.suppress`` so the load-bearing
+    ladder-complete emit path is unaffected.
+    """
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        window: list[tuple[float, float]] | None = getattr(
+            pipeline,
+            "_frame_loss_during_ladder",
+            None,
+        )
+        if not window:
+            return
+        total_gap_ms = sum(gap_s for gap_s, _ in window) * 1000.0
+        logger.warning(
+            "voice.failover.frame_loss_window",
+            **{
+                "voice.ladder_id": ladder_id,
+                "voice.duration_ms": round(total_gap_ms, 1),
+                "voice.frames_dropped": len(window),
+                "voice.candidate_count": candidates_tried,
+                "voice.succeeded_candidate_index": succeeded_index,
+                "voice.mind_id": mind_id,
+            },
+        )
+        # Clear the accumulator so the next ladder run starts fresh
+        # (also handled by _safe_set_ladder_in_progress on next entry
+        # — belt-and-suspenders).
+        pipeline._frame_loss_during_ladder = []  # noqa: SLF001
 
 
 def _snapshot_current_endpoint(capture_task: Any) -> tuple[str, str]:  # noqa: ANN401

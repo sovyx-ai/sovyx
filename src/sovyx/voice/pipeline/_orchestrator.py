@@ -1861,19 +1861,42 @@ class VoicePipeline(
 
         # ── Absolute per-frame budget ──────────────────────────────
         if gap_s > _FRAME_DROP_ABSOLUTE_BUDGET_S:
-            logger.warning(
-                "voice.frame.drop_detected",
-                **{
-                    "voice.threshold_kind": "absolute_budget",
-                    "voice.gap_ms": round(gap_s * 1000.0, 1),
-                    "voice.budget_ms": round(_FRAME_DROP_ABSOLUTE_BUDGET_S * 1000.0, 1),
-                    "voice.expected_interval_ms": round(
-                        self._expected_frame_interval_s * 1000.0, 1
-                    ),
-                    "voice.state": self._state.name,
-                    "voice.mind_id": self._config.mind_id,
-                },
-            )
+            # Mission C3 §T2.5 — gate per-frame emission during the
+            # failover ladder. The orchestrator's drop-detector
+            # otherwise amplifies a single 4.3 s ladder window into
+            # ~10-100 redundant emissions (operator log L1069: a
+            # SINGLE 4286 ms drop produced 10+ noise lines). When the
+            # ladder is in progress, accumulate (gap, ts) tuples into
+            # ``pipeline._frame_loss_during_ladder`` and let the
+            # ladder-complete path emit a single
+            # ``voice.failover.frame_loss_window`` summary. The flag
+            # is read defensively (anti-pattern #35 sentinel):
+            # absent attribute or False means "emit as normal".
+            if getattr(self, "_failover_ladder_in_progress", False):
+                window: list[tuple[float, float]] = (
+                    getattr(
+                        self,
+                        "_frame_loss_during_ladder",
+                        None,
+                    )
+                    or []
+                )
+                window.append((gap_s, now_monotonic))
+                self._frame_loss_during_ladder = window
+            else:
+                logger.warning(
+                    "voice.frame.drop_detected",
+                    **{
+                        "voice.threshold_kind": "absolute_budget",
+                        "voice.gap_ms": round(gap_s * 1000.0, 1),
+                        "voice.budget_ms": round(_FRAME_DROP_ABSOLUTE_BUDGET_S * 1000.0, 1),
+                        "voice.expected_interval_ms": round(
+                            self._expected_frame_interval_s * 1000.0, 1
+                        ),
+                        "voice.state": self._state.name,
+                        "voice.mind_id": self._config.mind_id,
+                    },
+                )
 
         # ── Rolling-window cumulative-drift ────────────────────────
         if len(self._recent_frame_intervals) < _FRAME_DROP_DRIFT_WINDOW_FRAMES:
