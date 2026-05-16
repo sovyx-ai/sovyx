@@ -710,6 +710,19 @@ async def _try_runtime_failover(
                     "_last_terminal_deaf_warn_monotonic",
                     0.0,
                 )
+                # Mission C3 §T2.8 — mirror state onto pipeline so the
+                # dashboard's voice_status helper can read it without
+                # plumbing the RuntimeFailoverState across the registry.
+                _safe_set_pipeline_attr(
+                    pipeline,
+                    "_failover_last_candidates_unreachable",
+                    list(candidates_unreachable),
+                )
+                _safe_set_pipeline_attr(
+                    pipeline,
+                    "_failover_last_ladder_complete_monotonic",
+                    state.last_ladder_complete_monotonic,
+                )
 
                 # Mission C3 §T2.5 — emit the frame-loss summary BEFORE
                 # the ladder_complete event so dashboards see the
@@ -819,6 +832,18 @@ async def _try_runtime_failover(
         # flag so the heartbeat-mixin throttle engages on subsequent
         # deaf-warning emissions. Best-effort setattr.
         _safe_set_pipeline_attr(pipeline, "_failover_ladder_exhausted", True)
+        # Mission C3 §T2.8 — mirror exhausted-path state for the
+        # dashboard's voice_status surface.
+        _safe_set_pipeline_attr(
+            pipeline,
+            "_failover_last_candidates_unreachable",
+            list(candidates_unreachable),
+        )
+        _safe_set_pipeline_attr(
+            pipeline,
+            "_failover_last_ladder_complete_monotonic",
+            state.last_ladder_complete_monotonic,
+        )
 
         # Mission C3 §T2.5 — frame-loss summary for the exhausted path.
         _emit_frame_loss_window_summary(

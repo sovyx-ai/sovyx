@@ -1793,6 +1793,26 @@ const VoiceStatusHardwareSchema = z.object({
   ram_mb: z.number().nullable().optional(),
 });
 
+/* Mission C3 §T2.8 — server-side degraded-mode marker.
+ *
+ * Mirrors ``VoiceStatusDegraded`` in
+ * ``src/sovyx/dashboard/routes/voice.py``. Quality Gate 8 boundary
+ * round-trip test pins the contract at
+ * ``tests/dashboard/test_voice_status_degraded_boundary.py``.
+ * ``.passthrough()`` matches the backend's ``extra="allow"`` so
+ * future C4 banner-UX fields (last_error_class, ack_at_monotonic)
+ * land without a route schema migration.
+ */
+const VoiceStatusDegradedSchema = z
+  .object({
+    degraded: z.boolean().optional().default(false),
+    reason: z.string().nullable().optional(),
+    candidates_tried: z.number().int().nonnegative().optional().default(0),
+    candidates_unreachable: z.array(z.string()).optional().default([]),
+    last_ladder_complete_monotonic: z.number().nullable().optional(),
+  })
+  .passthrough();
+
 export const VoiceStatusResponseSchema = z
   .object({
     pipeline: VoiceStatusPipelineSchema,
@@ -1803,6 +1823,7 @@ export const VoiceStatusResponseSchema = z
     vad: VoiceStatusVADSchema.optional(),
     wyoming: VoiceStatusWyomingSchema.optional(),
     hardware: VoiceStatusHardwareSchema.optional(),
+    degraded: VoiceStatusDegradedSchema.optional(),
     preflight_warnings: z.array(z.record(z.string(), z.unknown())).optional(),
   })
   .passthrough();

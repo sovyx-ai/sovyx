@@ -64,6 +64,17 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
             "tier": None,
             "ram_mb": None,
         },
+        # Mission C3 §T2.8 — surfaces the failover ladder terminal
+        # state to the dashboard so the UI can render an actionable
+        # banner. Default-empty (degraded=False) on pre-ladder code
+        # paths + on healthy pipelines.
+        "degraded": {
+            "degraded": False,
+            "reason": None,
+            "candidates_tried": 0,
+            "candidates_unreachable": [],
+            "last_ladder_complete_monotonic": None,
+        },
     }
 
     # Capture (must run, or the pipeline is silent even if "started")
@@ -92,6 +103,36 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
             pipeline = await registry.resolve(VoicePipeline)
             status["pipeline"]["running"] = pipeline.is_running and status["capture"]["running"]
             status["pipeline"]["state"] = pipeline.state.name.lower()
+            # Mission C3 §T2.8 — populate the degraded-mode marker from
+            # the pipeline's ladder-state flags. Both flags are
+            # default-False (anti-pattern #35 sentinel); a pre-ladder
+            # pipeline yields ``degraded=False`` unchanged.
+            ladder_exhausted = bool(
+                getattr(pipeline, "_failover_ladder_exhausted", False),
+            )
+            if ladder_exhausted:
+                status["degraded"]["degraded"] = True
+                status["degraded"]["reason"] = "failover_ladder_exhausted"
+            # Best-effort read of the underlying RuntimeFailoverState
+            # (held by the factory closure scope). The pipeline does
+            # not directly own the state, but the most recent values
+            # are mirrored onto pipeline-level attributes when the
+            # ladder completes.
+            unreachable = getattr(
+                pipeline,
+                "_failover_last_candidates_unreachable",
+                None,
+            )
+            if isinstance(unreachable, list):
+                status["degraded"]["candidates_unreachable"] = list(unreachable)
+                status["degraded"]["candidates_tried"] = len(unreachable)
+            last_complete = getattr(
+                pipeline,
+                "_failover_last_ladder_complete_monotonic",
+                None,
+            )
+            if isinstance(last_complete, (int, float)) and last_complete > 0.0:
+                status["degraded"]["last_ladder_complete_monotonic"] = float(last_complete)
     except Exception:  # noqa: BLE001
         logger.debug("voice_status_pipeline_failed")
 

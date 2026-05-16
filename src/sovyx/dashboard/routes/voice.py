@@ -219,6 +219,60 @@ class VoiceStatusHardware(BaseModel):
     ram_mb: int | None = None
 
 
+class VoiceStatusDegraded(BaseModel):
+    """Voice-subsystem degraded-mode marker.
+
+    Mission C3 §T2.8 — server-side surface of the failover ladder's
+    terminal state. The dashboard widget at
+    ``voice-health.tsx::FailoverHistorySection`` consumes this so
+    the UI can render an actionable banner ("Failover exhausted —
+    reconnect your USB or restart Sovyx") instead of leaving the
+    operator to correlate three log streams as in the v0.43.1
+    operator session.
+
+    ``model_config = {"extra": "allow"}`` keeps the forward-additive
+    policy of the parent :class:`VoiceStatusResponse` — future C4
+    work may add ``last_error_class``, ``ack_at_monotonic``, etc.
+    without a route schema migration. The frontend zod twin
+    (``VoiceStatusDegradedSchema``) passes through unknown keys via
+    ``.passthrough()`` to match.
+
+    A pre-mission consumer that ignores the ``degraded`` block sees
+    no change: the default-factory yields
+    ``VoiceStatusDegraded(degraded=False, reason=None, candidates_tried=0,
+    candidates_unreachable=[], last_ladder_complete_monotonic=None)``.
+    Mission C3 boundary contract pinned by Quality Gate 8 round-trip
+    test at ``tests/dashboard/test_voice_status_degraded_boundary.py``.
+    """
+
+    model_config = {"extra": "allow"}
+
+    degraded: bool = False
+    """``True`` iff the most recent failover ladder exited with
+    ``verdict=exhausted`` AND no subsequent recovery has cleared the
+    flag. ``False`` on pre-mission consumers + on every healthy
+    pipeline state."""
+
+    reason: str | None = None
+    """Human / machine-readable reason token. Mission C3 emits
+    ``"failover_ladder_exhausted"`` on the exhausted path; future C4
+    work may add ``"capture_dead"``, ``"vad_frontend_dead"``,
+    etc. ``None`` when ``degraded=False``."""
+
+    candidates_tried: int = 0
+    """Count of candidates dispatched in the most recent ladder run."""
+
+    candidates_unreachable: list[str] = Field(default_factory=list)
+    """Canonical endpoint names of candidates that failed
+    (engaged=False) in the most recent ladder. Bounded by
+    ``failover_candidate_max_attempts_per_ladder`` (default 5)."""
+
+    last_ladder_complete_monotonic: float | None = None
+    """``time.monotonic()`` timestamp of the most recent ladder
+    completion (success or exhaustion). ``None`` before the first
+    ladder run."""
+
+
 class VoiceStatusResponse(BaseModel):
     """Top-level ``/api/voice/status`` payload.
 
@@ -226,6 +280,10 @@ class VoiceStatusResponse(BaseModel):
     the dashboard's voice page has consumed since v0.6.x; the explicit
     schema makes the contract enforceable at request-time and lets the
     frontend's zod schemas validate against a single canonical source.
+
+    Mission C3 §T2.8 — added ``degraded: VoiceStatusDegraded`` field
+    to surface the runtime-failover ladder's terminal state to the
+    dashboard.
 
     ``preflight_warnings`` carries Linux-only mixer-sanity boot
     warnings (always empty on non-Linux); each entry is the raw
@@ -236,7 +294,7 @@ class VoiceStatusResponse(BaseModel):
     forward-additive fields on a route schema migration.
     """
 
-    # All 8 nested blocks are optional with default factories: the
+    # All 9 nested blocks are optional with default factories: the
     # production helper always populates the full dict (see
     # ``dashboard/voice_status.py::get_voice_status`` initial dict),
     # but tests mock partial shapes and downstream consumers may
@@ -251,6 +309,7 @@ class VoiceStatusResponse(BaseModel):
     vad: VoiceStatusVAD = Field(default_factory=VoiceStatusVAD)
     wyoming: VoiceStatusWyoming = Field(default_factory=VoiceStatusWyoming)
     hardware: VoiceStatusHardware = Field(default_factory=VoiceStatusHardware)
+    degraded: VoiceStatusDegraded = Field(default_factory=VoiceStatusDegraded)
     preflight_warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
