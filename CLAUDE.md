@@ -41,13 +41,13 @@ Sovereign Minds Engine — persistent AI companion with real memory, cognitive l
 
 ```bash
 ./scripts/install_hooks.sh    # one-time per clone — installs pre-push hook
-./scripts/verify_gates.sh     # runs all 7 gates + writes .git/.last-gates-pass marker
+./scripts/verify_gates.sh     # runs all 8 gates + writes .git/.last-gates-pass marker
 git push                      # hook validates marker fresh + HEAD-matched, else REJECTS
 ```
 
 The hook at `.githooks/pre-push` (activated by `install_hooks.sh` via `git config core.hooksPath .githooks`) checks `.git/.last-gates-pass` for a HEAD-matching marker within 30 min (override: `SOVYX_GATES_MAX_AGE_SEC`). Escape hatch `git push --no-verify` requires explicit operator approval + commit-body rationale.
 
-The 7 gates (in order):
+The 8 gates (in order):
 
 ```bash
 uv run ruff check src/ tests/                                          # 1. lint
@@ -57,6 +57,7 @@ uv run bandit -r src/sovyx/ --configfile pyproject.toml                # 4. secu
 uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30 -q    # 5. tests
 npx tsc -b tsconfig.app.json                                           # 6. dashboard type (from dashboard/)
 npx vitest run --reporter=dot                                          # 7. dashboard tests (from dashboard/)
+uv run python scripts/dev/check_boundary_round_trip_coverage.py        # 8. boundary round-trip (Mission C2 §T4.1)
 ```
 
 Plus `uv lock --check` when bumping versions. If running gates ad-hoc, grep the summary line — never trust the harness exit code alone. Pre-v0.42.2 the pattern `pytest ... 2>&1 | tail -N` masked 6 real failures across 4 cycles (`feedback_ci_preflight.md` + `feedback_no_speculation.md` Addendum 2026-05-14).
@@ -144,7 +145,7 @@ Each entry is **rule + why + pointer**. Forensic detail lives in the referenced 
 - **Cross-Platform:** 21, 22, 24
 - **Voice Subsystem:** 25, 26, 27, 28, 29, 39
 - **Tests:** 8, 9, 10, 12, 31
-- **Architecture & Design:** 13, 16, 18, 19, 32, 33, 34, 37, 39
+- **Architecture & Design:** 13, 16, 18, 19, 32, 33, 34, 37, 39, 40
 
 ---
 
@@ -191,6 +192,7 @@ Each entry is **rule + why + pointer**. Forensic detail lives in the referenced 
     **(a) Verdict-disjoint remediation.** Acceptance gates + remediation routers MUST consume the probe **verdict** (a categorical classification), not the wrapping symptom. `vad_mute` (user not speaking) and `no_signal` (driver silent) are orthogonal failure classes; routing both to the same ladder loses the operator's working hardware. Sibling of #28. v0.44.0 verdict-router (Mission C1 T1.3) restored disjoint dispatch with `assert_never` exhaustiveness. LENIENT consultation-of-derived-reason corollary (`is_recheck_eligible`/`is_apo_class_reason`, commit `c5791e40`): when a verdict-disjoint field is added during staged adoption, every classifier consumer MUST consult the new field first with fallback to legacy — bare reads of the legacy field silently disable the dispatch. Mission anchor: `docs-internal/missions/MISSION-c1-vad-mute-reclassification-2026-05-14.md`.
 
     **(b) Cross-platform event-name drift.** Cross-platform event names MUST be neutral; platform-specific terminology (`apo.*`, `wasapi.*`, `dsound.*`) MUST be `sys.platform`-gated or live behind a neutral wrapper. Strategies can be platform-specific without the wrapping event needing to be. Sibling of #21. Pre-H2 mission: `audio.apo.bypassed` + `voice_apo_bypass_ineffective` fired on Linux hosts where `voice_clarity_active=False`. Generalizes: an event's name is part of its public API for operators, dashboards, and downstream triage tooling. Mission anchor: separate v0.43.3 mission (sibling of C1).
+40. **Typed response boundary drifts from producer dict shape when both evolve independently:** a `Model.model_validate(helper_dict)` call at a route boundary is only as strict as the LAST round-trip test that exercised the producer's real prod shape. Helper functions returning `dict[str, Any]` provide no static cross-boundary type check, so the producer can grow new field shapes (int alongside str, additional enum values, optional → required) without the boundary noticing. The forward-additive policy on response models (`model_config = {"extra": "allow"}`) is load-bearing — closing it off would break Phase 5.D's freedom to ship new SLI fields without route migrations — but that flexibility MUST be paired with a producer→boundary round-trip test, else drift escapes CI. Reference: Mission C2 — `VoiceStatusResponse.capture.input_device: str | None` narrowed at commit `aee85844` (Phase 5.D v0.32.7); producer always emitted `int | str | None` via `AudioCaptureTask._input_device` rebound to `info.device_index` at `_capture_task.py:694`. Every `/api/voice/status` request 500'd in production until C2 widened the union at commit `00cb6e72`. Quality Gate 8 (`scripts/dev/check_boundary_round_trip_coverage.py`) enforces the round-trip pairing AST-mechanically: every `.model_validate(...)` call in `routes/voice.py` MUST have a paired test under `tests/dashboard/` calling either `Model.model_validate(...)` directly OR `assert_boundary_accepts(Model, ...)`. Mission anchor: `docs-internal/missions/MISSION-c2-voice-status-response-contract-2026-05-16.md`.
 
 ## Testing Patterns
 

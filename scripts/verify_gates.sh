@@ -45,7 +45,7 @@ else
 fi
 
 GATE_NUM=0
-GATE_TOTAL=7
+GATE_TOTAL=8
 FAILURES=()
 
 ok() {
@@ -188,6 +188,24 @@ else
         bad "vitest — non-zero exit, no summary; log: $LOG"
         exit 2
     fi
+fi
+
+# ── Gate 8: boundary round-trip coverage (Mission C2 §T4.1) ──────────
+GATE_NUM=8
+LOG="$LOG_DIR/08-boundary-round-trip.log"
+if uv run python scripts/dev/check_boundary_round_trip_coverage.py >"$LOG" 2>&1; then
+    # Success line format:
+    # "Quality Gate 8 — boundary round-trip coverage: N model(s) across M call site(s), all paired with tests"
+    if grep -qE "boundary round-trip coverage:.*all paired" "$LOG"; then
+        SUMMARY=$(grep -oE "[0-9]+ model\(s\) across [0-9]+ call site\(s\)" "$LOG" | head -1)
+        ok "boundary round-trip coverage — $SUMMARY"
+    elif grep -q "vacuous pass" "$LOG"; then
+        ok "boundary round-trip coverage — vacuous pass (no model_validate sites)"
+    else
+        bad "boundary round-trip coverage — exit 0 but no summary line; log: $LOG"
+    fi
+else
+    bad "boundary round-trip coverage — uncovered model(s) detected; log: $LOG"
 fi
 
 # ── Final verdict ────────────────────────────────────────────────────
