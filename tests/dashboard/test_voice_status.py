@@ -272,6 +272,8 @@ class TestGetVoiceStatus:
             "vad",
             "wyoming",
             "hardware",
+            # Mission C3 §T2.8 — server-side degraded-mode marker.
+            "degraded",
             "preflight_warnings",
         }
         assert set(status.keys()) == expected_keys

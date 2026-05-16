@@ -106,10 +106,7 @@ class FailoverHistoryRing:
         # ``capacity=0`` should clamp to 1 (defensive); ``capacity=None``
         # falls back to the default. Disambiguates the ``capacity or default``
         # short-circuit which would otherwise treat ``0`` as falsy.
-        if capacity is None:
-            resolved = self._DEFAULT_CAPACITY
-        else:
-            resolved = capacity
+        resolved = self._DEFAULT_CAPACITY if capacity is None else capacity
         self._capacity = max(1, resolved)
         self._entries: deque[FailoverLadderRunRecord] = deque(maxlen=self._capacity)
 

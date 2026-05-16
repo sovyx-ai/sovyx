@@ -278,16 +278,14 @@ def select_alternative_endpoint(
         # have been populated with either the GUID or the canonical
         # form depending on the producer site. Belt-and-suspenders:
         # both lookups are O(1) dict probes.
-        if (
+        return bool(
             recent_probe_results is not None
             and physical
             and recent_probe_results.is_known_unopenable(
                 physical,
                 entry.host_api_name or "",
-            )
-        ):
-            return True
-        return False
+            ),
+        )
 
     candidates = [e for e in entries if not _is_skippable(e)]
     # v0.38.3 — exclude DeviceKind.OS_DEFAULT virtual aliases from
