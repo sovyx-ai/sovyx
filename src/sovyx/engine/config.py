@@ -1303,14 +1303,53 @@ class VoiceTuningConfig(BaseSettings):
     environment, not chase failover loops)."""
 
     failover_cooldown_s: float = 30.0
-    """Minimum monotonic seconds between consecutive failover attempts
-    (Mission §Phase 2 T2.6). Prevents thrash when the next candidate
-    is also degraded — the cooldown lets the new endpoint accumulate
-    enough heartbeats for a confident re-deaf signal before another
-    failover fires. Default 30 s ≈ 5x the deaf-warning window so a
-    transient device hiccup doesn't trigger a cascade. Bounded
-    [0, 600] — zero disables cooldown entirely (test/diagnostic
-    use only)."""
+    """Minimum monotonic seconds between consecutive failover ladder
+    INVOCATIONS (Mission §Phase 2 T2.6 + Mission C3 §T1.1 ADR-D2).
+    Mission C3 RE-INTERPRETED the semantic: pre-Mission-C3 this gated
+    every single dispatch (so candidate 2 had to wait 30 s for
+    candidate 1's failure to age out); post-Mission-C3 this gates
+    the outer closure invocation only — within a single ladder run
+    the intra-ladder cooldown
+    :attr:`failover_intra_ladder_cooldown_s` separates successive
+    dispatches at 2 s. The outer 30 s default still protects against
+    deaf-signal heartbeat storms — if the last ladder ran < 30 s ago,
+    the new closure invocation defers to that ladder rather than
+    firing a fresh one. Bounded [0, 600] — zero disables outer
+    cooldown entirely (test/diagnostic use only)."""
+
+    failover_intra_ladder_cooldown_s: float = 2.0
+    """Mission C3 §T1.2 — minimum wall-clock seconds between candidate
+    dispatches WITHIN a single ladder run (intra-ladder gate). Separate
+    from :attr:`failover_cooldown_s`, which gates outer closure
+    invocations across deaf-signal heartbeats.
+
+    Default 2.0 s is the empirical lower bound for ALSA / WASAPI
+    state to stabilize after a failed open. Going below risks
+    cascading driver hangs on hosts with PipeWire session-manager
+    contention. Bounded [0, 30] — zero disables intra-ladder
+    cooldown (test/diagnostic use only; CI gates set 0.0 to keep
+    test execution under the 30 s pytest timeout); 30 s is the
+    same ceiling as the outer cooldown.
+
+    Mission anchor:
+    ``docs-internal/missions/MISSION-c3-failover-ladder-iteration-2026-05-16.md``
+    §T1.2 ADR-D2."""
+
+    failover_candidate_max_attempts_per_ladder: int = 5
+    """Mission C3 §T1.2 — hard cap on candidate dispatches within a
+    SINGLE ladder run. Prevents runaway iteration on a host with
+    > 5 candidates if every dispatch fails fast.
+
+    Default 5 covers the operator's Sony VAIO + Linux Mint setup
+    (Razer USB + PipeWire + OS default + 2 HD-Audio Generic = 5
+    candidates) with no overflow. Bounded [1, 20]. Independent of
+    :attr:`max_failover_attempts` (which caps ladder INVOCATIONS
+    across deaf-signal heartbeats); a single ladder run can attempt
+    up to this many candidates regardless of the outer counter.
+
+    Mission anchor:
+    ``docs-internal/missions/MISSION-c3-failover-ladder-iteration-2026-05-16.md``
+    §T1.2 ADR-D1."""
 
     # ── Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
     # §Phase 2 T2.1 + T2.2 + T2.3 — two new Linux bypass strategies
