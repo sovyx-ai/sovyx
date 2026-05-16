@@ -1,4 +1,21 @@
-"""Voice status + models + setup endpoints."""
+"""Voice status + models + setup endpoints.
+
+Phase 5.D (v0.32.7 — commits ``aee85844..f277ba19``) migrated 14
+endpoints from raw ``JSONResponse(dict)`` to typed
+``Model | JSONResponse`` unions. Every ``Model.model_validate(
+helper_dict)`` call site in this module MUST have a corresponding
+round-trip regression test under ``tests/dashboard/`` that
+exercises the producer's actual prod shape (see Mission C2 §T2.7
+— anti-pattern #40: typed boundary drifts from producer dict
+shape when both evolve independently). The shared helper
+``tests.dashboard._boundary_helpers.assert_boundary_accepts`` is
+the canonical pattern; current cohort coverage lives in
+``tests/dashboard/test_voice_status_boundary.py`` (the C2 site)
++ ``tests/dashboard/test_voice_boundary_cohort.py`` (the 4 sibling
+sites). When adding a new ``.model_validate(...)`` call here,
+also add the matching boundary test BEFORE merging; the v0.45.0
+STRICT-flip static checker (mission §T4.1) will enforce this.
+"""
 
 from __future__ import annotations
 
