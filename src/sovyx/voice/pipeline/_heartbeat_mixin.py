@@ -103,6 +103,28 @@ _NOISE_FLOOR_DRIFT_CONSECUTIVE_HEARTBEATS = (
 trio above."""
 
 
+def _safe_failover_terminal_interval_s(self_obj: object) -> float:
+    """Mission C3 §T2.7 — read the terminal deaf-warn throttle interval.
+
+    Best-effort with a sane default (60.0 s). Resolves via
+    ``self._config.failover_terminal_deaf_warn_min_interval_s`` when
+    that config field exists; falls back to a fresh
+    :class:`VoiceTuningConfig` instance otherwise (matches the SNR-
+    constant module-capture pattern above).
+    """
+    try:
+        config = getattr(self_obj, "_config", None)
+        explicit = getattr(config, "failover_terminal_deaf_warn_min_interval_s", None)
+        if explicit is not None:
+            return float(explicit)
+    except Exception:  # noqa: BLE001 — observability hygiene only
+        pass
+    try:
+        return float(_VoiceTuning().failover_terminal_deaf_warn_min_interval_s)
+    except Exception:  # noqa: BLE001
+        return 60.0
+
+
 class HeartbeatMixin:
     """Periodic ``voice_pipeline_heartbeat`` emission + per-frame VAD aggregation.
 
@@ -381,6 +403,44 @@ class HeartbeatMixin:
             # a capture APO (e.g. Windows Voice Clarity / VocaEffectPack)
             # zeroing out the signal before it reaches the engine.
             self._deaf_warnings_consecutive += 1
+
+            # Mission C3 §T2.7 — post-ladder-exhaustion throttle. After
+            # the runtime-failover ladder reports
+            # ``state.ladder_exhausted=True`` AND the coordinator has
+            # latched terminal (``_coordinator_terminated=True``), the
+            # deaf-warning signal is operator-actionable ONCE per ladder
+            # cycle, not every 5 s. Without throttling the operator's
+            # v0.43.1 session emitted 29 redundant warnings over 12 min
+            # (H7 amplification). Throttle to 1 emission per
+            # ``failover_terminal_deaf_warn_min_interval_s`` (default
+            # 60 s) and tag every emission with
+            # ``coordinator_terminal`` (True/False) so dashboards split.
+            now_terminal = time.monotonic()
+            coordinator_terminal = bool(
+                getattr(self, "_coordinator_terminated", False)
+                and getattr(self, "_failover_ladder_exhausted", False),
+            )
+            if coordinator_terminal:
+                tuning_terminal_interval = _safe_failover_terminal_interval_s(self)
+                last_terminal_emit = getattr(
+                    self,
+                    "_last_terminal_deaf_warn_monotonic",
+                    0.0,
+                )
+                if (
+                    last_terminal_emit > 0.0
+                    and (now_terminal - last_terminal_emit) < tuning_terminal_interval
+                ):
+                    # Throttled — increment counter silently + maybe
+                    # trigger coordinator (heartbeat path stays alive,
+                    # log noise suppressed).
+                    self._maybe_trigger_bypass_coordinator()
+                    self._last_heartbeat_monotonic = now
+                    self._max_vad_prob_since_heartbeat = 0.0
+                    self._vad_frames_since_heartbeat = 0
+                    return
+                self._last_terminal_deaf_warn_monotonic = now_terminal
+
             logger.warning(
                 "voice_pipeline_deaf_warning",
                 mind_id=self._config.mind_id,
@@ -390,6 +450,7 @@ class HeartbeatMixin:
                 vad_max_threshold=_DEAF_VAD_MAX_THRESHOLD,
                 consecutive_deaf_warnings=self._deaf_warnings_consecutive,
                 voice_clarity_active=self._voice_clarity_active,
+                coordinator_terminal=coordinator_terminal,
                 hint=(
                     "Orchestrator received frames but VAD probability stayed "
                     "below threshold — check FrameNormalizer source_rate/channels "

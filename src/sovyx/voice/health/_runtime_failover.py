@@ -701,6 +701,15 @@ async def _try_runtime_failover(
                 state.ladder_exhausted = False
                 state.last_ladder_complete_monotonic = time.monotonic()
                 state.last_candidates_unreachable = list(candidates_unreachable)
+                # Mission C3 §T2.7 — clear the pipeline-side
+                # ladder-exhausted flag so the heartbeat throttle
+                # releases. Best-effort setattr.
+                _safe_set_pipeline_attr(pipeline, "_failover_ladder_exhausted", False)
+                _safe_set_pipeline_attr(
+                    pipeline,
+                    "_last_terminal_deaf_warn_monotonic",
+                    0.0,
+                )
 
                 # Mission C3 §T2.5 — emit the frame-loss summary BEFORE
                 # the ladder_complete event so dashboards see the
@@ -806,6 +815,10 @@ async def _try_runtime_failover(
         state.ladder_exhausted = True
         state.last_ladder_complete_monotonic = time.monotonic()
         state.last_candidates_unreachable = list(candidates_unreachable)
+        # Mission C3 §T2.7 — set the pipeline-side ladder-exhausted
+        # flag so the heartbeat-mixin throttle engages on subsequent
+        # deaf-warning emissions. Best-effort setattr.
+        _safe_set_pipeline_attr(pipeline, "_failover_ladder_exhausted", True)
 
         # Mission C3 §T2.5 — frame-loss summary for the exhausted path.
         _emit_frame_loss_window_summary(
@@ -831,6 +844,30 @@ async def _try_runtime_failover(
         )
     finally:
         _safe_set_ladder_in_progress(pipeline, value=False)
+
+
+def _safe_set_pipeline_attr(pipeline: Any, name: str, value: object) -> None:  # noqa: ANN401
+    """Best-effort ``setattr`` for ladder-related pipeline flags.
+
+    Mission C3 §T2.5 + §T2.7 — wraps the setattr in try/except so an
+    unusual pipeline that does not accept arbitrary attribute writes
+    cannot crash the failover closure. Used by both the success-path
+    (clear ``_failover_ladder_exhausted`` + reset terminal-warn
+    timestamp) and the exhausted-path (set
+    ``_failover_ladder_exhausted=True`` so the heartbeat throttle
+    engages).
+    """
+    try:
+        setattr(pipeline, name, value)
+    except Exception as exc:  # noqa: BLE001 — observability hygiene only
+        logger.debug(
+            "voice.failover.pipeline_setattr_failed",
+            pipeline_type=type(pipeline).__name__,
+            attr=name,
+            value=value,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 def _safe_set_ladder_in_progress(pipeline: Any, *, value: bool) -> None:  # noqa: ANN401

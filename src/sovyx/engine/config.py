@@ -1351,6 +1351,25 @@ class VoiceTuningConfig(BaseSettings):
     ``docs-internal/missions/MISSION-c3-failover-ladder-iteration-2026-05-16.md``
     §T1.2 ADR-D1."""
 
+    failover_terminal_deaf_warn_min_interval_s: float = 60.0
+    """Mission C3 §T2.7 — minimum wall-clock seconds between
+    ``voice_pipeline_deaf_warning`` emissions AFTER the failover
+    ladder has exhausted AND the coordinator is latched terminal.
+
+    Closes the H7 amplification observed in the v0.43.1 operator
+    session: 29 redundant deaf warnings over 12+ min once the
+    coordinator latched terminal — pure observability noise drowning
+    genuine events. Default 60 s collapses that into ≤ 12 warnings
+    over the same window with the ``coordinator_terminal=True`` tag
+    so dashboards split.
+
+    The throttle releases automatically on (a) successful runtime
+    failover (ladder_exhausted clears), OR (b) coordinator non-
+    terminal verdict (e.g. CASCADE_REEVALUATION_REQUESTED resets the
+    latch), OR (c) operator-issued ``sovyx restart``. Bounded
+    [10, 600] — zero would disable the throttle entirely
+    (diagnostic only)."""
+
     # ── Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
     # §Phase 2 T2.1 + T2.2 + T2.3 — two new Linux bypass strategies
     # that automate the two canonical Linux+PipeWire silent-mic
