@@ -641,6 +641,12 @@ def _run_voice_doctor(
         reason_filter=reason_filter,
     )
 
+    # Mission C3 §T2.11 — surface the runtime failover-history ring.
+    # Greenfield observability for the loop-in-place ladder iteration
+    # (v0.45.2). Operators can now triage why a ladder exhausted from
+    # the CLI without parsing structured logs.
+    _render_voice_failover_history_surface(output_json=output_json)
+
     failure_count = sum(1 for s in report.steps if not s.passed)
 
     # Non-fix path: preserve v0.21.2 contract — exit code equals the
@@ -1611,6 +1617,82 @@ def _render_voice_quarantine_surface(
             f"Host API: {entry.host_api or '—'}  "
             f"Recheck in: {int(seconds_left)}s[/dim]"
         )
+
+
+def _render_voice_failover_history_surface(
+    *,
+    output_json: bool,
+    limit: int = 8,
+) -> None:
+    """Mission C3 §T2.11 — render the "Voice — failover history" section.
+
+    Surfaces the most recent ``limit`` ladder runs from the process-local
+    :class:`sovyx.voice.health._failover_history.FailoverHistoryRing`
+    (populated by ``_try_runtime_failover`` per ladder complete).
+
+    JSON mode skips this surface entirely (operators using JSON output
+    consume the ``/api/voice/health/failover-history`` endpoint
+    directly).
+
+    Renders gracefully on a fresh-boot daemon where no ladder has yet
+    run — prints a single ``[dim]No failover ladder has run yet.[/dim]``
+    line.
+
+    Args:
+        output_json: When True, the surface is suppressed.
+        limit: Max number of ladder runs to render. Default 8 covers
+            the most recent operator-session timeframe without flooding
+            the terminal.
+    """
+    if output_json:
+        return
+    try:
+        from sovyx.voice.health._failover_history import get_default_failover_history
+    except Exception as exc:  # noqa: BLE001 — observability-only surface
+        console.print(
+            f"[dim]Voice — failover history: unavailable ({exc}).[/dim]",
+        )
+        return
+
+    ring = get_default_failover_history()
+    entries = ring.entries()[:limit]
+
+    console.print("\n[bold]Voice — failover history[/bold]")
+    if not entries:
+        console.print("[dim]No failover ladder has run yet on this daemon process.[/dim]")
+        return
+
+    for entry in entries:
+        verdict_color = {
+            "succeeded": "green",
+            "exhausted": "red",
+            "in_progress": "yellow",
+        }.get(entry.verdict, "white")
+        elapsed = f"{entry.elapsed_ms}ms" if entry.elapsed_ms is not None else "—"
+        console.print(
+            f"  • [bold]{entry.ladder_id}[/bold]  "
+            f"[{verdict_color}]{entry.verdict}[/{verdict_color}]  "
+            f"[dim](candidates={entry.candidates_tried}, elapsed={elapsed})[/dim]",
+        )
+        if entry.from_endpoint:
+            console.print(f"    [dim]From: {entry.from_endpoint}[/dim]")
+        for candidate in entry.candidates:
+            cand_color = {
+                "succeeded": "green",
+                "failed": "red",
+                "skipped": "yellow",
+            }.get(candidate.verdict, "white")
+            cand_elapsed = f"{candidate.elapsed_ms}ms" if candidate.elapsed_ms is not None else "—"
+            extra = ""
+            if candidate.error_class:
+                extra = f" [dim]error_class={candidate.error_class}[/dim]"
+            elif candidate.skipped_reason:
+                extra = f" [dim]reason={candidate.skipped_reason}[/dim]"
+            console.print(
+                f"    {candidate.index}. "
+                f"[{cand_color}]{candidate.verdict}[/{cand_color}]  "
+                f"{candidate.target_endpoint}  [dim]({cand_elapsed})[/dim]" + extra,
+            )
 
 
 def _first_failure_is_saturation(report: PreflightReport) -> bool:
