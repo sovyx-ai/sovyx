@@ -16,7 +16,7 @@
  * is disabled with a tooltip when ``voice_enabled === false``.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AudioWaveformIcon,
@@ -905,6 +905,205 @@ function QuarantineSection() {
   );
 }
 
+/* ── Mission C3 §T2.10 — FailoverHistorySection ─────────────────────── */
+
+const FAILOVER_LADDER_VERDICT_COLOR: Record<string, string> = {
+  succeeded: "var(--svx-color-status-green)",
+  exhausted: "var(--svx-color-status-red)",
+  in_progress: "var(--svx-color-status-yellow)",
+};
+
+const FAILOVER_CANDIDATE_VERDICT_COLOR: Record<string, string> = {
+  succeeded: "var(--svx-color-status-green)",
+  failed: "var(--svx-color-status-red)",
+  skipped: "var(--svx-color-status-yellow)",
+};
+
+interface FailoverCandidateRowProps {
+  index: number;
+  target_endpoint: string;
+  target_friendly_name?: string;
+  verdict: string;
+  error_class?: string;
+  error_detail?: string;
+  elapsed_ms?: number | null;
+  skipped_reason?: string | null;
+}
+
+const FailoverCandidateRow = React.memo(function FailoverCandidateRow({
+  index,
+  target_endpoint,
+  target_friendly_name,
+  verdict,
+  error_class,
+  elapsed_ms,
+  skipped_reason,
+}: FailoverCandidateRowProps) {
+  const { t } = useTranslation("voice");
+  const candidateColor =
+    FAILOVER_CANDIDATE_VERDICT_COLOR[verdict] ?? "var(--svx-color-text-secondary)";
+  const verdictLabel =
+    t(`failoverHistory.candidateVerdict.${verdict}`, {
+      defaultValue: verdict,
+    }) as string;
+  return (
+    <li
+      className="flex items-center gap-2 font-mono text-[11px]"
+      data-testid="failover-candidate-row"
+    >
+      <span className="w-4 text-right text-[var(--svx-color-text-tertiary)]">
+        {index}.
+      </span>
+      <span style={{ color: candidateColor }}>{verdictLabel}</span>
+      <span className="flex-1 truncate text-[var(--svx-color-text-primary)]">
+        {target_friendly_name || target_endpoint}
+      </span>
+      {typeof elapsed_ms === "number" && (
+        <span className="text-[var(--svx-color-text-tertiary)]">{elapsed_ms}ms</span>
+      )}
+      {error_class && (
+        <span className="text-[var(--svx-color-text-tertiary)]">
+          {t("failoverHistory.errorClass")}: {error_class}
+        </span>
+      )}
+      {skipped_reason && (
+        <span className="text-[var(--svx-color-text-tertiary)]">
+          {skipped_reason}
+        </span>
+      )}
+    </li>
+  );
+});
+
+function FailoverHistorySection() {
+  const { t } = useTranslation("voice");
+  const snapshot = useDashboardStore((s) => s.voiceFailoverHistory);
+  const loading = useDashboardStore((s) => s.voiceFailoverHistoryLoading);
+  const error = useDashboardStore((s) => s.voiceFailoverHistoryError);
+  const fetchHistory = useDashboardStore((s) => s.fetchVoiceFailoverHistory);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchHistory(controller.signal);
+    return () => controller.abort();
+  }, [fetchHistory]);
+
+  const entries = snapshot?.entries ?? [];
+  // Render only the most recent 16 entries (full ring is 32; the
+  // remaining 16 serve the `sovyx doctor voice` CLI surface).
+  const rendered = useMemo(() => entries.slice(0, 16), [entries]);
+
+  return (
+    <section
+      aria-labelledby="failover-history-heading"
+      className="space-y-3"
+      data-testid="failover-history-section"
+    >
+      <div className="flex items-baseline justify-between">
+        <h2
+          id="failover-history-heading"
+          className="text-sm font-semibold uppercase tracking-wider text-[var(--svx-color-text-secondary)]"
+        >
+          {t("failoverHistory.title")}
+        </h2>
+        <span className="font-mono text-[11px] text-[var(--svx-color-text-tertiary)]">
+          {entries.length}
+          {snapshot && (
+            <span className="ml-1 text-[var(--svx-color-text-quaternary)]">
+              / {snapshot.ring_capacity}
+            </span>
+          )}
+        </span>
+      </div>
+      <p className="text-xs text-[var(--svx-color-text-tertiary)]">
+        {t("failoverHistory.subtitle")}
+      </p>
+      {loading && !snapshot && (
+        <div
+          className="flex items-center gap-2 text-xs text-[var(--svx-color-text-tertiary)]"
+          data-testid="failover-history-loading"
+        >
+          <Loader2Icon className="size-3.5 animate-spin" />
+          {t("health.loading")}
+        </div>
+      )}
+      {error && (
+        <div
+          className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-status-red)]/40 bg-[var(--svx-color-status-red)]/10 px-3 py-2 font-mono text-xs text-[var(--svx-color-status-red)]"
+          data-testid="failover-history-error"
+        >
+          {error}
+        </div>
+      )}
+      {snapshot && entries.length === 0 && (
+        <div
+          className="rounded-[var(--svx-radius-lg)] border border-dashed border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)] p-6 text-center text-sm text-[var(--svx-color-text-tertiary)]"
+          data-testid="failover-history-empty"
+        >
+          {t("failoverHistory.empty")}
+        </div>
+      )}
+      {rendered.length > 0 && (
+        <ul className="space-y-3">
+          {rendered.map((entry) => {
+            const verdictColor =
+              FAILOVER_LADDER_VERDICT_COLOR[entry.verdict] ??
+              "var(--svx-color-text-secondary)";
+            const verdictLabel =
+              t(`failoverHistory.verdict.${entry.verdict}`, {
+                defaultValue: entry.verdict,
+              }) as string;
+            return (
+              <li
+                key={entry.ladder_id}
+                className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)] p-3"
+                data-testid="failover-history-entry"
+              >
+                <div className="flex items-center gap-2 font-mono text-xs">
+                  <span className="font-bold text-[var(--svx-color-text-primary)]">
+                    {entry.ladder_id}
+                  </span>
+                  <span style={{ color: verdictColor }}>{verdictLabel}</span>
+                  <span className="ml-auto text-[var(--svx-color-text-tertiary)]">
+                    {t("failoverHistory.candidates")}: {entry.candidates_tried ?? 0}
+                    {typeof entry.elapsed_ms === "number" && (
+                      <>
+                        {" · "}
+                        {t("failoverHistory.elapsed")}: {entry.elapsed_ms}ms
+                      </>
+                    )}
+                  </span>
+                </div>
+                {entry.from_endpoint && (
+                  <p className="mt-1 font-mono text-[11px] text-[var(--svx-color-text-tertiary)]">
+                    {entry.from_endpoint}
+                  </p>
+                )}
+                {entry.candidates && entry.candidates.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {entry.candidates.map((c) => (
+                      <FailoverCandidateRow
+                        key={`${entry.ladder_id}-${c.index}`}
+                        index={c.index}
+                        target_endpoint={c.target_endpoint}
+                        target_friendly_name={c.target_friendly_name}
+                        verdict={c.verdict}
+                        error_class={c.error_class}
+                        elapsed_ms={c.elapsed_ms}
+                        skipped_reason={c.skipped_reason}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 /* ── Main page ── */
 
 export default function VoiceHealthPage() {
@@ -1136,6 +1335,16 @@ export default function VoiceHealthPage() {
           page can refresh quarantine without re-pulling the combo
           store + override list. */}
       <QuarantineSection />
+
+      {/* Failover history — Mission C3 §T2.10. Surfaces the runtime
+          failover ladder history ring populated by
+          ``_try_runtime_failover`` per ladder complete. Operators
+          consult this section to triage why a ladder exhausted, see
+          per-candidate detail with error_class + skipped reasons,
+          and confirm that the loop-in-place refactor (v0.45.2) is
+          iterating across the full candidate set rather than
+          collapsing to source. */}
+      <FailoverHistorySection />
 
       {/* Mixer KB — independent of cascade state; shows shipped + user
           profile pools plus an inline YAML-validate panel for reviewers. */}

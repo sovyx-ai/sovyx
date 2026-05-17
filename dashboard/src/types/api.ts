@@ -1187,6 +1187,63 @@ export interface VoiceHealthQuarantineSnapshotResponse {
   count: number;
 }
 
+// ── Failover history (Mission C3 §T2.9) ────────────────────────────────
+//
+// Mirrors the Pydantic response models in
+// ``src/sovyx/dashboard/routes/voice_health.py``:
+//   - ``FailoverCandidateModel``
+//   - ``FailoverHistoryEntryModel``
+//   - ``FailoverHistoryResponse``
+//
+// Forward-additive — `model_config = {"extra": "allow"}` on the backend
+// pairs with `.passthrough()` on the zod twin; future C4 banner-UX
+// fields land without a migration.
+
+/** Verdict of a single candidate within a ladder run. */
+export type FailoverCandidateVerdict = "succeeded" | "failed" | "skipped";
+
+/** Verdict of a full ladder invocation. */
+export type FailoverLadderVerdict = "in_progress" | "succeeded" | "exhausted";
+
+/**
+ * Per-candidate detail inside a ladder run. Mirrors
+ * ``FailoverCandidateModel`` (``routes/voice_health.py``).
+ */
+export interface FailoverCandidate {
+  index: number;
+  target_endpoint: string;
+  target_friendly_name?: string;
+  verdict: FailoverCandidateVerdict;
+  error_class?: string;
+  error_detail?: string;
+  elapsed_ms?: number | null;
+  skipped_reason?: string | null;
+}
+
+/**
+ * One ladder invocation captured for observability. Mirrors
+ * ``FailoverHistoryEntryModel`` (``routes/voice_health.py``).
+ */
+export interface FailoverHistoryEntry {
+  ladder_id: string;
+  started_monotonic: number;
+  completed_monotonic?: number | null;
+  verdict: FailoverLadderVerdict;
+  candidates_tried?: number;
+  succeeded_index?: number | null;
+  candidates?: FailoverCandidate[];
+  from_endpoint?: string;
+  elapsed_ms?: number | null;
+  derived_reason?: string;
+  mind_id?: string;
+}
+
+/** GET /api/voice/health/failover-history response. */
+export interface FailoverHistoryResponse {
+  entries: FailoverHistoryEntry[];
+  ring_capacity: number;
+}
+
 // ── Mixer KB (Sprint 4 dashboard workflow) ─────────────────────────────
 //
 // Mirrors the Pydantic response models in

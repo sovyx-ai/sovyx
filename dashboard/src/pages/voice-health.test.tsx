@@ -28,6 +28,7 @@ const mockValidateMixerKb = vi.fn();
 // component. Stubbed to a resolved Promise so the page's useEffect can
 // invoke it without crashing the test mount.
 const mockFetchVoiceHealthQuarantine = vi.fn().mockResolvedValue(undefined);
+const mockFetchVoiceFailoverHistory = vi.fn().mockResolvedValue(undefined);
 
 let mockState: Record<string, unknown> = {};
 
@@ -156,6 +157,13 @@ function setStore(
     voiceHealthQuarantineLoading: false,
     voiceHealthQuarantineError: null,
     fetchVoiceHealthQuarantine: mockFetchVoiceHealthQuarantine,
+    // Mission C3 §T2.10 — FailoverHistorySection state defaults.
+    // Individual tests override via ``extras`` when exercising the
+    // section's behaviour.
+    voiceFailoverHistory: null,
+    voiceFailoverHistoryLoading: false,
+    voiceFailoverHistoryError: null,
+    fetchVoiceFailoverHistory: mockFetchVoiceFailoverHistory,
     ...extras,
   };
 }
@@ -169,6 +177,7 @@ beforeEach(() => {
   mockFetchMixerKbList.mockReset().mockResolvedValue(undefined);
   mockFetchMixerKbDetail.mockReset().mockResolvedValue(null);
   mockFetchVoiceHealthQuarantine.mockReset().mockResolvedValue(undefined);
+  mockFetchVoiceFailoverHistory.mockReset().mockResolvedValue(undefined);
   mockValidateMixerKb.mockReset().mockResolvedValue({
     ok: true,
     profile_id: null,
@@ -636,5 +645,124 @@ describe("VoiceHealthPage — Mixer KB card", () => {
     expect(issues).toHaveTextContent("codec_id_glob");
     expect(issues).toHaveTextContent("Field required");
     expect(issues).toHaveTextContent("verified_on");
+  });
+});
+
+// ── Mission C3 §T2.10 — FailoverHistorySection tests ────────────────
+
+describe("VoiceHealthPage — FailoverHistorySection (Mission C3)", () => {
+  const _failoverSnapshot = {
+    combo_store: [],
+    overrides: [],
+    data_dir: "/tmp/sovyx",
+    voice_enabled: true,
+  } as const;
+
+  beforeEach(() => {
+    mockFetchVoiceFailoverHistory
+      .mockReset()
+      .mockResolvedValue(undefined);
+  });
+
+  it("triggers fetchVoiceFailoverHistory on mount", () => {
+    setStore(_failoverSnapshot);
+    render(<VoiceHealthPage />);
+    expect(mockFetchVoiceFailoverHistory).toHaveBeenCalled();
+  });
+
+  it("renders empty-state when no ladder has run", () => {
+    setStore(_failoverSnapshot, {
+      voiceFailoverHistory: { entries: [], ring_capacity: 32 },
+    });
+    render(<VoiceHealthPage />);
+    expect(screen.getByTestId("failover-history-empty")).toBeInTheDocument();
+  });
+
+  it("renders loading state when snapshot not loaded yet", () => {
+    setStore(_failoverSnapshot, {
+      voiceFailoverHistory: null,
+      voiceFailoverHistoryLoading: true,
+    });
+    render(<VoiceHealthPage />);
+    expect(screen.getByTestId("failover-history-loading")).toBeInTheDocument();
+  });
+
+  it("renders error state when fetch fails", () => {
+    setStore(_failoverSnapshot, {
+      voiceFailoverHistoryError: "HTTP 503: backend unavailable",
+    });
+    render(<VoiceHealthPage />);
+    const errEl = screen.getByTestId("failover-history-error");
+    expect(errEl).toHaveTextContent("503");
+  });
+
+  it("renders a succeeded ladder with per-candidate detail", () => {
+    setStore(_failoverSnapshot, {
+      voiceFailoverHistory: {
+        entries: [
+          {
+            ladder_id: "abc123def456",
+            started_monotonic: 1000.0,
+            completed_monotonic: 1001.0,
+            verdict: "succeeded",
+            candidates_tried: 2,
+            succeeded_index: 1,
+            from_endpoint: "razer-blackshark-v2-pro",
+            elapsed_ms: 1000,
+            candidates: [
+              {
+                index: 0,
+                target_endpoint: "hd-audio-generic",
+                target_friendly_name: "HD-Audio Generic",
+                verdict: "failed",
+                error_class: "unopenable_this_boot",
+                error_detail: "AlsaOpen failed",
+                elapsed_ms: 500,
+                skipped_reason: null,
+              },
+              {
+                index: 1,
+                target_endpoint: "pipewire-virtual",
+                target_friendly_name: "PipeWire",
+                verdict: "succeeded",
+                error_class: "",
+                error_detail: "",
+                elapsed_ms: 400,
+                skipped_reason: null,
+              },
+            ],
+          },
+        ],
+        ring_capacity: 32,
+      },
+    });
+    render(<VoiceHealthPage />);
+    const entry = screen.getByTestId("failover-history-entry");
+    expect(entry).toHaveTextContent("abc123def456");
+    const rows = screen.getAllByTestId("failover-candidate-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("HD-Audio Generic");
+    expect(rows[0]).toHaveTextContent("unopenable_this_boot");
+    expect(rows[1]).toHaveTextContent("PipeWire");
+  });
+
+  it("caps rendered entries at 16 (dashboard scope; doctor CLI sees the rest)", () => {
+    const manyEntries = Array.from({ length: 24 }, (_, i) => ({
+      ladder_id: `id-${i.toString().padStart(8, "0")}`,
+      started_monotonic: i,
+      completed_monotonic: i + 1,
+      verdict: "succeeded" as const,
+      candidates_tried: 1,
+      succeeded_index: 0,
+      candidates: [],
+      from_endpoint: "razer",
+      elapsed_ms: 500,
+    }));
+    setStore(_failoverSnapshot, {
+      voiceFailoverHistory: { entries: manyEntries, ring_capacity: 32 },
+    });
+    render(<VoiceHealthPage />);
+    const entries = screen.getAllByTestId("failover-history-entry");
+    expect(entries).toHaveLength(16);
   });
 });

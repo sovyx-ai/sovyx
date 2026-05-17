@@ -12,6 +12,7 @@
  */
 import type { StateCreator } from "zustand";
 import type {
+  FailoverHistoryResponse,
   MixerKbListResponse,
   MixerKbProfileDetail,
   MixerKbValidateRequest,
@@ -27,6 +28,7 @@ import type {
   VoiceHealthSnapshotResponse,
 } from "@/types/api";
 import {
+  FailoverHistoryResponseSchema,
   MixerKbListResponseSchema,
   MixerKbProfileDetailSchema,
   MixerKbValidateResponseSchema,
@@ -58,6 +60,18 @@ export interface VoiceHealthSlice {
   voiceHealthQuarantineLoading: boolean;
   voiceHealthQuarantineError: string | null;
 
+  /**
+   * Mission C3 §T2.9 — failover-history ring snapshot. Powers the
+   * `FailoverHistorySection` component on `/voice/health`. Distinct
+   * fetch lifecycle from `voiceHealthQuarantine` so the section can
+   * refresh on its own cadence (operators may poll the ring more
+   * aggressively when a ladder is in flight without flooding the
+   * combo-store / overrides endpoint).
+   */
+  voiceFailoverHistory: FailoverHistoryResponse | null;
+  voiceFailoverHistoryLoading: boolean;
+  voiceFailoverHistoryError: string | null;
+
   /** Mixer-KB list response keyed off the /kb/profiles endpoint. */
   mixerKbList: MixerKbListResponse | null;
   mixerKbLoading: boolean;
@@ -69,6 +83,8 @@ export interface VoiceHealthSlice {
   fetchVoiceHealth: (signal?: AbortSignal) => Promise<void>;
   /** Mission C1 §T2.2 — fetch the live quarantine snapshot. */
   fetchVoiceHealthQuarantine: (signal?: AbortSignal) => Promise<void>;
+  /** Mission C3 §T2.9 — fetch the failover-history ring snapshot. */
+  fetchVoiceFailoverHistory: (signal?: AbortSignal) => Promise<void>;
   reprobeVoiceEndpoint: (
     body: VoiceHealthReprobeRequest,
   ) => Promise<VoiceHealthProbeResult | null>;
@@ -104,6 +120,9 @@ export const createVoiceHealthSlice: StateCreator<
   voiceHealthQuarantine: null,
   voiceHealthQuarantineLoading: false,
   voiceHealthQuarantineError: null,
+  voiceFailoverHistory: null,
+  voiceFailoverHistoryLoading: false,
+  voiceFailoverHistoryError: null,
   mixerKbList: null,
   mixerKbLoading: false,
   mixerKbError: null,
@@ -167,6 +186,45 @@ export const createVoiceHealthSlice: StateCreator<
       set({
         voiceHealthQuarantineLoading: false,
         voiceHealthQuarantineError: msg,
+      });
+    }
+  },
+
+  /**
+   * Mission C3 §T2.9 — fetch the failover-history ring snapshot for the
+   * `FailoverHistorySection` component on `/voice/health`. Returns
+   * the most recent N ladder runs (newest first); the ring is bounded
+   * by `failover_history_ring_capacity` tuning knob (default 32).
+   * Empty `entries` array on fresh-boot daemons.
+   */
+  fetchVoiceFailoverHistory: async (signal?: AbortSignal) => {
+    set({
+      voiceFailoverHistoryLoading: true,
+      voiceFailoverHistoryError: null,
+    });
+    try {
+      const data = await api.get<FailoverHistoryResponse>(
+        "/api/voice/health/failover-history",
+        { signal, schema: FailoverHistoryResponseSchema },
+      );
+      set({
+        voiceFailoverHistory: data,
+        voiceFailoverHistoryLoading: false,
+      });
+    } catch (err) {
+      if (isAbortError(err)) {
+        set({ voiceFailoverHistoryLoading: false });
+        return;
+      }
+      const msg =
+        err instanceof ApiError
+          ? `HTTP ${err.status}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      set({
+        voiceFailoverHistoryLoading: false,
+        voiceFailoverHistoryError: msg,
       });
     }
   },
