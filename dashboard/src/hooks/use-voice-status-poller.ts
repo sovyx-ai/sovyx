@@ -15,12 +15,29 @@
  *
  * Mission anchor:
  * docs-internal/missions/MISSION-c2-voice-status-response-contract-2026-05-16.md §T2.3
+ *
+ * Mission C3 §T2.10 ADR closure (v0.45.6) — refactored to consume the
+ * generic ``useApiPoller<S, T>`` hook (``use-api-poller.ts``) so both
+ * dashboard pollers share one circuit-breaker implementation.
+ * Behaviour invariant: BASELINE_INTERVAL_MS = 500 ms; the generic
+ * multipliers (3× / 10× / 20×) yield 1500 / 5000 / 10000 ms for the
+ * 2-3 / 4-10 / ≥11 5xx tiers — bit-identical to the pre-refactor
+ * decision table. C2 calibration window F1/F4 measures BEHAVIOR
+ * (5xx counts + degraded transitions), which is unchanged.
  */
-import { useEffect, useRef, useState } from "react";
 import type { z } from "zod";
 
-import { ApiError, api, isAbortError } from "@/lib/api";
 import { VoiceStatusResponseSchema } from "@/types/schemas";
+
+import {
+  DEGRADED_AFTER_5XX as _DEGRADED_AFTER_5XX,
+  FIRST_BACKOFF_AFTER_5XX as _FIRST_BACKOFF_AFTER_5XX,
+  SUSTAINED_BACKOFF_AFTER_5XX as _SUSTAINED_BACKOFF_AFTER_5XX,
+  DEGRADED_MULTIPLIER,
+  FIRST_BACKOFF_MULTIPLIER,
+  SUSTAINED_BACKOFF_MULTIPLIER,
+  useApiPoller,
+} from "./use-api-poller";
 
 /**
  * Inferred from the zod schema rather than imported from
@@ -31,12 +48,15 @@ import { VoiceStatusResponseSchema } from "@/types/schemas";
 export type VoiceStatusResponse = z.infer<typeof VoiceStatusResponseSchema>;
 
 export const BASELINE_INTERVAL_MS = 500;
-export const FIRST_BACKOFF_INTERVAL_MS = 1500;
-export const SUSTAINED_BACKOFF_INTERVAL_MS = 5000;
-export const DEGRADED_INTERVAL_MS = 10_000;
-export const FIRST_BACKOFF_AFTER_5XX = 2;
-export const SUSTAINED_BACKOFF_AFTER_5XX = 4;
-export const DEGRADED_AFTER_5XX = 11;
+export const FIRST_BACKOFF_INTERVAL_MS =
+  BASELINE_INTERVAL_MS * FIRST_BACKOFF_MULTIPLIER; // 1500
+export const SUSTAINED_BACKOFF_INTERVAL_MS =
+  BASELINE_INTERVAL_MS * SUSTAINED_BACKOFF_MULTIPLIER; // 5000
+export const DEGRADED_INTERVAL_MS =
+  BASELINE_INTERVAL_MS * DEGRADED_MULTIPLIER; // 10000
+export const FIRST_BACKOFF_AFTER_5XX = _FIRST_BACKOFF_AFTER_5XX;
+export const SUSTAINED_BACKOFF_AFTER_5XX = _SUSTAINED_BACKOFF_AFTER_5XX;
+export const DEGRADED_AFTER_5XX = _DEGRADED_AFTER_5XX;
 
 export type PollerErrorState = "ok" | "degraded";
 
@@ -57,7 +77,7 @@ export interface VoiceStatusPollerResult {
 /**
  * Tier the next-tick delay based on consecutive 5xx count.
  *
- * Decision table:
+ * Decision table (preserved from pre-refactor C2 v0.44.3):
  *
  *   0–1 5xx in a row →   500 ms (baseline; transient blips don't penalise)
  *   2–3              → 1 500 ms (early backoff)
@@ -65,10 +85,19 @@ export interface VoiceStatusPollerResult {
  *   ≥ 11             → 10 000 ms (degraded — banner shown)
  *
  * Returns to baseline on the first 2xx.
+ *
+ * Implementation now delegates to
+ * :func:`use-api-poller.intervalForFailureCount` with the C2
+ * baseline (500 ms); the generic multipliers preserve the C2 table
+ * bit-exactly. Kept as a top-level export so the existing C2 tests
+ * (``use-voice-status-poller.test.tsx``) continue to import the
+ * function under its historic name.
  */
 export function intervalForFailureCount(consecutive5xx: number): number {
   if (consecutive5xx >= DEGRADED_AFTER_5XX) return DEGRADED_INTERVAL_MS;
-  if (consecutive5xx >= SUSTAINED_BACKOFF_AFTER_5XX) return SUSTAINED_BACKOFF_INTERVAL_MS;
+  if (consecutive5xx >= SUSTAINED_BACKOFF_AFTER_5XX) {
+    return SUSTAINED_BACKOFF_INTERVAL_MS;
+  }
   if (consecutive5xx >= FIRST_BACKOFF_AFTER_5XX) return FIRST_BACKOFF_INTERVAL_MS;
   return BASELINE_INTERVAL_MS;
 }
@@ -77,110 +106,31 @@ export function intervalForFailureCount(consecutive5xx: number): number {
  * Hook that polls ``GET /api/voice/status`` with exponential 5xx backoff.
  *
  * Each consumer instance owns its own backoff state — mounting the
- * voice page twice does NOT share a single backoff counter (intentional;
- * matches React's component-scoped state model).
+ * voice page twice does NOT share a single backoff counter
+ * (intentional; matches React's component-scoped state model).
  *
  * Emits ``console.warn("voice.status.poller.degraded", …)`` exactly
  * once when the hook transitions into ``error: "degraded"``. Operators
  * with devtools open see the trail; production builds without devtools
  * see only the in-page banner.
+ *
+ * Mission C3 §T2.10 ADR (v0.45.6) — implementation is now a thin
+ * wrapper around the generic ``useApiPoller``. The wrapper preserves
+ * the C2 public API surface (``status`` field name, decision-table
+ * constants) so existing call sites + tests stay green.
  */
 export function useVoiceStatusPoller(
   options: UseVoiceStatusPollerOptions,
 ): VoiceStatusPollerResult {
-  const { enabled } = options;
-  const [status, setStatus] = useState<VoiceStatusResponse | null>(null);
-  const [errorState, setErrorState] = useState<PollerErrorState>("ok");
-  const [consecutive5xx, setConsecutive5xx] = useState(0);
-
-  // Refs hold the latest values for the polling loop without triggering
-  // re-renders. The loop reads these on each tick to decide the next
-  // delay.
-  const consecutive5xxRef = useRef(0);
-  const errorStateRef = useRef<PollerErrorState>("ok");
-  const enteredDegradedRef = useRef(false);
-
-  useEffect(() => {
-    if (!enabled) {
-      // Reset state when disabled so a re-enable starts from baseline.
-      consecutive5xxRef.current = 0;
-      errorStateRef.current = "ok";
-      enteredDegradedRef.current = false;
-      setConsecutive5xx(0);
-      setErrorState("ok");
-      return;
-    }
-    const controller = new AbortController();
-    let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-    const scheduleNext = (delay: number) => {
-      if (cancelled) return;
-      timeoutId = setTimeout(() => void tick(), delay);
-    };
-
-    const tick = async () => {
-      if (cancelled) return;
-      try {
-        const next = await api.get<VoiceStatusResponse>("/api/voice/status", {
-          signal: controller.signal,
-          schema: VoiceStatusResponseSchema,
-        });
-        if (cancelled) return;
-        // Success — reset backoff state.
-        if (consecutive5xxRef.current !== 0 || errorStateRef.current !== "ok") {
-          consecutive5xxRef.current = 0;
-          errorStateRef.current = "ok";
-          enteredDegradedRef.current = false;
-          setConsecutive5xx(0);
-          setErrorState("ok");
-        }
-        setStatus(next);
-        scheduleNext(BASELINE_INTERVAL_MS);
-      } catch (err) {
-        if (isAbortError(err)) return;
-        let next5xx = consecutive5xxRef.current;
-        if (err instanceof ApiError && err.status >= 500) {
-          next5xx += 1;
-        } else if (err instanceof ApiError) {
-          // 4xx — auth / not-found / rate-limit. Don't bump 5xx count;
-          // surface as transient. The voice page's outer fetchData
-          // path owns the persistent-error UX.
-        } else {
-          // Network / parse error — treat like a 5xx for backoff
-          // purposes (server-side problem the user can't act on).
-          next5xx += 1;
-        }
-        consecutive5xxRef.current = next5xx;
-        setConsecutive5xx(next5xx);
-        if (next5xx >= DEGRADED_AFTER_5XX && !enteredDegradedRef.current) {
-          enteredDegradedRef.current = true;
-          errorStateRef.current = "degraded";
-          setErrorState("degraded");
-          const lastStatus = err instanceof ApiError ? err.status : "network";
-          const lastError = err instanceof Error ? err.message : String(err);
-          // One warn per degraded transition — NOT per failed poll.
-          // eslint-disable-next-line no-console
-          console.warn("voice.status.poller.degraded", {
-            consecutive_5xx: next5xx,
-            last_status: lastStatus,
-            last_error: lastError,
-          });
-        }
-        scheduleNext(intervalForFailureCount(next5xx));
-      }
-    };
-
-    // First tick fires immediately on enable; subsequent ticks
-    // schedule themselves via ``scheduleNext``.
-    void tick();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    };
-  }, [enabled]);
-
-  return { status, error: errorState, consecutive5xx };
+  const { data, error, consecutive5xx } = useApiPoller<
+    typeof VoiceStatusResponseSchema,
+    VoiceStatusResponse
+  >({
+    endpoint: "/api/voice/status",
+    schema: VoiceStatusResponseSchema,
+    baselineIntervalMs: BASELINE_INTERVAL_MS,
+    enabled: options.enabled,
+    warnTag: "voice.status.poller.degraded",
+  });
+  return { status: data, error, consecutive5xx };
 }
