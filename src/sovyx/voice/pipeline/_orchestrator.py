@@ -76,6 +76,7 @@ from sovyx.voice.pipeline._speech_streaming_mixin import (  # noqa: F401 — bac
 from sovyx.voice.pipeline._speech_streaming_mixin import SpeechStreamingMixin
 from sovyx.voice.pipeline._state import VoicePipelineState
 from sovyx.voice.pipeline._state_machine import PipelineStateMachine
+from sovyx.voice.pipeline._supervisor_mixin import SupervisorMixin
 from sovyx.voice.pipeline._tts_cancel_chain_mixin import (  # noqa: F401 — back-compat re-exports for start/stop + tests
     _CANCELLATION_TASK_TIMEOUT_S as _CANCELLATION_TASK_TIMEOUT_S,
 )
@@ -251,6 +252,7 @@ class VoicePipeline(
     UtteranceIdentityMixin,
     WakeWordRouterMixin,
     HeartbeatMixin,
+    SupervisorMixin,
 ):
     """Orchestrates the complete voice pipeline.
 

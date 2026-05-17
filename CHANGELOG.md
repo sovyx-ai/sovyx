@@ -8,6 +8,130 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 (none — every shipped delta documented in tagged sections below)
 
+## [0.46.3] — 2026-05-17
+
+Mission C4 Phase 2 — auto-recovery governor (Option D: Soft Recovery).
+Closes the "operator's only recourse is manual Ctrl-C" gap from the
+v0.43.1 forensic session. After N=3 consecutive deaf-warnings while
+both `_coordinator_terminated` AND `_failover_ladder_exhausted` are
+True, the new heartbeat governor calls
+`SupervisorMixin.request_soft_recovery()` which clears the latch state
++ voice axis from `EngineDegradedStore`, releasing the pipeline for a
+fresh failover cycle.
+
+**Design pivot from spec:** the original spec specified
+"`VoicePipeline.request_clean_restart()`" with full `VoiceBundle`
+reconstruction via factory re-invocation. Reconnaissance post-v0.46.2
+revealed `create_voice_pipeline()` takes ~14 kwargs and returns a
+multi-service bundle requiring registry hot-swap across ≥5 components
+— substantial regression risk for a recovery mechanism. The chosen
+Option D (soft state-reset) uses the EXISTING
+`reset_coordinator_after_failover()` primitive (battle-tested since
+v0.30.x) composed with a clear of the ladder-exhausted flag + voice
+axis. State reset is <100ms vs full restart's 5-15s blackout; no
+registry mutation; failure modes that soft recovery cannot handle
+(ONNX session corrupted, factory crash) are ALREADY operator-restart
+territory. Phase 4 telemetry will validate whether soft recovery
+suffices; if not, a FUTURE mission can upgrade to full restart per
+`feedback_enterprise_only`.
+
+Mission anchor:
+`docs-internal/missions/MISSION-c4-degraded-mode-banner-2026-05-17.md`
+§Phase 2 / Option D.
+
+### Added
+
+- `src/sovyx/voice/pipeline/_supervisor_mixin.py` (NEW) —
+  `SupervisorMixin` with `request_soft_recovery(reason)` async
+  method. Composes `reset_coordinator_after_failover()` (existing)
+  + clears `_failover_ladder_exhausted` + clears
+  `_last_terminal_deaf_warn_monotonic` (releases C3 §T2.7 throttle
+  clock) + clears voice axis from `EngineDegradedStore` + emits
+  `voice.supervisor.soft_recovery_complete` telemetry. Returns
+  `SoftRecoveryResult{success, elapsed_ms, error_class}`. Error
+  path returns failed result without raising (supervisor must
+  never crash the heartbeat).
+- `SupervisorMixin` mounted on `VoicePipeline` at
+  `src/sovyx/voice/pipeline/_orchestrator.py:243` via MRO
+  (multiple inheritance per the existing voice/pipeline mixin
+  pattern).
+- 4 tuning knobs at `src/sovyx/engine/config.py` `VoiceTuningConfig`:
+  - `supervisor_auto_recovery_n_consecutive_deaf: int = 3` —
+    deaf-warning threshold for governor trigger (bounded [1, 20]).
+  - `supervisor_auto_recovery_max_retries_per_session: int = 3` —
+    hard cap on attempts per process lifetime (bounded [0, 10];
+    zero disables governor — operator escape hatch).
+  - `supervisor_auto_recovery_cooldown_s: float = 300.0` — minimum
+    wall-clock between attempts (bounded [60, 1800]).
+  - `degraded_banner_ack_default_ttl_sec: int = 3600` — Phase 3
+    ack TTL default (bounded [60, 86400]; Phase 3 reads).
+- Heartbeat governor at
+  `src/sovyx/voice/pipeline/_heartbeat_mixin.py:_maybe_run_soft_recovery_governor`.
+  Called from `_emit_heartbeat`'s deaf-warning branch AFTER the
+  C3 §T2.7 throttle gate. Pre-condition: `coordinator_terminal AND
+  _deaf_warnings_consecutive >= N`. Bumps retry counter
+  synchronously then spawns `request_soft_recovery` via
+  `observability.tasks.spawn`. Cooldown gate uses `>=` per
+  anti-pattern #24. On budget exhaustion: emits
+  `voice.supervisor.escalation_required` ONCE (idempotent via
+  `_supervisor_escalation_logged` flag) AND records voice axis
+  with `severity=critical` to escalate the dashboard banner to
+  pulsing-red.
+- `_escalate_voice_axis_to_critical` helper on `HeartbeatMixin` —
+  best-effort upgrade of voice axis to critical severity when the
+  governor exhausts its retry budget.
+- `scripts/dev/analyze_c4_telemetry.py` (NEW) — F1/F3/F4/F5 gate
+  analyser for Phase 4 telemetry calibration. F1 reports "frontend
+  telemetry required" note; F3 computes soft-recovery success rate
+  + P50/P99 recovery latency from `voice.supervisor.soft_recovery_*`
+  events; F4/F5 marked `not_applicable` until Phase 3 ships.
+  CLI: `uv run python scripts/dev/analyze_c4_telemetry.py --log
+  ~/.sovyx/logs/sovyx.log [--json]`. Exit non-zero on F3 fail
+  (CI-friendly).
+- Test surface (38 new tests across 4 files):
+  - `tests/unit/voice/pipeline/test_supervisor_mixin.py` (8 tests) —
+    SoftRecoveryResult shape + state reset chain + voice-axis
+    clear + axis-scoping (other axes preserved) + error path +
+    idempotent double-invocation.
+  - `tests/unit/voice/pipeline/test_heartbeat_supervisor_governor.py`
+    (11 tests) — pre-conditions (threshold / max_retries=0
+    disables) + cooldown semantics (within / past / at-boundary
+    per anti-pattern #24) + budget exhaustion (escalation
+    idempotent / metadata captures attempt count) + missing-
+    supervisor graceful no-op.
+  - `tests/unit/scripts/test_analyze_c4_telemetry.py` (15 tests) —
+    F3 verdict table across no-data / pass / fail / mixed-rate +
+    percentile helper + malformed-log defensive paths +
+    parametrize-driven status table.
+  - `tests/regression/test_c4_auto_recovery_governor_replay.py`
+    (4 tests) — replays the v0.43.1 operator session's
+    post-throttle state and asserts (a) governor fires at the 3rd
+    consecutive deaf-warning, (b) below-threshold no-trigger,
+    (c) budget-exhausted escalation, (d) post-recovery state-
+    reset chain.
+
+### Changed
+
+- `src/sovyx/voice/pipeline/_heartbeat_mixin.py` — adds
+  `_safe_governor_knob` helper (sibling of
+  `_safe_failover_terminal_interval_s`); extends `_emit_heartbeat`'s
+  deaf-warning branch with the governor call (after the existing
+  C3 throttle gate); adds `_maybe_run_soft_recovery_governor` +
+  `_escalate_voice_axis_to_critical` methods.
+
+### Fixed
+
+- The v0.43.1 operator session's 12-minute decorative-daemon
+  window (29 redundant deaf-warnings before manual Ctrl-C) now
+  auto-recovers: after the 3rd warning, soft recovery fires + the
+  banner clears (if the underlying issue resolves) OR the governor
+  escalates to critical severity (if the budget exhausts).
+- The dashboard banner stops surfacing during a recovery attempt
+  (voice axis cleared from store) so the operator sees a clean
+  state during the brief retry window; if recovery fails, the
+  banner re-populates via the existing failover-exhausted wire
+  shim.
+
 ## [0.46.2] — 2026-05-17
 
 Mission C4 (composite degraded-mode banner UX) Phase 1

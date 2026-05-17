@@ -1385,6 +1385,72 @@ class VoiceTuningConfig(BaseSettings):
     serve the ``sovyx doctor voice`` triage flow. Override via
     ``SOVYX_TUNING__VOICE__FAILOVER_HISTORY_RING_CAPACITY=64``."""
 
+    # ── Mission C4 §Phase 2 — Soft Recovery Governor ──────────────────
+    # The heartbeat governor at HeartbeatMixin._emit_heartbeat extends
+    # the C3 throttle gate with a soft-recovery trigger. After
+    # N=supervisor_auto_recovery_n_consecutive_deaf consecutive deaf-
+    # warnings WHILE BOTH _coordinator_terminated AND
+    # _failover_ladder_exhausted are True, the governor calls
+    # SupervisorMixin.request_soft_recovery() which clears the latch
+    # state + voice axis from the EngineDegradedStore so the next
+    # heartbeat that detects deaf state runs through a fresh failover
+    # cycle. Bounded retry budget prevents thrash; escalation to
+    # severity=critical on the voice axis surfaces operator-manual-
+    # intervention requirement once the budget is exhausted.
+    #
+    # Mission anchor:
+    # docs-internal/missions/MISSION-c4-degraded-mode-banner-2026-05-17.md
+    # §Phase 2 / Option D (Soft Recovery).
+
+    supervisor_auto_recovery_n_consecutive_deaf: int = 3
+    """Mission C4 §Phase 2 — number of consecutive deaf-warnings
+    (post-coordinator-terminal AND post-ladder-exhausted) before the
+    auto-recovery governor calls
+    :meth:`SupervisorMixin.request_soft_recovery`. Default 3 matches
+    the operator-observable window before manual Ctrl-C in the v0.43.1
+    session. Bounded [1, 20]; the upper bound prevents pathological
+    no-op configurations."""
+
+    supervisor_auto_recovery_max_retries_per_session: int = 3
+    """Mission C4 §Phase 2 — hard cap on soft-recovery attempts per
+    process lifetime. After exhaustion, the governor emits
+    ``voice.supervisor.escalation_required`` ONCE and the voice axis
+    in :class:`EngineDegradedStore` is upgraded to ``severity=critical``
+    so the composite banner pulses + the operator knows manual
+    intervention is required.
+
+    Default 3 covers typical USB-mic-flap scenarios (1 plug-in
+    failure + 1 cable-flap + 1 retry) without runaway thrash.
+    Bounded [0, 10]; zero disables the governor entirely (diagnostic
+    only — sets the operator back to the pre-Mission-C4 manual-Ctrl-C
+    posture)."""
+
+    supervisor_auto_recovery_cooldown_s: float = 300.0
+    """Mission C4 §Phase 2 — minimum wall-clock between soft-recovery
+    attempts. Default 5 min (300 s) gives the audio subsystem time to
+    stabilise after a state reset before the governor probes again.
+
+    Bounded [60, 1800]. Too-low values risk recovery thrash on a
+    transiently-degraded host (PipeWire mid-restart, USB hub bouncing);
+    too-high values leave the operator staring at a degraded banner
+    longer than necessary."""
+
+    degraded_banner_ack_default_ttl_sec: int = 3600
+    """Mission C4 §Phase 3 — default TTL applied when an operator
+    acknowledges the composite degraded banner without specifying one.
+
+    Bounded [60, 86400] per ADR-D9: 1 min lower bound prevents
+    pathological ack-loops; 24 h upper bound prevents permanent
+    silencing (operator can ``sovyx restart`` if they want a hard
+    silence). Default 1 h is the operator-validation compromise: long
+    enough that the operator isn't constantly re-acking during a
+    debug session, short enough that an end-of-day still-degraded
+    state re-surfaces for next-session attention.
+
+    Phase 2 ships the knob with bounded validation; Phase 3 reads it
+    from :mod:`sovyx.engine._operator_acks_store` when persisting
+    operator acks to the ``operator_acks`` SQLite table."""
+
     # ── Mission MISSION-voice-linux-silent-mic-remediation-2026-05-04
     # §Phase 2 T2.1 + T2.2 + T2.3 — two new Linux bypass strategies
     # that automate the two canonical Linux+PipeWire silent-mic

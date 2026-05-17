@@ -125,6 +125,29 @@ def _safe_failover_terminal_interval_s(self_obj: object) -> float:
         return 60.0
 
 
+def _safe_governor_knob(self_obj: object, name: str, default: float) -> float:
+    """Mission C4 §Phase 2 — read a soft-recovery governor knob.
+
+    Mirrors :func:`_safe_failover_terminal_interval_s` for the four
+    governor tuning knobs (``supervisor_auto_recovery_n_consecutive_deaf``,
+    ``supervisor_auto_recovery_max_retries_per_session``,
+    ``supervisor_auto_recovery_cooldown_s``, plus the Phase 3-read
+    ``degraded_banner_ack_default_ttl_sec``). Best-effort with a sane
+    default — knob unavailability cannot block the heartbeat path.
+    """
+    try:
+        config = getattr(self_obj, "_config", None)
+        explicit = getattr(config, name, None)
+        if explicit is not None:
+            return float(explicit)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return float(getattr(_VoiceTuning(), name, default))
+    except Exception:  # noqa: BLE001
+        return default
+
+
 class HeartbeatMixin:
     """Periodic ``voice_pipeline_heartbeat`` emission + per-frame VAD aggregation.
 
@@ -458,6 +481,16 @@ class HeartbeatMixin:
                 ),
             )
             self._maybe_trigger_bypass_coordinator()
+
+            # Mission C4 §Phase 2 — Soft Recovery Governor.
+            # After N consecutive deaf-warnings while BOTH
+            # ``_coordinator_terminated`` AND ``_failover_ladder_exhausted``
+            # are True, request a soft recovery (state reset, not full
+            # restart). Bounded retry budget + cooldown prevent thrash.
+            # On budget exhaustion, escalate the voice axis severity to
+            # ``critical`` so the dashboard banner pulses.
+            if coordinator_terminal:
+                self._maybe_run_soft_recovery_governor(now=now_terminal)
         else:
             # Reset the consecutive counter so a single healthy heartbeat
             # between two deaf ones does not trigger the auto-bypass.
@@ -465,6 +498,198 @@ class HeartbeatMixin:
         self._last_heartbeat_monotonic = now
         self._max_vad_prob_since_heartbeat = 0.0
         self._vad_frames_since_heartbeat = 0
+
+    def _maybe_run_soft_recovery_governor(self, *, now: float) -> None:
+        """Mission C4 §Phase 2 — soft-recovery governor.
+
+        Pre-conditions (all must hold):
+
+        1. ``_deaf_warnings_consecutive >= supervisor_auto_recovery_n_consecutive_deaf``
+           — the operator-observable window has elapsed (default N=3).
+        2. ``_supervisor_recovery_attempts < supervisor_auto_recovery_max_retries_per_session``
+           — retry budget not exhausted (default 3 attempts).
+        3. ``now - _supervisor_recovery_last_attempt_monotonic >=
+           supervisor_auto_recovery_cooldown_s`` — cooldown elapsed
+           (default 300 s).
+
+        Caller (``_emit_heartbeat``) has already verified
+        ``coordinator_terminal=True`` (both ``_coordinator_terminated``
+        AND ``_failover_ladder_exhausted`` are True).
+
+        On pre-condition satisfaction: spawn a background task that
+        calls :meth:`SupervisorMixin.request_soft_recovery`. The
+        background-task pattern prevents the heartbeat loop from
+        blocking on the async recovery sequence. Bump retry counter
+        + last-attempt timestamp synchronously so subsequent heartbeat
+        ticks see the in-flight recovery as "attempted".
+
+        On budget exhaustion: emit ``voice.supervisor.escalation_required``
+        ONCE (idempotent via the ``_supervisor_escalation_logged`` flag)
+        and upgrade the voice axis in :class:`EngineDegradedStore` to
+        ``severity=critical``.
+
+        Anti-pattern compliance:
+        * #15 — counter state is bounded by max_retries (≤ 10 per
+          knob's documented upper bound).
+        * #24 — every monotonic-deadline comparison uses ``>=`` for
+          Windows coarse-clock safety.
+        * #34 — governor is default-ON (knob ``max_retries=3 > 0``)
+          per ADR-D3; setting max_retries=0 disables completely.
+        * #35 — all governor-state attribute reads via
+          ``getattr(..., default)`` so a pre-Phase-2 host (during
+          rollback) sees default-zero values.
+        """
+        from sovyx.observability.tasks import spawn
+
+        n_threshold = int(
+            _safe_governor_knob(
+                self,
+                "supervisor_auto_recovery_n_consecutive_deaf",
+                3.0,
+            ),
+        )
+        if self._deaf_warnings_consecutive < n_threshold:
+            return
+
+        max_retries = int(
+            _safe_governor_knob(
+                self,
+                "supervisor_auto_recovery_max_retries_per_session",
+                3.0,
+            ),
+        )
+        # max_retries == 0 disables the governor entirely (escape hatch).
+        if max_retries <= 0:
+            return
+
+        attempts = int(getattr(self, "_supervisor_recovery_attempts", 0))
+        last_attempt = float(
+            getattr(self, "_supervisor_recovery_last_attempt_monotonic", 0.0),
+        )
+        cooldown_s = _safe_governor_knob(
+            self,
+            "supervisor_auto_recovery_cooldown_s",
+            300.0,
+        )
+
+        # Cooldown gate: skip if a prior attempt is too recent. Anti-
+        # pattern #24 — use ``>=`` not ``>``.
+        if last_attempt > 0.0 and (now - last_attempt) < cooldown_s:
+            return
+
+        if attempts >= max_retries:
+            # Budget exhausted — emit escalation ONCE per session +
+            # upgrade voice-axis severity to critical so the banner
+            # pulses. Idempotent via the _supervisor_escalation_logged
+            # flag (defaults False per anti-pattern #35).
+            if not getattr(self, "_supervisor_escalation_logged", False):
+                self._supervisor_escalation_logged = True
+                logger.error(
+                    "voice.supervisor.escalation_required",
+                    **{
+                        "voice.mind_id": self._config.mind_id,
+                        "voice.attempts_so_far": attempts,
+                        "voice.max_retries": max_retries,
+                        "voice.action_required": (
+                            "Auto-recovery governor exhausted its retry "
+                            "budget. Manual operator intervention required: "
+                            "check the dashboard banner for actionable "
+                            "chips, or run `sovyx restart`."
+                        ),
+                    },
+                )
+                self._escalate_voice_axis_to_critical()
+            return
+
+        # All gates passed — bump counter + spawn recovery.
+        self._supervisor_recovery_attempts = attempts + 1
+        self._supervisor_recovery_last_attempt_monotonic = now
+        logger.warning(
+            "voice.supervisor.soft_recovery_triggered",
+            **{
+                "voice.mind_id": self._config.mind_id,
+                "voice.deaf_warnings_consecutive": self._deaf_warnings_consecutive,
+                "voice.attempt_index": attempts + 1,
+                "voice.max_retries": max_retries,
+                "voice.n_threshold": n_threshold,
+                "voice.cooldown_s": cooldown_s,
+            },
+        )
+
+        # ``request_soft_recovery`` is mounted via SupervisorMixin on
+        # VoicePipeline. Spawn so the heartbeat loop is not blocked on
+        # the async recovery sequence. Best-effort: a missing
+        # request_soft_recovery (pre-Phase-2 host during rollback) is
+        # caught + logged DEBUG.
+        request_fn = getattr(self, "request_soft_recovery", None)
+        if request_fn is None:
+            logger.debug(
+                "voice.supervisor.soft_recovery_unavailable",
+                **{"voice.mind_id": self._config.mind_id},
+            )
+            return
+        spawn(
+            request_fn(reason="auto_recovery_governor"),
+            name="voice-supervisor-soft-recovery",
+        )
+
+    def _escalate_voice_axis_to_critical(self) -> None:
+        """Mission C4 §Phase 2 — upgrade voice axis severity to critical
+        in the cross-axis :class:`EngineDegradedStore`.
+
+        Called when the soft-recovery governor exhausts its retry
+        budget. The dashboard banner reads ``composite_severity`` from
+        the cross-axis store; severity escalation per ADR-D6 yields
+        ``critical`` when ≥ 3 axes are degraded OR when an explicit
+        critical severity is recorded on any axis.
+
+        Best-effort: store unavailability cannot block the heartbeat.
+        """
+        try:
+            from sovyx.engine._degraded_store import (
+                DegradedEntry,
+                get_default_degraded_store,
+                make_action_chip,
+                now_monotonic,
+            )
+
+            _now = now_monotonic()
+            get_default_degraded_store().record(
+                DegradedEntry(
+                    axis="voice",
+                    reason="failover_ladder_exhausted",
+                    severity="critical",
+                    title_token="degraded.voice.ladderExhausted.title",
+                    body_token="degraded.voice.ladderExhausted.body",
+                    action_chips=(
+                        make_action_chip(
+                            "degraded.voice.ladderExhausted.viewHistory",
+                            "navigate",
+                            "/voice/health",
+                            style="primary",
+                        ),
+                        make_action_chip(
+                            "degraded.voice.ladderExhausted.reconnectUsb",
+                            "external_link",
+                            "https://sovyx.dev/docs/voice/troubleshooting",
+                        ),
+                    ),
+                    metadata={
+                        "auto_recovery_exhausted": True,
+                        "retries_attempted": int(
+                            getattr(self, "_supervisor_recovery_attempts", 0),
+                        ),
+                    },
+                    first_observed_monotonic=_now,
+                    last_observed_monotonic=_now,
+                    occurrence_count=1,
+                ),
+            )
+        except Exception:  # noqa: BLE001 — observability only
+            logger.debug(
+                "voice.supervisor.degraded_store_escalation_failed",
+                **{"voice.mind_id": self._config.mind_id},
+            )
 
     async def _heartbeat_loop(self) -> None:
         """Wall-clock heartbeat task — fires regardless of consumer-loop progress.
