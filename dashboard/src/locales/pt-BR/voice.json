@@ -839,6 +839,28 @@
         "switchToEnglish": "Usar inglês",
         "learnMore": "Saiba mais sobre suporte multilíngue"
       }
+    },
+    "dashboard": {
+      "bundle_partial": {
+        "title": "Dashboard incompleto",
+        "partial": {
+          "body": "Alguns arquivos do dashboard estão ausentes desta instalação ({{missing_count}} fragmentos não encontrados). A interface pode renderizar com rotas quebradas ou componentes ausentes. Reinstale via pipx para restaurar o pacote completo."
+        }
+      },
+      "bundle_missing": {
+        "title": "Dashboard não instalado",
+        "index_html_missing": {
+          "body": "O ponto de entrada principal do dashboard está ausente. A interface não pode renderizar. Reinstale o sovyx, ou execute 'npm run build' se estiver desenvolvendo a partir do código-fonte."
+        },
+        "static_dir_missing": {
+          "body": "O diretório de recursos estáticos do dashboard está totalmente ausente desta instalação. Reinstale o sovyx para restaurar o pacote."
+        },
+        "legacy_index_html_no_assets": {
+          "body": "O ponto de entrada do dashboard existe, mas seus arquivos complementares estão ausentes. Isso geralmente é causado por uma build incompleta ou desatualizada. Reinstale o sovyx, ou execute 'npm run build' se estiver desenvolvendo."
+        }
+      },
+      "reinstall": "Reinstalar via pipx",
+      "runDoctor": "Executar sovyx dashboard doctor"
     }
   }
 }

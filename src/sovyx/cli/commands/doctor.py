@@ -654,6 +654,10 @@ def _run_voice_doctor(
     # per-axis action chips the dashboard would render.
     _render_voice_degraded_banner_surface(output_json=output_json)
 
+    # Mission C5 §T3.4 — surface dashboard bundle integrity alongside
+    # the voice surfaces. Pure read; never blocks the doctor exit path.
+    _render_dashboard_integrity_surface(output_json=output_json)
+
     failure_count = sum(1 for s in report.steps if not s.passed)
 
     # Non-fix path: preserve v0.21.2 contract — exit code equals the
@@ -1772,6 +1776,64 @@ def _render_voice_degraded_banner_surface(
             console.print(
                 f"    → [dim]{chip.action}[/dim]: {chip.target}",
             )
+
+
+def _render_dashboard_integrity_surface(
+    *,
+    output_json: bool,
+) -> None:
+    """Mission C5 §T3.4 — render the "Dashboard — bundle integrity" section.
+
+    Mirrors :func:`_render_voice_degraded_banner_surface` shape so the
+    aggregate ``sovyx doctor`` (no args) renders this section alongside
+    the voice quarantine / failover / degraded banner surfaces.
+
+    JSON mode skips this surface entirely (operators using JSON output
+    consume ``sovyx dashboard doctor --json`` directly).
+
+    Renders gracefully on a healthy install — prints
+    ``[green]✓[/green]  FULLY_PRESENT`` with reference + duration stats.
+
+    Args:
+        output_json: When True, the surface is suppressed.
+    """
+    if output_json:
+        return
+    try:
+        from sovyx.dashboard import STATIC_DIR
+        from sovyx.dashboard._integrity import BundleVerdict, scan_bundle_integrity
+    except Exception as exc:  # noqa: BLE001 — observability-only surface
+        console.print(
+            f"[dim]Dashboard — bundle integrity: unavailable ({exc}).[/dim]",
+        )
+        return
+
+    report = scan_bundle_integrity(STATIC_DIR)
+    console.print("\n[bold]Dashboard — bundle integrity[/bold]")
+    if report.verdict is BundleVerdict.FULLY_PRESENT:
+        console.print(
+            f"  [green]✓[/green]  FULLY_PRESENT  "
+            f"[dim]({len(report.referenced_assets)} refs, "
+            f"{report.scan_duration_ms:.1f}ms)[/dim]",
+        )
+        return
+
+    severity_color = "yellow" if report.verdict is BundleVerdict.PARTIAL else "red"
+    console.print(
+        f"  [bold {severity_color}]{report.verdict.value.upper()}[/bold {severity_color}]  "
+        f"[dim]static_dir={report.static_dir}[/dim]",
+    )
+    missing = list(report.missing_assets)
+    if missing:
+        sample_size = min(5, len(missing))
+        for ref in missing[:sample_size]:
+            console.print(f"    [dim]✗[/dim] {ref}")
+        if len(missing) > sample_size:
+            console.print(f"    [dim]… (+{len(missing) - sample_size} more)[/dim]")
+    console.print(
+        "  [dim]Run 'sovyx dashboard doctor' for the full report, or "
+        "'pipx reinstall sovyx' to repair.[/dim]",
+    )
 
 
 def _first_failure_is_saturation(report: PreflightReport) -> bool:
