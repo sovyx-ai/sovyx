@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,16 +28,24 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx import __version__
 from sovyx.dashboard import STATIC_DIR
+from sovyx.dashboard._integrity import (
+    BundleIntegrityReport,
+    BundleVerdict,
+    scan_bundle_integrity,
+)
 from sovyx.observability.logging import get_logger
 from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
-    from sovyx.engine.config import APIConfig
+    from starlette.types import Scope
+
+    from sovyx.engine.config import APIConfig, DashboardTuningConfig
     from sovyx.engine.registry import ServiceRegistry
     from sovyx.observability.health import HealthRegistry
 
@@ -581,12 +590,60 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.include_router(ws_routes.router)
 
     # ── Static Files + SPA Fallback ──
+    #
+    # Mission C5 §T2.1 — replace the historical two-state gate
+    # (``STATIC_DIR.exists() and (STATIC_DIR / "index.html").exists()``)
+    # with a four-state classifier driven by
+    # :func:`sovyx.dashboard.scan_bundle_integrity`. Each verdict wires
+    # an :class:`EngineDegradedStore` axis entry (``axis="dashboard"``)
+    # for the C4 composite banner; the LENIENT phase preserves the
+    # legacy ``dashboard_static_missing`` WARN for one minor cycle
+    # (ADR-D14) so operator playbooks have time to migrate to the new
+    # ``dashboard.distribution.*`` event names.
 
-    if STATIC_DIR.exists() and (STATIC_DIR / "index.html").exists():
-        # Serve static assets (JS, CSS, images)
+    # Resolve dashboard tuning — best-effort: a tuning-load failure
+    # cannot block app construction (legacy callers and tests reach
+    # ``create_app`` without a full EngineConfig stack).
+    try:
+        from sovyx.engine.config import DashboardTuningConfig
+
+        _dashboard_tuning = DashboardTuningConfig()
+    except Exception:  # noqa: BLE001 — config layer is best-effort here
+        _dashboard_tuning = None
+
+    _integrity_report = scan_bundle_integrity(STATIC_DIR)
+
+    # Cache the report on app.state so the doctor surface + future
+    # reactive callers can read it without re-scanning. Phase 1.B
+    # readers (``cli/commands/doctor.py::_render_dashboard_integrity_surface``)
+    # consult this attribute first and fall back to a fresh scan.
+    app.state.dashboard_integrity_report = _integrity_report
+
+    # Phase 1.B telemetry — always emit the structured event.
+    logger.info(
+        "dashboard.distribution.bundle_scanned",
+        verdict=_integrity_report.verdict.value,
+        static_dir=str(STATIC_DIR),
+        referenced_count=len(_integrity_report.referenced_assets),
+        missing_count=len(_integrity_report.missing_assets),
+        scan_duration_ms=_integrity_report.scan_duration_ms,
+    )
+
+    if _integrity_report.verdict is BundleVerdict.FULLY_PRESENT:
+        # Healthy path — explicit clear so prior boot's transient state
+        # does not linger after a reinstall.
+        _clear_dashboard_axis()
+        # Serve static assets (JS, CSS, images). Wrap in the integrity-
+        # aware subclass so on-404 we trigger a debounced rescan that
+        # catches mid-daemon corruption (file deletion, AV quarantine,
+        # disk fault) without a server restart.
         app.mount(
             "/assets",
-            StaticFiles(directory=str(STATIC_DIR / "assets")),
+            _IntegrityAwareStaticFiles(
+                directory=str(STATIC_DIR / "assets"),
+                static_dir=STATIC_DIR,
+                tuning=_dashboard_tuning,
+            ),
             name="static-assets",
         )
 
@@ -606,11 +663,54 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
             # Otherwise serve index.html (SPA routing)
             return FileResponse(str(STATIC_DIR / "index.html"))
 
+    elif _integrity_report.verdict is BundleVerdict.PARTIAL:
+        # Mission C5 — operator's v0.43.1 forensic case. Mount StaticFiles
+        # anyway so the partial SPA tries to render (the operator may
+        # still need /chat even when /voice-health chunks are missing),
+        # AND surface the partial verdict via the composite banner.
+        _record_dashboard_bundle_incomplete(
+            _integrity_report,
+            severity="error",
+            tuning=_dashboard_tuning,
+        )
+        app.mount(
+            "/assets",
+            _IntegrityAwareStaticFiles(
+                directory=str(STATIC_DIR / "assets"),
+                static_dir=STATIC_DIR,
+                tuning=_dashboard_tuning,
+            ),
+            name="static-assets",
+        )
+
+        _static_root = STATIC_DIR.resolve()
+
+        @app.get("/{path:path}")
+        async def spa_fallback(path: str) -> FileResponse:
+            """SPA fallback — serve index.html for all non-API routes."""
+            file_path = (STATIC_DIR / path).resolve()
+            if (
+                file_path.is_file()
+                and ".." not in path
+                and str(file_path).startswith(str(_static_root))
+            ):
+                return FileResponse(str(file_path))
+            return FileResponse(str(STATIC_DIR / "index.html"))
+
     else:
+        # INDEX_HTML_MISSING / STATIC_DIR_MISSING / LEGACY_INDEX_HTML_NO_ASSETS —
+        # no SPA can render. Preserve the legacy WARN per ADR-D14
+        # dual-emission (drop at v0.48.0 STRICT flip) and surface the
+        # composite banner via the engine degraded store.
         logger.warning(
             "dashboard_static_missing",
             path=str(STATIC_DIR),
             hint="Run 'npm run build' in dashboard/ to generate static files",
+        )
+        _record_dashboard_bundle_incomplete(
+            _integrity_report,
+            severity="critical",
+            tuning=_dashboard_tuning,
         )
 
         @app.get("/{path:path}")
@@ -622,6 +722,190 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
             )
 
     return app
+
+
+def _clear_dashboard_axis() -> None:
+    """Drop any ``axis="dashboard"`` entries from the composite store.
+
+    Mission C5 §T2.1 — called on a FULLY_PRESENT boot so a prior
+    partial-install's stale entry does not survive a successful repair.
+    Best-effort — store unavailability cannot block app construction.
+    """
+    try:
+        from sovyx.engine._degraded_store import get_default_degraded_store
+
+        get_default_degraded_store().clear_axis("dashboard")
+    except Exception:  # noqa: BLE001 — observability-only surface
+        logger.debug("c5_degraded_store_clear_failed", axis="dashboard")
+
+
+def _record_dashboard_bundle_incomplete(
+    report: BundleIntegrityReport,
+    *,
+    severity: str,
+    tuning: DashboardTuningConfig | None,
+) -> None:
+    """Compose the :class:`DegradedEntry` for a partial / missing bundle
+    and record it in the C4 composite store.
+
+    Mission C5 §T2.1 / §T2.2 producer wire. Mirrors the C4 producer
+    shims at ``engine/bootstrap.py:735`` (no-LLM-provider) and
+    ``voice/factory/_validate.py:542`` (stt-language-coerced).
+    """
+    try:
+        from sovyx.engine._degraded_store import (
+            DegradedEntry,
+            get_default_degraded_store,
+            make_action_chip,
+            now_monotonic,
+        )
+
+        verdict_value = report.verdict.value
+        is_partial = report.verdict is BundleVerdict.PARTIAL
+        reason = "bundle_partial" if is_partial else "bundle_missing"
+        body_token = f"degraded.dashboard.{reason}.{verdict_value}.body"
+        # Action-chip URL overrides — operator may point at self-hosted
+        # docs via ``SOVYX_TUNING__DASHBOARD__INTEGRITY_ACTION_CHIP_*_URL``.
+        reinstall_url = (
+            tuning.integrity_action_chip_reinstall_url
+            if tuning is not None
+            else "https://sovyx.dev/docs/install/troubleshooting#reinstall"
+        )
+        doctor_url = (
+            tuning.integrity_action_chip_doctor_url
+            if tuning is not None
+            else "https://sovyx.dev/docs/cli/doctor#dashboard"
+        )
+
+        now = now_monotonic()
+        get_default_degraded_store().record(
+            DegradedEntry(
+                axis="dashboard",
+                reason=reason,
+                severity=severity,
+                title_token=f"degraded.dashboard.{reason}.title",
+                body_token=body_token,
+                action_chips=(
+                    make_action_chip(
+                        "degraded.dashboard.reinstall",
+                        "external_link",
+                        reinstall_url,
+                        style="primary",
+                    ),
+                    make_action_chip(
+                        "degraded.dashboard.runDoctor",
+                        "external_link",
+                        doctor_url,
+                    ),
+                ),
+                metadata={
+                    "verdict": verdict_value,
+                    "missing_count": len(report.missing_assets),
+                    "missing_sample": list(report.missing_assets[:5]),
+                    "static_dir": str(report.static_dir),
+                    "scan_duration_ms": report.scan_duration_ms,
+                },
+                first_observed_monotonic=now,
+                last_observed_monotonic=now,
+                occurrence_count=1,
+            ),
+        )
+    except Exception:  # noqa: BLE001 — observability-only surface
+        logger.debug("c5_degraded_store_record_failed", axis="dashboard")
+
+    event_suffix = (
+        "bundle_partial" if report.verdict is BundleVerdict.PARTIAL else "bundle_missing"
+    )
+    logger.warning(
+        f"dashboard.distribution.{event_suffix}",
+        verdict=report.verdict.value,
+        missing_count=len(report.missing_assets),
+        missing_sample=list(report.missing_assets[:5]),
+        static_dir=str(report.static_dir),
+        hint="Run 'sovyx dashboard doctor' or reinstall via pipx.",
+    )
+
+
+class _IntegrityAwareStaticFiles(StaticFiles):
+    """StaticFiles subclass that triggers a debounced bundle rescan on 404.
+
+    Mission C5 §T2.2 reactive arm. When a ``/assets/*`` request 404s,
+    the underlying bundle may have been corrupted post-boot (file
+    deletion, AV quarantine, disk fault). The override catches the
+    Starlette-raised ``HTTPException(status_code=404)``, fires a
+    debounced re-scan off-thread, and re-raises so the 404 still
+    propagates to the caller.
+
+    Bounded by :attr:`_debounce_sec` (default 60 s, tunable via
+    ``SOVYX_TUNING__DASHBOARD__INTEGRITY_REACTIVE_DEBOUNCE_SEC``) so a
+    2-Hz polling failure (H8-class) cannot trigger a scan storm.
+
+    Anti-pattern #14 compliance — the rescan runs via
+    ``asyncio.create_task`` + ``asyncio.to_thread`` for the synchronous
+    file-system scan, never blocking the event loop on the hot path.
+    """
+
+    def __init__(
+        self,
+        *,
+        directory: str,
+        static_dir: Path,
+        tuning: DashboardTuningConfig | None,
+    ) -> None:
+        super().__init__(directory=directory)
+        self._static_dir = static_dir
+        if tuning is not None:
+            self._enabled = tuning.integrity_reactive_enabled
+            self._debounce_sec = tuning.integrity_reactive_debounce_sec
+        else:
+            self._enabled = True
+            self._debounce_sec = 60.0
+        self._last_scan_at = 0.0
+        self._scan_lock = threading.Lock()
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and self._enabled:
+                now = time.monotonic()
+                if now - self._last_scan_at >= self._debounce_sec:
+                    with self._scan_lock:
+                        # Double-check inside the lock.
+                        if now - self._last_scan_at >= self._debounce_sec:
+                            self._last_scan_at = now
+                            asyncio.create_task(  # noqa: RUF006
+                                self._reactive_rescan(),
+                            )
+            raise
+
+    async def _reactive_rescan(self) -> None:
+        """Off-thread re-scan + composite-store update.
+
+        Anti-pattern #14 — synchronous scan wrapped in
+        :func:`asyncio.to_thread`. Best-effort: a scan failure cannot
+        propagate to the caller (the 404 already propagated synchronously
+        in :meth:`get_response`).
+        """
+        try:
+            report = await asyncio.to_thread(scan_bundle_integrity, self._static_dir)
+        except Exception:  # noqa: BLE001 — observability-only surface
+            logger.debug("c5_reactive_rescan_failed")
+            return
+        if report.verdict is BundleVerdict.FULLY_PRESENT:
+            _clear_dashboard_axis()
+            logger.info("dashboard.distribution.reactive_rescan_healthy")
+            return
+        severity = "error" if report.verdict is BundleVerdict.PARTIAL else "critical"
+        _record_dashboard_bundle_incomplete(
+            report,
+            severity=severity,
+            tuning=None,  # action-chip URLs already baked into prior call
+        )
+        logger.info(
+            "dashboard.distribution.reactive_rescan_degraded",
+            verdict=report.verdict.value,
+        )
 
 
 # ── Server Runner ──

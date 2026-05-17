@@ -263,6 +263,28 @@ Probe mode discriminator: `cold`, `warm`. From
 | `sovyx.voice.test.output.synthesis.latency` | Histogram | ms | Synth-side latency for voice test |
 | `sovyx.voice.test.output.playback.latency` | Histogram | ms | Playback-side latency for voice test |
 
+### `dashboard.distribution.*` (Mission C5)
+
+Cross-cutting events for the dashboard SPA bundle integrity surface.
+Reported every boot via the four-state classifier at
+`dashboard/server.py::create_app()` (§T2.1) and reactively on
+`/assets/` 404 via `_IntegrityAwareStaticFiles` (§T2.2). The composite
+banner surfaces via the C4 `/api/engine/degraded` endpoint as a new
+`axis="dashboard"` entry.
+
+| Event | Severity | Fields | When |
+|---|---|---|---|
+| `dashboard.distribution.bundle_scanned` | INFO | `verdict`, `static_dir`, `referenced_count`, `missing_count`, `scan_duration_ms` | Every `create_app()` boot — universal scan summary regardless of verdict |
+| `dashboard.distribution.bundle_partial` | WARN | `verdict`, `missing_count`, `missing_sample`, `static_dir`, `hint` | Boot scan AND reactive rescan when chunks are absent on disk |
+| `dashboard.distribution.bundle_missing` | WARN | `verdict`, `missing_count`, `missing_sample`, `static_dir`, `hint` | Boot scan when `index.html` / `static/` itself is missing (legacy `dashboard_static_missing` dual-emits during v0.47.x; dropped at v0.48.0) |
+| `dashboard.distribution.reactive_rescan_healthy` | INFO | — | Reactive rescan after a `/assets/*` 404 verified the bundle is now whole (e.g. operator just ran `pipx reinstall`) |
+| `dashboard.distribution.reactive_rescan_degraded` | INFO | `verdict` | Reactive rescan confirmed the bundle is still degraded (verdict carried for triage) |
+
+Operators triaging the v0.43.1-class forensic case (`GET /assets/<chunk>.js
+→ 404`) should grep `dashboard.distribution.bundle_scanned` for the
+boot-time verdict, then `dashboard.distribution.bundle_partial` /
+`bundle_missing` for the surface that drove the composite banner.
+
 ---
 
 ## Stability + deprecation policy

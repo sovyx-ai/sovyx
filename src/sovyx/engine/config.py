@@ -2841,6 +2841,44 @@ class ObservabilityConfig(BaseSettings):
     metrics_max_series: int = Field(default=10_000, ge=100, le=1_000_000)
 
 
+class DashboardTuningConfig(BaseSettings):
+    """Tunable knobs for the dashboard distribution-integrity surface.
+
+    Mission C5 §T2.5 — runtime integrity probe + on-404 reactive arm
+    + composite-banner action-chip URL overrides. See
+    :class:`SafetyTuningConfig` for the ``BaseSettings`` rationale.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_TUNING__DASHBOARD__", extra="ignore")
+
+    integrity_reactive_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable reactive rescan on /assets/ 404 (Mission C5 §T2.2). "
+            "Default ON per anti-pattern #34 — always-on observability."
+        ),
+    )
+    """Reactive on-404 arm kill-switch. Default-True so a partial
+    install that arose after boot still surfaces. Toggle to False to
+    rule out the arm during triage of an unrelated incident."""
+
+    integrity_reactive_debounce_sec: float = Field(default=60.0, ge=10.0, le=600.0)
+    """Debounce window for reactive rescans (ADR-D4). Default 60 s
+    aligns with operator-cognitive-window; floor 10 s prevents thrash
+    under H8-class polling failures; ceiling 600 s caps the worst-case
+    silence between a chunk going missing and the banner re-surfacing."""
+
+    integrity_action_chip_reinstall_url: str = Field(
+        default="https://sovyx.dev/docs/install/troubleshooting#reinstall",
+    )
+    """Operator-action chip target — override for self-hosted docs."""
+
+    integrity_action_chip_doctor_url: str = Field(
+        default="https://sovyx.dev/docs/cli/doctor#dashboard",
+    )
+    """Operator-action chip target — sovyx doctor dashboard reference."""
+
+
 class TuningConfig(BaseModel):
     """Aggregate tuning knobs for cognitive / brain / voice / llm subsystems.
 
@@ -2854,6 +2892,7 @@ class TuningConfig(BaseModel):
     voice: VoiceTuningConfig = Field(default_factory=VoiceTuningConfig)
     llm: LLMTuningConfig = Field(default_factory=LLMTuningConfig)
     retention: RetentionTuningConfig = Field(default_factory=RetentionTuningConfig)
+    dashboard: DashboardTuningConfig = Field(default_factory=DashboardTuningConfig)
 
 
 class VoiceFeaturesConfig(BaseSettings):

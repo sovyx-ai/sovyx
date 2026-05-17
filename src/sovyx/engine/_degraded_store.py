@@ -17,6 +17,13 @@ Populated by:
 * :mod:`sovyx.voice.health._runtime_failover` on
   ``voice.failover.ladder_complete{verdict=exhausted}`` (§T1.4) and
   cleared on ``verdict=succeeded`` per ADR-D5.
+* :mod:`sovyx.dashboard.server` on ``dashboard.distribution.bundle_partial``
+  / ``dashboard.distribution.bundle_missing`` AND cleared on
+  ``dashboard.distribution.bundle_scanned{verdict=fully_present}``
+  (Mission C5 §T2.1 / §T2.2). The fourth axis (``axis="dashboard"``)
+  proves the C4 forward-additive contract: a new operator-actionable
+  degraded class slots into the same store + endpoint + banner with
+  no schema migration.
 
 Consumed by:
 

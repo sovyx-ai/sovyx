@@ -241,6 +241,147 @@ class TestEngineDegradedResponseBoundary:
             },
         )
 
+    def test_c5_dashboard_axis_bundle_partial_round_trips(self) -> None:
+        """Mission C5 §T2.3 — the new ``axis="dashboard"`` entry with
+        ``reason="bundle_partial"`` round-trips through the existing
+        forward-additive schema without a migration. Proves the C4
+        contract holds for the 4th axis-consumer.
+        """
+        dashboard_axis = {
+            "axis": "dashboard",
+            "reason": "bundle_partial",
+            "severity": "error",
+            "title_token": "degraded.dashboard.bundle_partial.title",
+            "body_token": "degraded.dashboard.bundle_partial.partial.body",
+            "action_chips": [
+                {
+                    "label_token": "degraded.dashboard.reinstall",
+                    "action": "external_link",
+                    "target": "https://sovyx.dev/docs/install/troubleshooting#reinstall",
+                    "style": "primary",
+                },
+                {
+                    "label_token": "degraded.dashboard.runDoctor",
+                    "action": "external_link",
+                    "target": "https://sovyx.dev/docs/cli/doctor#dashboard",
+                    "style": "default",
+                },
+            ],
+            "metadata": {
+                "verdict": "partial",
+                "missing_count": 3,
+                "missing_sample": [
+                    "assets/dashboard-BLNxX04a.js",
+                    "assets/api-CmBjhza2.js",
+                    "assets/index-DIHUuQiC.js",
+                ],
+                "static_dir": "/home/op/.local/share/pipx/venvs/sovyx/lib/python3.12/site-packages/sovyx/dashboard/static",
+                "scan_duration_ms": 4.213,
+            },
+            "first_observed_monotonic": 1.5,
+            "last_observed_monotonic": 1.5,
+            "occurrence_count": 1,
+        }
+        response = assert_boundary_accepts(
+            EngineDegradedResponse,
+            helper_factory=lambda: {
+                "axes": [dashboard_axis],
+                "composite_severity": "error",
+                "composite_axis_count": 1,
+                "ack": {"acked": False},
+            },
+        )
+        assert response.axes[0].axis == "dashboard"
+        assert response.axes[0].reason == "bundle_partial"
+        assert response.axes[0].severity == "error"
+        assert response.axes[0].metadata["verdict"] == "partial"
+
+    def test_c5_dashboard_axis_bundle_missing_round_trips(self) -> None:
+        """Mission C5 §T2.3 — ``reason="bundle_missing"`` with the
+        full critical-severity treatment + verdict-discriminated body
+        token (the same reason covers
+        INDEX_HTML_MISSING / STATIC_DIR_MISSING / LEGACY_INDEX_HTML_NO_ASSETS
+        per the spec — the verdict carries on metadata).
+        """
+        dashboard_axis = {
+            "axis": "dashboard",
+            "reason": "bundle_missing",
+            "severity": "critical",
+            "title_token": "degraded.dashboard.bundle_missing.title",
+            "body_token": "degraded.dashboard.bundle_missing.static_dir_missing.body",
+            "action_chips": [
+                {
+                    "label_token": "degraded.dashboard.reinstall",
+                    "action": "external_link",
+                    "target": "https://sovyx.dev/docs/install/troubleshooting#reinstall",
+                    "style": "primary",
+                },
+            ],
+            "metadata": {
+                "verdict": "static_dir_missing",
+                "missing_count": 0,
+                "missing_sample": [],
+                "static_dir": "/nonexistent/static",
+                "scan_duration_ms": 0.05,
+            },
+            "first_observed_monotonic": 2.0,
+            "last_observed_monotonic": 2.0,
+            "occurrence_count": 1,
+        }
+        response = assert_boundary_accepts(
+            EngineDegradedResponse,
+            helper_factory=lambda: {
+                "axes": [dashboard_axis],
+                "composite_severity": "critical",
+                "composite_axis_count": 1,
+                "ack": {"acked": False},
+            },
+        )
+        assert response.axes[0].severity == "critical"
+        assert response.axes[0].metadata["verdict"] == "static_dir_missing"
+
+    def test_c5_dashboard_axis_compounds_with_voice_axis(self) -> None:
+        """Mission C5 §1.4 cross-coupling — the dashboard axis renders
+        alongside any in-flight voice/llm/stt axes. Composite severity
+        escalates with distinct axis count (2 = error).
+        """
+        voice_axis = {
+            "axis": "voice",
+            "reason": "failover_ladder_exhausted",
+            "severity": "error",
+            "title_token": "degraded.voice.failoverExhausted.title",
+            "body_token": "degraded.voice.failoverExhausted.body",
+            "action_chips": [],
+            "metadata": {},
+            "first_observed_monotonic": 1.0,
+            "last_observed_monotonic": 1.0,
+            "occurrence_count": 1,
+        }
+        dashboard_axis = {
+            "axis": "dashboard",
+            "reason": "bundle_partial",
+            "severity": "error",
+            "title_token": "degraded.dashboard.bundle_partial.title",
+            "body_token": "degraded.dashboard.bundle_partial.partial.body",
+            "action_chips": [],
+            "metadata": {"verdict": "partial", "missing_count": 1},
+            "first_observed_monotonic": 1.2,
+            "last_observed_monotonic": 1.2,
+            "occurrence_count": 1,
+        }
+        response = assert_boundary_accepts(
+            EngineDegradedResponse,
+            helper_factory=lambda: {
+                "axes": [voice_axis, dashboard_axis],
+                "composite_severity": "error",
+                "composite_axis_count": 2,
+                "ack": {"acked": False},
+            },
+        )
+        axes_by_axis = {axis.axis for axis in response.axes}
+        assert axes_by_axis == {"voice", "dashboard"}
+        assert response.composite_axis_count == 2
+
 
 class TestComputeCompositeSeverity:
     """Mission C4 §T1.6 — ADR-D6 severity escalation invariants."""
