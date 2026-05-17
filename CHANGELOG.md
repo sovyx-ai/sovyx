@@ -8,16 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 (none — every shipped delta documented in tagged sections below)
 
-## [0.45.7] — 2026-05-17 [NOT-ON-PYPI]
+## [0.45.7] — 2026-05-17
 
-> ⚠️ **publish.yml workflow run `25980995024` FAILED** on GitHub
-> Actions account spending limit ("OTel Semconv Gate" job not started
-> due to billing block); 8 main jobs (lint/mypy/bandit/4 tests/dashboard
-> build) had already passed green. **Wheel NOT published to PyPI**;
-> tag exists in git only. Cleanup in this release is dead-code only
-> (no operator-visible behavior change), so the v0.45.6 wheel on
-> PyPI remains the operator-equivalent latest. To republish:
-> resolve GH Actions billing + `gh run rerun 25980995024`.
+> Saved at attempt 3 of `publish.yml` workflow run `25980995024`.
+> Attempt 1 cancelled after the `OTel Semconv Gate` job stayed
+> queued indefinitely: a resolved GH Actions billing pause had
+> left the self-hosted `sovyx-4core` runner agent alive but no
+> longer polling the job queue, while the org-level panel still
+> showed it `Ready`. Operator restarted the runner service;
+> attempt 3 dispatched cleanly, all 13 CI gates passed, wheel
+> uploaded to PyPI 08:03:38 UTC, GitHub Release published
+> 08:03:55 UTC. (Docker image had succeeded on attempt 1 already.)
+> Lesson: a self-hosted-runner `Ready` indicator reflects agent
+> liveness, not poll-loop health — restart of the runner service
+> is the canonical recovery action.
 
 Mission C3 (failover ladder iteration discipline) Phase 2
 closure-COMPLETE-take-4 — dead-code cleanup surfaced by the 5th
