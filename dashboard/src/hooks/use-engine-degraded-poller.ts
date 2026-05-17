@@ -19,6 +19,7 @@
  * §T1.10.
  */
 import { useApiPoller, type ApiPollerResult } from "@/hooks/use-api-poller";
+import { api } from "@/lib/api";
 import { EngineDegradedResponseSchema } from "@/types/schemas";
 import type { z } from "zod";
 
@@ -41,5 +42,23 @@ export function useEngineDegradedPoller(
     baselineIntervalMs: ENGINE_DEGRADED_POLL_INTERVAL_MS,
     enabled,
     warnTag: "engine_degraded_poller_degraded",
+  });
+}
+
+/**
+ * POST /api/voice/degraded/ack with the canonical composite-ack body.
+ *
+ * Mission C4 §Phase 3 §T3.3 — operator acknowledges all currently-
+ * active degraded axes for ``ttlSec`` seconds. Server-side
+ * persistence (OperatorAcksStore + operator_acks SQLite table) so
+ * the ack survives browser refresh + multi-tab.
+ *
+ * Returns the response body; throws ``ApiError`` on 4xx/5xx via the
+ * shared api helper.
+ */
+export async function ackComposite(ttlSec = 3600): Promise<unknown> {
+  return api.post("/api/voice/degraded/ack", {
+    reason: "composite",
+    ttl_sec: ttlSec,
   });
 }

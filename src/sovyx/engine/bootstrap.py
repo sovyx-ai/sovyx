@@ -812,6 +812,32 @@ async def bootstrap(
             stats_recorder = DailyStatsRecorder(db_manager.get_system_pool())
             registry.register_instance(DailyStatsRecorder, stats_recorder)
 
+            # Mission C4 §Phase 3 §T3.2 — operator-acknowledgement
+            # store for the composite degraded banner. Server-side
+            # persistence (ADR-D2) so ack survives browser tab refresh
+            # + multi-tab divergence is impossible.
+            from sovyx.engine._operator_acks_store import OperatorAcksStore
+
+            operator_acks_store = OperatorAcksStore(db_manager.get_system_pool())
+            registry.register_instance(OperatorAcksStore, operator_acks_store)
+
+            # Mission C4 §Phase 3 §T3.5 — TTL re-surface scheduler.
+            # Periodic background task that scans for expired acks,
+            # removes them + emits voice.degraded_banner.resurfaced
+            # so dashboards see the banner re-surface within one poll
+            # interval. Registry.shutdown_all invokes its .shutdown()
+            # alias automatically on engine teardown.
+            from sovyx.engine._ack_resurface_scheduler import (
+                AckResurfaceScheduler,
+            )
+
+            ack_resurface_scheduler = AckResurfaceScheduler(operator_acks_store)
+            registry.register_instance(
+                AckResurfaceScheduler,
+                ack_resurface_scheduler,
+            )
+            await ack_resurface_scheduler.start()
+
             cost_guard = CostGuard(
                 daily_budget=mind_config.llm.budget_daily_usd,
                 per_conversation_budget=mind_config.llm.budget_per_conversation_usd,

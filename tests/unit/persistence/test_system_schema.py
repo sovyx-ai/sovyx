@@ -36,17 +36,19 @@ async def migrated(pool: DatabasePool) -> DatabasePool:
 class TestSystemMigrations:
     """System schema tests."""
 
-    def test_returns_two_migrations(self) -> None:
+    def test_returns_three_migrations(self) -> None:
+        """v0.46.3 added Migration 003 (operator_acks). Mission C4."""
         migrations = get_system_migrations()
-        assert len(migrations) == 2
+        assert len(migrations) == 3
         assert migrations[0].version == 1
         assert migrations[1].version == 2
+        assert migrations[2].version == 3
 
     async def test_applies_without_error(self, pool: DatabasePool) -> None:
         runner = MigrationRunner(pool)
         await runner.initialize()
         applied = await runner.run_migrations(get_system_migrations())
-        assert applied == 2
+        assert applied == 3
 
     async def test_tables_created(self, migrated: DatabasePool) -> None:
         async with migrated.read() as conn:
@@ -239,7 +241,7 @@ class TestDailyStatsMigration:
         await runner.initialize()
         first = await runner.run_migrations(get_system_migrations())
         second = await runner.run_migrations(get_system_migrations())
-        assert first == 2
+        assert first == 3
         assert second == 0
 
     async def test_v1_data_survives_v2_migration(self, pool: DatabasePool) -> None:
@@ -259,9 +261,9 @@ class TestDailyStatsMigration:
             await conn.execute("INSERT INTO persons (id, name) VALUES ('p1', 'TestUser')")
             await conn.commit()
 
-        # Now apply v2
+        # Now apply v2 + v3 (v0.46.3 added Migration 003 operator_acks)
         applied = await runner.run_migrations(migrations)
-        assert applied == 1  # only v2
+        assert applied == 2  # v2 + v3
 
         # Verify v1 data survived
         async with pool.read() as conn:

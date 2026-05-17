@@ -647,6 +647,13 @@ def _run_voice_doctor(
     # the CLI without parsing structured logs.
     _render_voice_failover_history_surface(output_json=output_json)
 
+    # Mission C4 §Phase 3 §T3.6 — surface the cross-axis degraded
+    # banner state. Mirrors the dashboard's composite banner so
+    # CLI-only operators see (a) which axes are currently degraded,
+    # (b) the composite severity (warn / error / critical), (c) the
+    # per-axis action chips the dashboard would render.
+    _render_voice_degraded_banner_surface(output_json=output_json)
+
     failure_count = sum(1 for s in report.steps if not s.passed)
 
     # Non-fix path: preserve v0.21.2 contract — exit code equals the
@@ -1692,6 +1699,78 @@ def _render_voice_failover_history_surface(
                 f"    {candidate.index}. "
                 f"[{cand_color}]{candidate.verdict}[/{cand_color}]  "
                 f"{candidate.target_endpoint}  [dim]({cand_elapsed})[/dim]" + extra,
+            )
+
+
+def _render_voice_degraded_banner_surface(
+    *,
+    output_json: bool,
+) -> None:
+    """Mission C4 §Phase 3 §T3.6 — render the "Voice — degraded banner" section.
+
+    Surfaces the cross-axis :class:`EngineDegradedStore` snapshot +
+    current operator-ack state from
+    :class:`OperatorAcksStore` (when registered — Phase 3+ daemon).
+    Pairs with the dashboard's composite banner so CLI-only operators
+    get the same picture as the React surface.
+
+    JSON mode skips this surface entirely (operators using JSON output
+    consume ``/api/engine/degraded`` directly).
+
+    Renders gracefully on a healthy daemon (no degraded axes) — prints
+    a single ``[dim]No degraded axes.[/dim]`` line.
+
+    Args:
+        output_json: When True, the surface is suppressed.
+    """
+    if output_json:
+        return
+    try:
+        from sovyx.engine._degraded_store import get_default_degraded_store
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[dim]Voice — degraded banner: unavailable ({exc}).[/dim]",
+        )
+        return
+
+    entries = get_default_degraded_store().snapshot()
+    console.print("\n[bold]Voice — degraded banner[/bold]")
+    if not entries:
+        console.print("[dim]No degraded axes.[/dim]")
+        return
+
+    # Severity counter (composite-severity per ADR-D6)
+    distinct_axes = sorted({e.axis for e in entries})
+    if len(distinct_axes) >= 3:
+        composite_color = "red"
+        composite_label = "CRITICAL"
+    elif len(distinct_axes) == 2:
+        composite_color = "red"
+        composite_label = "ERROR"
+    else:
+        composite_color = "yellow"
+        composite_label = "WARN"
+    console.print(
+        f"  [bold {composite_color}]{composite_label}[/bold {composite_color}]  "
+        f"[dim]({len(distinct_axes)} axis(es) degraded: "
+        f"{', '.join(distinct_axes)})[/dim]",
+    )
+
+    for entry in entries:
+        sev_color = {
+            "warn": "yellow",
+            "error": "red",
+            "critical": "red",
+        }.get(entry.severity, "white")
+        console.print(
+            f"  • [bold]{entry.axis}[/bold]  "
+            f"[{sev_color}]{entry.severity}[/{sev_color}]  "
+            f"[dim]reason={entry.reason}[/dim]",
+        )
+        # Chips (operator-actionable next steps)
+        for chip in entry.action_chips:
+            console.print(
+                f"    → [dim]{chip.action}[/dim]: {chip.target}",
             )
 
 

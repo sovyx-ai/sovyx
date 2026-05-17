@@ -72,6 +72,44 @@ _MIGRATION_002 = Migration(
     checksum=Migration.compute_checksum(_MIGRATION_002_SQL),
 )
 
+_MIGRATION_003_SQL = """\
+-- Mission C4 §Phase 3 — operator acknowledgement state for the
+-- composite degraded banner. Survives daemon restart so the operator
+-- does NOT see a re-surfaced banner after a refresh / multi-tab
+-- session that already acked the same condition.
+--
+-- Cardinality bounded by the cross-axis degraded reason count
+-- (typically ≤ 8 active reasons per session). PK is the canonical
+-- reason token so re-acking the same reason upserts in place.
+--
+-- TTL semantics: an ack is "active" when ``acked_at_ts + ttl_sec >
+-- strftime('%s','now')``. Expired acks are surfaced via the
+-- ``voice.degraded_banner.resurfaced`` event by the Phase 3 TTL
+-- re-surface scheduler at :mod:`sovyx.engine._ack_resurface_scheduler`,
+-- then removed from this table on the next prune cycle.
+--
+-- ``operator_id`` is best-effort identification derived from the
+-- dashboard auth token hash; empty string when unidentifiable. NOT
+-- a credential — purely audit-trail-grade.
+--
+-- ``metadata`` is JSON-encoded axis-specific context captured at ack
+-- time (e.g. the candidates_unreachable list for the voice axis).
+CREATE TABLE IF NOT EXISTS operator_acks (
+    reason       TEXT    NOT NULL PRIMARY KEY,
+    acked_at_ts  INTEGER NOT NULL,
+    ttl_sec      INTEGER NOT NULL,
+    operator_id  TEXT    NOT NULL DEFAULT '',
+    metadata     TEXT    NOT NULL DEFAULT '{}'
+);
+"""
+
+_MIGRATION_003 = Migration(
+    version=3,
+    description="operator_acks — composite degraded banner ack persistence (Mission C4 Phase 3)",
+    sql_up=_MIGRATION_003_SQL,
+    checksum=Migration.compute_checksum(_MIGRATION_003_SQL),
+)
+
 
 def get_system_migrations() -> list[Migration]:
     """Return system database migrations.
@@ -79,4 +117,4 @@ def get_system_migrations() -> list[Migration]:
     Returns:
         List of migrations for system.db.
     """
-    return [_MIGRATION_001, _MIGRATION_002]
+    return [_MIGRATION_001, _MIGRATION_002, _MIGRATION_003]

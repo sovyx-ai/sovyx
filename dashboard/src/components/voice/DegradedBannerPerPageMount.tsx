@@ -7,14 +7,25 @@
  * lives at the natural top-of-page position rather than the dashboard
  * shell's header.
  */
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { DegradedBanner } from "./DegradedBanner";
-import { useEngineDegradedPoller } from "@/hooks/use-engine-degraded-poller";
+import {
+  ackComposite,
+  useEngineDegradedPoller,
+} from "@/hooks/use-engine-degraded-poller";
 import { useDegradedBannerMounted } from "@/contexts/degraded-banner-mounted";
 
 export function DegradedBannerPerPageMount() {
   const { setPerPageMounted } = useDegradedBannerMounted();
   const { data } = useEngineDegradedPoller();
+
+  // Mission C4 §Phase 3 §T3.7 — ack click handler. Mirrors the global
+  // mount; both invocations POST to the same /api/voice/degraded/ack.
+  const handleAck = useCallback((ttlSec: number) => {
+    void ackComposite(ttlSec).catch(() => {
+      /* swallow — poll cycle re-syncs */
+    });
+  }, []);
 
   useEffect(() => {
     setPerPageMounted(true);
@@ -29,7 +40,7 @@ export function DegradedBannerPerPageMount() {
       data-testid="degraded-banner-per-page-mount"
       className="mb-4"
     >
-      <DegradedBanner payload={data} />
+      <DegradedBanner payload={data} onAck={handleAck} />
     </div>
   );
 }

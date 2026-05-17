@@ -8,6 +8,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 (none — every shipped delta documented in tagged sections below)
 
+## [0.46.4] — 2026-05-17
+
+Mission C4 Phase 3 — ack persistence atomic ship. Closes the
+operator-acknowledgement gap from the original mission spec §Phase 3:
+the composite degraded banner now persists ack state server-side via
+the new ``operator_acks`` SQLite table so the ack survives browser
+tab refresh + multi-tab usage (ADR-D2: server-side persistence; never
+client-side localStorage which would multi-tab-diverge).
+
+Mission anchor:
+`docs-internal/missions/MISSION-c4-degraded-mode-banner-2026-05-17.md`
+§Phase 3.
+
+### Added
+
+- `src/sovyx/persistence/schemas/system.py` Migration 003 —
+  `operator_acks(reason PK, acked_at_ts, ttl_sec, operator_id,
+  metadata)` table. Forward-only checksummed migration.
+- `src/sovyx/engine/_operator_acks_store.py` (NEW) —
+  `OperatorAcksStore` persistent ack ledger. Async API: `record_ack`,
+  `get_ack`, `clear_ack`, `list_active_acks`, `prune_expired`. TTL
+  semantics: active iff `acked_at_ts + ttl_sec > now()`; expired
+  entries are never returned from active accessors, surfaced only via
+  `prune_expired` for the re-surface scheduler. Cardinality ≤ 8
+  typical.
+- `src/sovyx/engine/_ack_resurface_scheduler.py` (NEW) — periodic
+  scanner (default 30 s cadence) that bulk-prunes expired acks +
+  emits `voice.degraded_banner.resurfaced` event per record. Started
+  in bootstrap right after `OperatorAcksStore` registration;
+  `shutdown` alias means `ServiceRegistry.shutdown_all` tears it
+  down without explicit lifecycle wiring.
+- `POST /api/voice/degraded/ack` endpoint at
+  `src/sovyx/dashboard/routes/engine_degraded.py`. Body:
+  `{reason: "composite"|"axis.reason", ttl_sec?, metadata?}`. When
+  `reason="composite"`, records one ack per CURRENTLY-ACTIVE
+  degraded axis under the canonical `{axis}.{reason}` key. Bounds
+  validation `[60, 86400]` per ADR-D9 — returns 422 on out-of-bounds.
+  Returns 503 when `OperatorAcksStore` is unavailable (pre-Phase-3
+  rollback). Operator-id is derived from the `Authorization` bearer
+  token's SHA-256 hash prefix (audit-trail grade, not credential).
+- `GET /api/engine/degraded` enriched with `ack` block: composite
+  ack reports `acked=True` iff EVERY active axis has an active ack
+  (single-axis ack must NOT silence the whole banner). Surfaces
+  the most-recent record's TTL fields for operator-visible reference.
+- `sovyx doctor voice degraded-banner` CLI surface at
+  `_render_voice_degraded_banner_surface` mirroring the C3 failover-
+  history shape. Renders the cross-axis EngineDegradedStore +
+  composite severity (warn/error/critical) + per-axis action chips.
+- Frontend ack wire-up: `ackComposite(ttlSec)` helper in
+  `use-engine-degraded-poller.ts`; `DegradedBannerGlobalMount` +
+  `DegradedBannerPerPageMount` pass `onAck={handleAck}` that POSTs
+  to `/api/voice/degraded/ack` with composite-reason + operator-
+  chosen TTL.
+- Test surface (50 new tests):
+  - `tests/unit/engine/test_operator_acks_store.py` (15 tests) —
+    record/upsert/expired-filter/clear/list-active/prune/metadata-
+    JSON-roundtrip/TTL-math.
+  - `tests/unit/engine/test_ack_resurface_scheduler.py` (9 tests) —
+    defaults/tick-once/lifecycle/exception-swallowing/shutdown-alias.
+  - `tests/dashboard/test_degraded_ack_boundary.py` (12 tests) —
+    AckRequestBody + AckResponse boundary round-trip + endpoint
+    E2E (auth required / TTL bounds / 503 without store).
+  - `dashboard/src/hooks/use-engine-degraded-poller.test.ts` (+4) —
+    `ackComposite` POST contract (default TTL 3600, explicit TTL,
+    propagates response).
+
+### Changed
+
+- `tests/unit/persistence/test_system_schema.py` — assertion counts
+  bumped 2→3 for the new Migration 003 (operator_acks).
+- `src/sovyx/engine/bootstrap.py` — registers OperatorAcksStore +
+  starts AckResurfaceScheduler after DailyStatsRecorder.
+
+### Fixed
+
+- Phase 3 closes the Phase 1 ``ack_*`` fields' producer gap on the
+  composite payload — the fields existed in the schema but were
+  always default-None. They now carry real operator ack state from
+  the persistent store.
+
 ## [0.46.3] — 2026-05-17
 
 Mission C4 Phase 2 — auto-recovery governor (Option D: Soft Recovery).
