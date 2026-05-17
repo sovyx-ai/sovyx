@@ -572,9 +572,21 @@ class HeartbeatMixin:
             300.0,
         )
 
-        # Cooldown gate: skip if a prior attempt is too recent. Anti-
-        # pattern #24 — use ``>=`` not ``>``.
-        if last_attempt > 0.0 and (now - last_attempt) < cooldown_s:
+        # Cooldown gate: skip if a prior attempt is too recent.
+        #
+        # Anti-pattern #24 — use ``>=`` semantics on monotonic-deadline
+        # comparisons (inclusive + coarse-clock safe). We use the
+        # ``now < last_attempt + cooldown_s`` formulation rather than
+        # ``(now - last_attempt) < cooldown_s`` to avoid float-precision
+        # loss in the subtraction: on some hosts (macOS-arm64, some
+        # Linux Python 3.12 builds) ``time.monotonic()`` returns a
+        # float whose representation precision is ~1e-7 s. Subtracting
+        # two close values amplifies the error so ``(T + 300.0) - T``
+        # may yield ``299.99999...``, triggering a spurious early-
+        # return when ``elapsed == cooldown_s`` was expected. The
+        # rewritten form keeps both operands as wall-clock-magnitude
+        # numbers so the comparison is exact for the test's intent.
+        if last_attempt > 0.0 and now < last_attempt + cooldown_s:
             return
 
         if attempts >= max_retries:

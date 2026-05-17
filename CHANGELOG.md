@@ -8,6 +8,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 (none — every shipped delta documented in tagged sections below)
 
+## [0.46.6] — 2026-05-17
+
+**Hotfix for v0.46.3 / v0.46.4 / v0.46.5 publish.yml failure.** The
+three prior tags shipped to git + GitHub Releases but FAILED the
+`Publish to PyPI` workflow on `macos-latest / Python 3.12` (and
+intermittently on the `sovyx-4core / Python 3.12` self-hosted
+runner). Operators on `pipx install sovyx@0.46.3..0.46.5` would
+have gotten no wheel — only v0.46.0..v0.46.2 are on PyPI.
+
+Root cause: a single test —
+`tests/unit/voice/pipeline/test_heartbeat_supervisor_governor.py::TestGovernorCooldown::test_at_cooldown_boundary_allows_retrigger_per_anti_pattern_24`
+— is float-precision flaky on macOS-arm64 + some Linux Python 3.12
+builds. The test verifies that the soft-recovery governor's cooldown
+gate passes through when `elapsed == cooldown_s` exactly (per
+anti-pattern #24 inclusive `>=` semantics). Under the hood, the
+governor was computing `(now - last_attempt) < cooldown_s`. The
+float subtraction `(T + 300.0) - T` may yield `299.99999…` instead
+of `300.0` exactly when `T` is the wall-clock value of
+`time.monotonic()` on these platforms — triggering a spurious
+early-return.
+
+Fix: rewrite the cooldown gate as `now < last_attempt + cooldown_s`.
+Mathematically equivalent; in floating-point, the addition keeps
+both operands at wall-clock magnitude (no precision loss from
+subtracting near-equal values). Verified locally on Windows + via
+synthetic value tests; CI matrix will confirm on macos-latest +
+sovyx-4core/3.12 on push.
+
+Mission anchor:
+`docs-internal/missions/MISSION-c4-degraded-mode-banner-2026-05-17.md`
+§Phase 2 / anti-pattern #24 float-precision corollary.
+
+### Fixed
+
+- `src/sovyx/voice/pipeline/_heartbeat_mixin.py:577` — soft-recovery
+  governor cooldown gate now uses `now < last_attempt + cooldown_s`
+  instead of `(now - last_attempt) < cooldown_s`. Added inline
+  rationale doc-comment citing anti-pattern #24 + the float-
+  precision failure mode observed on macOS-arm64 + Linux Python
+  3.12.
+
+### Notes
+
+* **v0.46.3 / v0.46.4 / v0.46.5 NOT-ON-PYPI annotation.** All three
+  tags exist in git + GitHub Releases but were never published to
+  PyPI (publish.yml CI Gate / Test (macos-latest / Python 3.12) red
+  on all three; the Publish job was Skipped because the CI Gate must
+  pass before publish). Operators MUST install v0.46.6 directly —
+  there is no `pipx install sovyx==0.46.5` path. The Phase 2 +
+  Phase 3 + Phase 5 production code lands intact in v0.46.6 (since
+  every commit between v0.46.2 and v0.46.6 is in main's history).
+
 ## [0.46.5] — 2026-05-17
 
 Mission C4 Phase 5 partial — Quality Gate 10 + anti-pattern #42
