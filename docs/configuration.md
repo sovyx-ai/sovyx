@@ -342,7 +342,7 @@ plugins:
 ## Tuning knobs (`SOVYX_TUNING__*`)
 
 Thresholds, timeouts, URLs, and SHA-256 pins that used to be hardcoded
-constants live on `EngineConfig.tuning`, grouped into three sub-models.
+constants live on `EngineConfig.tuning`, grouped into sub-models.
 Each field is overridable at runtime via a `SOVYX_TUNING__<GROUP>__<FIELD>`
 environment variable (nesting delimiter is two underscores).
 
@@ -375,6 +375,12 @@ tuning:
     detector_proc_max_scan: 5000         # /proc scan PID count cap
     detector_evidence_max_chars: 2048    # report payload truncation cap
     # … see voice-device-test module for the full device-test family
+
+  dashboard:                              # Mission C5 §T2.5
+    integrity_reactive_enabled: true      # on-404 reactive scan kill-switch
+    integrity_reactive_debounce_sec: 60.0 # bounds [10, 600]
+    integrity_action_chip_reinstall_url: "https://sovyx.dev/docs/install/troubleshooting#reinstall"
+    integrity_action_chip_doctor_url: "https://sovyx.dev/docs/cli/doctor#dashboard"
 ```
 
 Examples:
@@ -389,13 +395,28 @@ export SOVYX_TUNING__BRAIN__MODEL_SHA256=<sha256>
 
 # Lower device-test frame rate on slow displays.
 export SOVYX_TUNING__VOICE__DEVICE_TEST_FRAME_RATE_HZ=15
+
+# Mission C5: tighten the dashboard-bundle reactive rescan debounce
+# under active triage (default 60 s; floor 10 s).
+export SOVYX_TUNING__DASHBOARD__INTEGRITY_REACTIVE_DEBOUNCE_SEC=15
+
+# Mission C5: point operator-action chips at self-hosted docs
+# (override the default sovyx.dev URLs).
+export SOVYX_TUNING__DASHBOARD__INTEGRITY_ACTION_CHIP_REINSTALL_URL="https://acme.corp/sovyx/reinstall"
+export SOVYX_TUNING__DASHBOARD__INTEGRITY_ACTION_CHIP_DOCTOR_URL="https://acme.corp/sovyx/doctor"
 ```
 
 Tuning fields are **not** documented individually in this page — the
-canonical source is `src/sovyx/engine/config.py` (`SafetyTuning`,
-`BrainTuning`, `VoiceTuning`). Overriding them is unsupported for
-deployment; change them only for benchmarks, debugging, or constrained
-environments.
+canonical source is `src/sovyx/engine/config.py` (`SafetyTuningConfig`,
+`BrainTuningConfig`, `VoiceTuningConfig`, `LLMTuningConfig`,
+`RetentionTuningConfig`, `DashboardTuningConfig`). Overriding them is
+unsupported for deployment; change them only for benchmarks, debugging,
+or constrained environments.
+
+For the Mission C5 dashboard-distribution-integrity surface (bundle
+scanner + reactive on-404 arm + composite-banner producer wire) see
+[`docs/modules/dashboard-distribution-integrity.md`](modules/dashboard-distribution-integrity.md)
+for the full triage workflow.
 
 ### macOS-specific voice defaults (v0.32.0+)
 

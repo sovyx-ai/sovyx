@@ -273,6 +273,100 @@ class TestBoundedDuration:
         assert r1.missing_assets == r2.missing_assets
 
 
+class TestRefNormalization:
+    """Mission C5 §9.7 — coverage closure for ``_normalize_ref`` edge cases."""
+
+    def test_whitespace_only_ref_yields_none(self, tmp_path: Path) -> None:
+        """``<script src="  ">`` (whitespace only) is rejected by the
+        normaliser — verified by absence from the report's referenced
+        list.
+        """
+        static_dir = tmp_path / "static"
+        _write_index_html(
+            static_dir,
+            "<html><head>"
+            '<script src="  "></script>'
+            '<script src="/assets/x.js"></script>'
+            "</head></html>",
+        )
+        (static_dir / "assets").mkdir()
+        (static_dir / "assets" / "x.js").write_text("// ok", encoding="utf-8")
+        report = scan_bundle_integrity(static_dir)
+        # Only the real chunk is referenced; the whitespace-only src is
+        # filtered before reaching the disk-existence check.
+        assert report.referenced_assets == ("assets/x.js",)
+        assert report.verdict is BundleVerdict.FULLY_PRESENT
+
+    def test_pure_query_string_ref_yields_none(self, tmp_path: Path) -> None:
+        """``href="?just-query"`` strips to empty and is dropped — covers
+        the second ``if not value: return None`` in ``_normalize_ref``."""
+        static_dir = tmp_path / "static"
+        _write_index_html(
+            static_dir,
+            "<html><head>"
+            '<link rel="modulepreload" href="?q=1">'
+            '<link rel="modulepreload" href="#fragment-only">'
+            "</head></html>",
+        )
+        report = scan_bundle_integrity(static_dir)
+        # Both refs strip to empty and are dropped.
+        assert report.referenced_assets == ()
+        assert report.verdict is BundleVerdict.FULLY_PRESENT
+
+    def test_script_without_src_ignored(self, tmp_path: Path) -> None:
+        """Inline ``<script>`` without ``src=`` is skipped without adding
+        a ref — covers the early-exit branch in ``handle_starttag``."""
+        static_dir = tmp_path / "static"
+        _write_index_html(
+            static_dir,
+            "<html><head>"
+            '<script>console.log("inline");</script>'
+            '<script src="/assets/x.js"></script>'
+            "</head></html>",
+        )
+        (static_dir / "assets").mkdir()
+        (static_dir / "assets" / "x.js").write_text("// ok", encoding="utf-8")
+        report = scan_bundle_integrity(static_dir)
+        assert report.referenced_assets == ("assets/x.js",)
+        assert report.verdict is BundleVerdict.FULLY_PRESENT
+
+
+class TestReadTextOSError:
+    """Mission C5 §9.7 — coverage for the ``OSError`` branch in
+    :func:`scan_bundle_integrity` when ``Path.is_file()`` returns True
+    but ``read_text`` fails (race / permission denied mid-stat-and-read).
+    """
+
+    def test_read_text_oserror_treats_as_index_html_missing(
+        self,
+        tmp_path: Path,
+        monkeypatch: __import__("pytest").MonkeyPatch,
+    ) -> None:
+        static_dir = tmp_path / "static"
+        _write_index_html(static_dir, "<html></html>")
+        (static_dir / "assets").mkdir()
+
+        # Patch Path.read_text to raise OSError on the index.html path
+        # ONLY — leave other reads intact (none happen during scan).
+        original_read_text = Path.read_text
+        index_html_path = (static_dir / "index.html").resolve()
+
+        def _raising_read_text(
+            self: Path,
+            *args: object,
+            **kwargs: object,
+        ) -> str:
+            if self.resolve() == index_html_path:
+                raise OSError("simulated read failure (race / permission)")
+            return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "read_text", _raising_read_text)
+        report = scan_bundle_integrity(static_dir)
+        # OSError branch → treat as INDEX_HTML_MISSING per the spec
+        # (the operator's surface is identical for both cases).
+        assert report.verdict is BundleVerdict.INDEX_HTML_MISSING
+
+
 class TestReportSerialization:
     """The frozen dataclass returns stable references consumers can rely on."""
 

@@ -151,6 +151,55 @@ class TestVoiceStatusDegradedBoundaryRoundTrip:
         assert response.degraded.composite_axes == []
         assert response.degraded.composite_severity is None
 
+    def test_c5_dashboard_axis_alone_round_trips(self) -> None:
+        """Mission C5 §T2.4 — the new ``dashboard`` axis surfaces through
+        ``VoiceStatusResponse.degraded.composite_axes`` cleanly. The
+        producer's ``distinct_axes()`` is forward-additive (sorted
+        ``set`` of all stored axes); locking in the new axis at the
+        voice_status boundary guards against silent regression on the
+        ``/api/voice/status`` consumer path.
+        """
+        response = assert_boundary_accepts(
+            VoiceStatusResponse,
+            helper_factory=lambda: _baseline_status_shape(
+                composite_axes=["dashboard"],
+                composite_severity="warn",
+            ),
+            field_assertions={
+                "degraded.composite_severity": "warn",
+            },
+        )
+        assert response.degraded.composite_axes == ["dashboard"]
+
+    def test_c5_dashboard_axis_compounds_with_voice_at_error(self) -> None:
+        """Mission C5 §1.4 — 2-axis composite escalates to ``error``
+        per ADR-D6 (the dashboard axis combines mechanically with the
+        voice ladder-exhausted axis at the operator's v0.43.1 signature
+        SHA + the C5 boot-scan dashboard verdict)."""
+        response = assert_boundary_accepts(
+            VoiceStatusResponse,
+            helper_factory=lambda: _baseline_status_shape(
+                composite_axes=["dashboard", "voice"],
+                composite_severity="error",
+            ),
+        )
+        assert sorted(response.degraded.composite_axes) == ["dashboard", "voice"]
+        assert response.degraded.composite_severity == "error"
+
+    def test_c5_dashboard_axis_in_three_axis_critical(self) -> None:
+        """Mission C5 §4.6 (ADR-D6) — 3-axis composite escalates to
+        ``critical``. The dashboard axis MUST coexist with the C4
+        voice/llm/stt cohort without breaking the severity tiering."""
+        response = assert_boundary_accepts(
+            VoiceStatusResponse,
+            helper_factory=lambda: _baseline_status_shape(
+                composite_axes=["dashboard", "llm", "voice"],
+                composite_severity="critical",
+            ),
+        )
+        assert sorted(response.degraded.composite_axes) == ["dashboard", "llm", "voice"]
+        assert response.degraded.composite_severity == "critical"
+
     def test_c4_ack_fields_round_trip(self) -> None:
         """Mission C4 §T1.5 — Phase 3 ack fields are accepted (None
         until first operator ack)."""
