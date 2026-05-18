@@ -8,6 +8,7 @@ flows are not exercised here (no pty) — the CliRunner suite covers them.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _sovyx_invocation() -> list[str]:
     return [sys.executable, "-m", "sovyx.cli.main"]
+
+
+def _wide_env() -> dict[str, str]:
+    """Subprocess env that forces a wide terminal so typer's Rich help
+    renderer doesn't wrap flag names mid-character. CI runners default to
+    COLUMNS=80 which collapses ``--non-interactive`` and ``--provider``
+    into wrapped lines, breaking the substring assertions.
+    """
+    env = os.environ.copy()
+    env["COLUMNS"] = "200"
+    env["TERM"] = "dumb"
+    env["NO_COLOR"] = "1"
+    return env
 
 
 class TestLLMSetupSubprocess:
@@ -30,6 +44,7 @@ class TestLLMSetupSubprocess:
             errors="replace",
             timeout=30,
             cwd=str(_REPO_ROOT),
+            env=_wide_env(),
         )
         assert result.returncode == 0
         for flag in ("--provider", "--api-key", "--non-interactive", "--data-dir"):
@@ -52,6 +67,7 @@ class TestLLMSetupSubprocess:
             errors="replace",
             timeout=30,
             cwd=str(_REPO_ROOT),
+            env=_wide_env(),
         )
         assert result.returncode == 2
         assert "Unknown provider" in (result.stdout + result.stderr)
@@ -66,6 +82,7 @@ class TestLLMSetupSubprocess:
             errors="replace",
             timeout=30,
             cwd=str(_REPO_ROOT),
+            env=_wide_env(),
         )
         assert result.returncode == 2
 
@@ -86,6 +103,7 @@ class TestLLMSetupSubprocess:
             errors="replace",
             timeout=30,
             cwd=str(_REPO_ROOT),
+            env=_wide_env(),
         )
         assert result.returncode == 2
         # The setup wizard prints the requirement message

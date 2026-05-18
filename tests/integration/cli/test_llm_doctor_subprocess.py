@@ -14,6 +14,7 @@ regression).
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -60,6 +61,17 @@ def _sovyx_invocation() -> list[str]:
     return [sys.executable, "-m", "sovyx.cli.main"]
 
 
+def _wide_env() -> dict[str, str]:
+    """Force a wide terminal so typer's Rich help renderer doesn't wrap
+    flag names (CI runners default COLUMNS=80 breaks substring assertions).
+    """
+    env = os.environ.copy()
+    env["COLUMNS"] = "200"
+    env["TERM"] = "dumb"
+    env["NO_COLOR"] = "1"
+    return env
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip cloud-key env-vars so the subprocess starts clean."""
@@ -88,6 +100,7 @@ class TestLLMDoctorSubprocess:
             errors="replace",
             timeout=30,
             cwd=str(_REPO_ROOT),
+            env=_wide_env(),
         )
         assert result.returncode == 0
         assert "doctor" in result.stdout
@@ -102,6 +115,7 @@ class TestLLMDoctorSubprocess:
             errors="replace",
             timeout=30,
             cwd=str(_REPO_ROOT),
+            env=_wide_env(),
         )
         # Exit 1 expected (no LLM provider configured in test env).
         # JSON output is on stdout; Rich tracebacks for the benign
@@ -123,6 +137,7 @@ class TestLLMDoctorSubprocess:
             errors="replace",
             timeout=30,
             cwd=str(_REPO_ROOT),
+            env=_wide_env(),
         )
         # No cloud keys + Ollama unlikely-running in CI → exit 1
         # (PARTIAL_HEALTH would exit 0; we don't assert specific verdict
@@ -140,6 +155,7 @@ class TestLLMDoctorSubprocess:
             errors="replace",
             timeout=30,
             cwd=str(_REPO_ROOT),
+            env=_wide_env(),
         )
         payload = _extract_json_payload(result.stdout or "")
         assert "verdict" in payload
