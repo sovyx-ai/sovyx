@@ -68,7 +68,9 @@ from typing import TYPE_CHECKING
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.observability.tasks import spawn
+from sovyx.voice._event_names import CaptureIntegrityEvent
 from sovyx.voice.health.contract import BypassVerdict
+from sovyx.voice.pipeline._capture_integrity_emit import emit_capture_integrity_event
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -339,24 +341,33 @@ class BypassCoordinatorMixin:
                 try:
                     outcomes = await callback()
                 except Exception as exc:  # noqa: BLE001 — callback is user-supplied; shield the pipeline
-                    logger.error(
-                        "voice_apo_bypass_failed",
+                    # Mission H2 §T2.1 — dual-emit via wrapper. Each
+                    # wrapper call emits the neutral event AND its legacy
+                    # twin per ADR-D14 (callable-exception path emits both
+                    # ``voice.capture_integrity.bypass_failed`` /
+                    # ``voice_apo_bypass_failed`` AND
+                    # ``voice.capture_integrity.bypassed`` /
+                    # ``audio.apo.bypassed`` verdict=failure).
+                    emit_capture_integrity_event(
+                        CaptureIntegrityEvent.BYPASS_FAILED,
+                        "error",
                         mind_id=self._config.mind_id,
+                        strategies=[],
+                        voice_clarity_active=self._voice_clarity_active,
                         error=str(exc),
                         error_type=type(exc).__name__,
                     )
-                    logger.error(
-                        "audio.apo.bypassed",
-                        **{
-                            "voice.verdict": "failure",
-                            "voice.mind_id": self._config.mind_id,
-                            "voice.attempts": 0,
-                            "voice.strategies": [],
-                            "voice.outcomes": [],
-                            "voice.error": str(exc),
-                            "voice.error_type": type(exc).__name__,
-                            "voice.voice_clarity_active": self._voice_clarity_active,
-                        },
+                    emit_capture_integrity_event(
+                        CaptureIntegrityEvent.BYPASSED,
+                        "error",
+                        mind_id=self._config.mind_id,
+                        strategies=[],
+                        voice_clarity_active=self._voice_clarity_active,
+                        verdict="failure",
+                        attempts=0,
+                        outcomes=[],
+                        error=str(exc),
+                        error_type=type(exc).__name__,
                     )
                     return
 
@@ -400,32 +411,39 @@ class BypassCoordinatorMixin:
                     None,
                 )
                 if applied_healthy is not None:
-                    logger.warning(
-                        "voice_apo_bypass_activated",
+                    # Mission H2 §T2.1 — dual-emit via wrapper. Strategies
+                    # list drives the ``voice.bypass_family`` resolution
+                    # (e.g. ``alsa_capture_chain`` on Linux, ``voice_clarity``
+                    # on Windows). Wraps legacy ``voice_apo_bypass_activated``
+                    # + ``audio.apo.bypassed`` verdict=success.
+                    strategies_list = [o.strategy_name for o in outcomes]
+                    emit_capture_integrity_event(
+                        CaptureIntegrityEvent.BYPASS_ACTIVATED,
+                        "warning",
                         mind_id=self._config.mind_id,
+                        strategies=strategies_list,
+                        voice_clarity_active=self._voice_clarity_active,
                         strategy_name=applied_healthy.strategy_name,
                         attempt_index=applied_healthy.attempt_index,
                         reason=applied_healthy.detail,
-                        voice_clarity_active=self._voice_clarity_active,
                         consecutive_deaf_warnings=invocation_counter_snapshot,
                         threshold=self._auto_bypass_threshold,
                         action="capture_integrity_coordinator",
                     )
-                    logger.warning(
-                        "audio.apo.bypassed",
-                        **{
-                            "voice.verdict": "success",
-                            "voice.mind_id": self._config.mind_id,
-                            "voice.strategy_name": applied_healthy.strategy_name,
-                            "voice.attempt_index": applied_healthy.attempt_index,
-                            "voice.attempts": len(outcomes),
-                            "voice.strategies": [o.strategy_name for o in outcomes],
-                            "voice.outcomes": [o.verdict.value for o in outcomes],
-                            "voice.reason": applied_healthy.detail,
-                            "voice.voice_clarity_active": self._voice_clarity_active,
-                            "voice.consecutive_deaf_warnings": invocation_counter_snapshot,
-                            "voice.threshold": self._auto_bypass_threshold,
-                        },
+                    emit_capture_integrity_event(
+                        CaptureIntegrityEvent.BYPASSED,
+                        "warning",
+                        mind_id=self._config.mind_id,
+                        strategies=strategies_list,
+                        voice_clarity_active=self._voice_clarity_active,
+                        verdict="success",
+                        strategy_name=applied_healthy.strategy_name,
+                        attempt_index=applied_healthy.attempt_index,
+                        attempts=len(outcomes),
+                        outcomes=[o.verdict.value for o in outcomes],
+                        reason=applied_healthy.detail,
+                        consecutive_deaf_warnings=invocation_counter_snapshot,
+                        threshold=self._auto_bypass_threshold,
                     )
                     return
 
@@ -485,13 +503,24 @@ class BypassCoordinatorMixin:
                 # single operator-facing event so the dashboard / doctor can
                 # switch their messaging to "auto-fix could not recover — see
                 # manual remediation steps".
-                logger.error(
-                    "voice_apo_bypass_ineffective",
+                #
+                # Mission H2 §T2.1 — dual-emit via wrapper. Strategies list
+                # drives the ``voice.bypass_family`` resolution; on Linux
+                # this resolves to ``alsa_capture_chain`` /
+                # ``pipewire_filter_chain`` etc., on Windows to
+                # ``voice_clarity``. Operators triaging the new neutral
+                # ``voice.capture_integrity.bypass_ineffective`` event see
+                # the correct platform-family token instead of the
+                # platform-misleading ``apo`` substring.
+                strategies_list = [o.strategy_name for o in outcomes]
+                emit_capture_integrity_event(
+                    CaptureIntegrityEvent.BYPASS_INEFFECTIVE,
+                    "error",
                     mind_id=self._config.mind_id,
-                    attempts=len(outcomes),
-                    strategies=[o.strategy_name for o in outcomes],
-                    verdicts=[o.verdict.value for o in outcomes],
+                    strategies=strategies_list,
                     voice_clarity_active=self._voice_clarity_active,
+                    attempts=len(outcomes),
+                    verdicts=[o.verdict.value for o in outcomes],
                     hint=(
                         "CaptureIntegrityCoordinator exhausted every eligible "
                         "bypass strategy. Endpoint quarantined for apo_quarantine_s. "
@@ -518,17 +547,16 @@ class BypassCoordinatorMixin:
                 # applicable, which is a flat failure.
                 any_applied = any(o.verdict is BypassVerdict.APPLIED_STILL_DEAD for o in outcomes)
                 bypass_verdict = "partial" if any_applied else "failure"
-                logger.error(
-                    "audio.apo.bypassed",
-                    **{
-                        "voice.verdict": bypass_verdict,
-                        "voice.mind_id": self._config.mind_id,
-                        "voice.attempts": len(outcomes),
-                        "voice.strategies": [o.strategy_name for o in outcomes],
-                        "voice.outcomes": [o.verdict.value for o in outcomes],
-                        "voice.voice_clarity_active": self._voice_clarity_active,
-                        "voice.quarantined": True,
-                    },
+                emit_capture_integrity_event(
+                    CaptureIntegrityEvent.BYPASSED,
+                    "error",
+                    mind_id=self._config.mind_id,
+                    strategies=strategies_list,
+                    voice_clarity_active=self._voice_clarity_active,
+                    verdict=bypass_verdict,
+                    attempts=len(outcomes),
+                    outcomes=[o.verdict.value for o in outcomes],
+                    quarantined=True,
                 )
         finally:
             # T1.23 — reset the pending flag on every exit path. The

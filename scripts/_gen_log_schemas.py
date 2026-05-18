@@ -221,7 +221,7 @@ EVENTS: dict[str, tuple[str, dict[str, tuple[dict[str, Any], bool]]]] = {
         },
     ),
     "voice.apo.detected": (
-        "Windows capture-side APO (Voice Clarity etc.) was found on the active endpoint.",
+        "(DEPRECATED H2; see voice.capture_integrity.detected) Windows APO found.",
         {
             "voice.device_id": (T_STR, True),
             "voice.apo_name": (T_STR, True),
@@ -230,7 +230,7 @@ EVENTS: dict[str, tuple[str, dict[str, tuple[dict[str, Any], bool]]]] = {
         },
     ),
     "voice.apo.bypass": (
-        "Coordinator switched the capture stream out of the APO chain.",
+        "(DEPRECATED H2; see voice.capture_integrity.bypass) Coordinator bypass.",
         {
             "voice.mind_id": (T_STR, True),
             "voice.consecutive_deaf_warnings": (T_INT, True),
@@ -240,6 +240,33 @@ EVENTS: dict[str, tuple[str, dict[str, tuple[dict[str, Any], bool]]]] = {
             "voice.strategy_name": (T_STR, False),
             "voice.attempt_index": (T_INT, False),
             "voice.verdict": (T_STR, False),
+        },
+    ),
+    # Mission H2 v0.49.7 — platform-neutral sibling of voice.apo.bypass.
+    # Both schemas coexist during the staged-adoption window per
+    # ADR-D14 dual-emission discipline; legacy schema drops at v0.51.0.
+    # New required fields: voice.platform, voice.bypass_family,
+    # voice.event_schema_version (v2.0.0 schema marker).
+    "voice.capture_integrity.bypass": (
+        "Mission H2 neutral platform-bypass cascade event; carries v2.0.0 metadata.",
+        {
+            "voice.mind_id": (T_STR, True),
+            "voice.platform": (T_STR, True),
+            "voice.bypass_family": (T_STR, True),
+            "voice.event_schema_version": (T_STR, True),
+            "voice.consecutive_deaf_warnings": (T_INT, False),
+            "voice.threshold": (T_INT, False),
+            "voice.voice_clarity_active": (T_BOOL, False),
+            "voice.auto_bypass_enabled": (T_BOOL, False),
+            "voice.strategy_name": (T_STR, False),
+            "voice.attempt_index": (T_INT, False),
+            "voice.verdict": (T_STR, False),
+            "voice.attempts": (T_INT, False),
+            "voice.strategies": (T_LIST_STR, False),
+            "voice.outcomes": (T_LIST_STR, False),
+            "voice.error": (T_STR, False),
+            "voice.error_type": (T_STR, False),
+            "voice.reason": (T_STR, False),
         },
     ),
     "voice.stream.opened": (

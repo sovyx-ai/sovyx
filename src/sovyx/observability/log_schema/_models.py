@@ -34,6 +34,7 @@ __all__ = [
     "VoiceBargeInDetected",
     "VoiceApoDetected",
     "VoiceApoBypass",
+    "VoiceCaptureIntegrityBypass",
     "VoiceStreamOpened",
     "VoiceDeviceHotplug",
     "PluginInvokeStart",
@@ -233,7 +234,7 @@ class VoiceBargeInDetected(LogEvent):
 
 
 class VoiceApoDetected(LogEvent):
-    """Windows capture-side APO (Voice Clarity etc.) was found on the active endpoint."""
+    """(DEPRECATED H2; see voice.capture_integrity.detected) Windows APO found."""
 
     event_name: ClassVar[str] = "voice.apo.detected"
     event: Literal["voice.apo.detected"] = "voice.apo.detected"
@@ -244,7 +245,7 @@ class VoiceApoDetected(LogEvent):
 
 
 class VoiceApoBypass(LogEvent):
-    """Coordinator switched the capture stream out of the APO chain."""
+    """(DEPRECATED H2; see voice.capture_integrity.bypass) Coordinator bypass."""
 
     event_name: ClassVar[str] = "voice.apo.bypass"
     event: Literal["voice.apo.bypass"] = "voice.apo.bypass"
@@ -256,6 +257,34 @@ class VoiceApoBypass(LogEvent):
     voice_strategy_name: str | None = Field(default=None, alias="voice.strategy_name")
     voice_attempt_index: int | None = Field(default=None, alias="voice.attempt_index")
     voice_verdict: str | None = Field(default=None, alias="voice.verdict")
+
+
+class VoiceCaptureIntegrityBypass(LogEvent):
+    """Mission H2 neutral platform-bypass cascade event; carries v2.0.0 metadata."""
+
+    event_name: ClassVar[str] = "voice.capture_integrity.bypass"
+    event: Literal["voice.capture_integrity.bypass"] = "voice.capture_integrity.bypass"
+    voice_mind_id: str = Field(..., alias="voice.mind_id")
+    voice_platform: str = Field(..., alias="voice.platform")
+    voice_bypass_family: str = Field(..., alias="voice.bypass_family")
+    voice_event_schema_version: str = Field(..., alias="voice.event_schema_version")
+    voice_consecutive_deaf_warnings: int | None = Field(
+        default=None, alias="voice.consecutive_deaf_warnings"
+    )
+    voice_threshold: int | None = Field(default=None, alias="voice.threshold")
+    voice_voice_clarity_active: bool | None = Field(
+        default=None, alias="voice.voice_clarity_active"
+    )
+    voice_auto_bypass_enabled: bool | None = Field(default=None, alias="voice.auto_bypass_enabled")
+    voice_strategy_name: str | None = Field(default=None, alias="voice.strategy_name")
+    voice_attempt_index: int | None = Field(default=None, alias="voice.attempt_index")
+    voice_verdict: str | None = Field(default=None, alias="voice.verdict")
+    voice_attempts: int | None = Field(default=None, alias="voice.attempts")
+    voice_strategies: list[str] | None = Field(default=None, alias="voice.strategies")
+    voice_outcomes: list[str] | None = Field(default=None, alias="voice.outcomes")
+    voice_error: str | None = Field(default=None, alias="voice.error")
+    voice_error_type: str | None = Field(default=None, alias="voice.error_type")
+    voice_reason: str | None = Field(default=None, alias="voice.reason")
 
 
 class VoiceStreamOpened(LogEvent):
@@ -534,6 +563,7 @@ EVENT_REGISTRY: dict[str, type[LogEvent]] = {
     VoiceBargeInDetected.event_name: VoiceBargeInDetected,
     VoiceApoDetected.event_name: VoiceApoDetected,
     VoiceApoBypass.event_name: VoiceApoBypass,
+    VoiceCaptureIntegrityBypass.event_name: VoiceCaptureIntegrityBypass,
     VoiceStreamOpened.event_name: VoiceStreamOpened,
     VoiceDeviceHotplug.event_name: VoiceDeviceHotplug,
     PluginInvokeStart.event_name: PluginInvokeStart,

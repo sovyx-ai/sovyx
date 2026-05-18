@@ -73,6 +73,22 @@ metadata field set evolves in a backwards-incompatible way.
 """
 
 
+# Legacy events whose pre-mission payload used dotted-namespace
+# (``voice.*``) attribute keys. The ``audio.apo.bypassed`` verdict-tagged
+# emission AND the ``voice.apo.bypass`` OTel-semconv parent both followed
+# this convention. The snake-case legacy twins (``voice_apo_bypass_*``)
+# used bare attribute keys. Preserving the EXACT pre-mission shape is
+# the load-bearing invariant of ADR-D14 dual-emission discipline —
+# operator playbooks grepping for ``voice.verdict=success`` etc. continue
+# to resolve.
+_DOTTED_NAMESPACE_LEGACY_EVENTS: frozenset[CaptureIntegrityEvent] = frozenset(
+    {
+        CaptureIntegrityEvent.BYPASS,
+        CaptureIntegrityEvent.BYPASSED,
+    }
+)
+
+
 _ENV_KNOB = "SOVYX_TUNING__VOICE__CAPTURE_INTEGRITY_DUAL_EMIT_ENABLED"
 """Tuning-knob env var name. Reading the env var directly avoids the
 ~50 ms cost of instantiating :class:`EngineConfig` on every emit; the
@@ -207,15 +223,35 @@ def emit_capture_integrity_event(
     if not _is_dual_emit_enabled():
         return
 
-    legacy_payload: dict[str, object] = {"mind_id": mind_id}
-    if voice_clarity_active is not None:
-        legacy_payload["voice_clarity_active"] = voice_clarity_active
-    # Pass through legacy attributes WITHOUT the dotted-namespace rewrite —
-    # the legacy event shape uses bare keys (mind_id, strategy_name, …) plus
-    # dotted-namespace keys for the verdict-tagged emission. Callers control
-    # the shape via the legacy_attrs kwargs they pass; we forward verbatim.
+    legacy_payload: dict[str, object]
+    if event in _DOTTED_NAMESPACE_LEGACY_EVENTS:
+        # ``audio.apo.bypassed`` + ``voice.apo.bypass`` pre-mission shape:
+        # every attribute key carries the ``voice.`` dotted-namespace prefix.
+        # Operator playbooks grepping ``voice.verdict=success`` continue
+        # to resolve through the dual-emission window.
+        legacy_payload = {"voice.mind_id": mind_id}
+        if voice_clarity_active is not None:
+            legacy_payload["voice.voice_clarity_active"] = voice_clarity_active
+        if verdict is not None:
+            legacy_payload["voice.verdict"] = verdict
+        if strategies is not None:
+            legacy_payload["voice.strategies"] = list(strategies)
+        for k, v in legacy_attrs.items():
+            key = k if k.startswith("voice.") else f"voice.{k}"
+            legacy_payload[key] = v
+    else:
+        # ``voice_apo_bypass_*`` pre-mission shape: bare attribute keys.
+        legacy_payload = {"mind_id": mind_id}
+        if voice_clarity_active is not None:
+            legacy_payload["voice_clarity_active"] = voice_clarity_active
+        if verdict is not None:
+            legacy_payload["verdict"] = verdict
+        if strategies is not None:
+            legacy_payload["strategies"] = list(strategies)
+        legacy_payload.update(legacy_attrs)
+
     # h2-allowlist: dual-emission per ADR-D14
-    _emit_at_level(level, legacy_name, **{**legacy_payload, **legacy_attrs})
+    _emit_at_level(level, legacy_name, **legacy_payload)
 
 
 __all__ = [

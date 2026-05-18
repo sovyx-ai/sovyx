@@ -175,6 +175,18 @@ class VoiceStatusCapture(BaseModel):
     frames_delivered: int = 0
     last_rms_db: float | None = None
 
+    # Mission H2 §T2.10 (ADR-D15) — last bypass-coordinator event's
+    # platform metadata. Optional + None-default so legacy clients +
+    # pre-mission status snapshots round-trip unchanged. Producers
+    # populate from the latest ``voice.capture_integrity.bypass*`` event
+    # via the C4 composite store's metadata channel; consumers
+    # (dashboard banner action chips, ``sovyx doctor voice``) render
+    # platform-specific operator copy when populated. Promoted to
+    # required at v0.51.0 STRICT after one minor cycle of telemetry
+    # calibration per anti-pattern #29.
+    last_bypass_event_platform: str | None = None
+    last_bypass_event_family: str | None = None
+
 
 class VoiceStatusSTT(BaseModel):
     """STT-engine state for ``/api/voice/status``."""

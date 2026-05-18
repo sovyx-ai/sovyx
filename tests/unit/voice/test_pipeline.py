@@ -2974,6 +2974,13 @@ _HEARTBEAT_LOGGER = "sovyx.voice.pipeline._heartbeat_mixin"
 # ``voice.coordinator.pending_flag_timeout_reset``) now emit from that
 # module's logger.
 _BYPASS_LOGGER = "sovyx.voice.pipeline._bypass_coordinator_mixin"
+# Mission H2 §T2.9 — bypass-coordinator emissions of the capture-integrity
+# event family (``voice.capture_integrity.*`` neutral + ``audio.apo.bypassed`` /
+# ``voice_apo_bypass_*`` legacy twins) flow through the dual-emission wrapper
+# helper :mod:`sovyx.voice.pipeline._capture_integrity_emit`, not the
+# bypass-coordinator mixin's own logger. The _events_of filter lists both
+# loggers so legacy operator-playbook event-name greps continue to resolve.
+_CAPTURE_INTEGRITY_EMIT_LOGGER = "sovyx.voice.pipeline._capture_integrity_emit"
 # Phase 5.F.26 — TTS task tracking + cancellation chain extracted to
 # ``_tts_cancel_chain_mixin``; the chain-family events
 # (``voice.tts.cancellation_chain`` / ``voice.tts.cancellation_step_failed`` /
@@ -3002,7 +3009,14 @@ def _events_of(caplog: pytest.LogCaptureFixture, event: str) -> list[dict[str, A
     return [
         r.msg
         for r in caplog.records
-        if r.name in (_ORCH_LOGGER, _HEARTBEAT_LOGGER, _BYPASS_LOGGER, _TTS_CANCEL_LOGGER)
+        if r.name
+        in (
+            _ORCH_LOGGER,
+            _HEARTBEAT_LOGGER,
+            _BYPASS_LOGGER,
+            _TTS_CANCEL_LOGGER,
+            _CAPTURE_INTEGRITY_EMIT_LOGGER,
+        )
         and isinstance(r.msg, dict)
         and r.msg.get("event") == event
     ]
@@ -3799,6 +3813,13 @@ class TestDeafSignalCoordinator:
         assert activated[0]["action"] == "capture_integrity_coordinator"
         assert activated[0]["threshold"] == 2  # noqa: PLR2004
         assert activated[0]["consecutive_deaf_warnings"] >= 2  # noqa: PLR2004
+        # Mission H2 §T2.9 — dual-emission sibling assertion: the neutral
+        # ``voice.capture_integrity.bypass_activated`` fires alongside the
+        # legacy ``voice_apo_bypass_activated`` per ADR-D14.
+        neutral_activated = _events_of(caplog, "voice.capture_integrity.bypass_activated")
+        assert len(neutral_activated) == 1
+        assert neutral_activated[0]["voice.event_schema_version"] == "2.0.0"
+        assert neutral_activated[0]["voice.platform"] in {"linux", "windows", "darwin", "other"}
 
     @pytest.mark.asyncio
     async def test_callback_blocked_when_auto_bypass_disabled(
@@ -3818,6 +3839,8 @@ class TestDeafSignalCoordinator:
 
         callback.assert_not_awaited()
         assert _events_of(caplog, "voice_apo_bypass_activated") == []
+        # Mission H2 §T2.9 — neutral sibling also absent when bypass is disabled.
+        assert _events_of(caplog, "voice.capture_integrity.bypass_activated") == []
 
     @pytest.mark.asyncio
     async def test_terminal_latch_after_non_empty_outcomes(
@@ -3840,6 +3863,8 @@ class TestDeafSignalCoordinator:
         callback.assert_awaited_once()
         assert pipeline._coordinator_terminated is True
         assert len(_events_of(caplog, "voice_apo_bypass_activated")) == 1
+        # Mission H2 §T2.9 — dual-emission sibling.
+        assert len(_events_of(caplog, "voice.capture_integrity.bypass_activated")) == 1
 
     @pytest.mark.asyncio
     async def test_empty_outcomes_do_not_latch_terminal(self) -> None:
@@ -3900,6 +3925,22 @@ class TestDeafSignalCoordinator:
         ]
         assert ineffective[0]["verdicts"] == ["applied_still_dead", "failed_to_apply"]
         assert pipeline._coordinator_terminated is True
+        # Mission H2 §T2.9 — dual-emission sibling: the neutral
+        # ``voice.capture_integrity.bypass_ineffective`` carries the same
+        # payload PLUS the v2.0.0 schema platform metadata.
+        neutral_ineffective = _events_of(caplog, "voice.capture_integrity.bypass_ineffective")
+        assert len(neutral_ineffective) == 1
+        assert neutral_ineffective[0]["voice.event_schema_version"] == "2.0.0"
+        assert neutral_ineffective[0]["voice.bypass_family"] in {
+            "voice_clarity",
+            "voice_isolation",
+            "module_echo_cancel",
+            "pipewire_filter_chain",
+            "wireplumber_default_source",
+            "alsa_capture_chain",
+            "coreaudio_voice_processing",
+            "noop",
+        }
 
     @pytest.mark.asyncio
     async def test_callback_exception_does_not_crash_pipeline(
@@ -3926,6 +3967,14 @@ class TestDeafSignalCoordinator:
         assert len(failed) == 1
         assert failed[0]["error_type"] == "RuntimeError"
         assert "simulated" in failed[0]["error"]
+        # Mission H2 §T2.9 — dual-emission sibling on the callback-exception
+        # path: the neutral ``voice.capture_integrity.bypass_failed`` fires
+        # alongside the legacy ``voice_apo_bypass_failed`` with the same
+        # error metadata + the v2.0.0 schema platform fields.
+        neutral_failed = _events_of(caplog, "voice.capture_integrity.bypass_failed")
+        assert len(neutral_failed) == 1
+        assert neutral_failed[0]["voice.error_type"] == "RuntimeError"
+        assert neutral_failed[0]["voice.event_schema_version"] == "2.0.0"
         # Exception path does NOT latch the terminal flag — transient
         # coordinator issues (e.g. probe tap race) must not lock out
         # future deafness bursts.
@@ -4250,6 +4299,13 @@ class TestDeafSignalAtomicityO2:
         # Same snapshot semantics on the success event: report the
         # counter that justified the invocation, not the post-reset 0.
         assert activated[0]["consecutive_deaf_warnings"] == 12  # noqa: PLR2004
+        # Mission H2 §T2.9 — dual-emission sibling: the neutral
+        # ``voice.capture_integrity.bypass_activated`` reports the same
+        # snapshot under the dotted-namespace ``voice.consecutive_deaf_warnings``
+        # key per OTel semconv discipline.
+        neutral_activated = _events_of(caplog, "voice.capture_integrity.bypass_activated")
+        assert len(neutral_activated) == 1
+        assert neutral_activated[0]["voice.consecutive_deaf_warnings"] == 12  # noqa: PLR2004
 
 
 # ===========================================================================

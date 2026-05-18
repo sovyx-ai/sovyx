@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sovyx.dev/log_schema/voice.apo.detected.json",
-  "title": "voice.apo.detected",
-  "description": "(DEPRECATED H2; see voice.capture_integrity.detected) Windows APO found.",
+  "$id": "https://sovyx.dev/log_schema/voice.capture_integrity.bypass.json",
+  "title": "voice.capture_integrity.bypass",
+  "description": "Mission H2 neutral platform-bypass cascade event; carries v2.0.0 metadata.",
   "type": "object",
   "required": [
     "timestamp",
@@ -14,10 +14,10 @@
     "host",
     "sovyx_version",
     "sequence_no",
-    "voice.device_id",
-    "voice.apo_name",
-    "voice.endpoint_guid",
-    "voice.enabled"
+    "voice.mind_id",
+    "voice.platform",
+    "voice.bypass_family",
+    "voice.event_schema_version"
   ],
   "properties": {
     "timestamp": {
@@ -79,19 +79,64 @@
       ]
     },
     "event": {
-      "const": "voice.apo.detected"
+      "const": "voice.capture_integrity.bypass"
     },
-    "voice.device_id": {
+    "voice.mind_id": {
       "type": "string"
     },
-    "voice.apo_name": {
+    "voice.platform": {
       "type": "string"
     },
-    "voice.endpoint_guid": {
+    "voice.bypass_family": {
       "type": "string"
     },
-    "voice.enabled": {
+    "voice.event_schema_version": {
+      "type": "string"
+    },
+    "voice.consecutive_deaf_warnings": {
+      "type": "integer"
+    },
+    "voice.threshold": {
+      "type": "integer"
+    },
+    "voice.voice_clarity_active": {
       "type": "boolean"
+    },
+    "voice.auto_bypass_enabled": {
+      "type": "boolean"
+    },
+    "voice.strategy_name": {
+      "type": "string"
+    },
+    "voice.attempt_index": {
+      "type": "integer"
+    },
+    "voice.verdict": {
+      "type": "string"
+    },
+    "voice.attempts": {
+      "type": "integer"
+    },
+    "voice.strategies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "voice.outcomes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "voice.error": {
+      "type": "string"
+    },
+    "voice.error_type": {
+      "type": "string"
+    },
+    "voice.reason": {
+      "type": "string"
     }
   },
   "additionalProperties": true

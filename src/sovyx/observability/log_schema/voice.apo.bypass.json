@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sovyx.dev/log_schema/voice.apo.bypass.json",
   "title": "voice.apo.bypass",
-  "description": "Coordinator switched the capture stream out of the APO chain.",
+  "description": "(DEPRECATED H2; see voice.capture_integrity.bypass) Coordinator bypass.",
   "type": "object",
   "required": [
     "timestamp",

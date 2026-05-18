@@ -64,7 +64,7 @@ models). Editing those files by hand is a contract violation —
 
 <!-- BEGIN AUTO-GENERATED EVENTS TABLE — do not edit by hand -->
 
-_36 canonical events. Regenerate via `uv run python scripts/_gen_log_schemas.py`._
+_37 canonical events. Regenerate via `uv run python scripts/_gen_log_schemas.py`._
 
 | Event | Description | Required payload | Optional payload |
 |---|---|---|---|
@@ -82,8 +82,9 @@ _36 canonical events. Regenerate via `uv run python scripts/_gen_log_schemas.py`
 | `voice.deaf` | Capture stream is wedged — VAD probability stayed below floor. | `voice.consecutive_deaf_warnings`, `voice.frames_processed`, `voice.max_vad_probability`, `voice.mind_id`, `voice.state`, `voice.threshold`, `voice.voice_clarity_active` | — |
 | `voice.frame.drop` | PortAudio reported a missing/late capture frame. | `voice.expected_frame_index`, `voice.gap_ms`, `voice.missing_frame_index`, `voice.stream_id` | — |
 | `voice.barge_in.detected` | User started speaking while TTS was playing — playback was interrupted. | `voice.frames_sustained`, `voice.mind_id`, `voice.output_was_playing`, `voice.prob`, `voice.threshold_frames` | — |
-| `voice.apo.detected` | Windows capture-side APO (Voice Clarity etc.) was found on the active endpoint. | `voice.apo_name`, `voice.device_id`, `voice.enabled`, `voice.endpoint_guid` | — |
-| `voice.apo.bypass` | Coordinator switched the capture stream out of the APO chain. | `voice.auto_bypass_enabled`, `voice.consecutive_deaf_warnings`, `voice.mind_id`, `voice.threshold`, `voice.voice_clarity_active` | `voice.attempt_index`, `voice.strategy_name`, `voice.verdict` |
+| `voice.apo.detected` | (DEPRECATED H2; see voice.capture_integrity.detected) Windows APO found. | `voice.apo_name`, `voice.device_id`, `voice.enabled`, `voice.endpoint_guid` | — |
+| `voice.apo.bypass` | (DEPRECATED H2; see voice.capture_integrity.bypass) Coordinator bypass. | `voice.auto_bypass_enabled`, `voice.consecutive_deaf_warnings`, `voice.mind_id`, `voice.threshold`, `voice.voice_clarity_active` | `voice.attempt_index`, `voice.strategy_name`, `voice.verdict` |
+| `voice.capture_integrity.bypass` | Mission H2 neutral platform-bypass cascade event; carries v2.0.0 metadata. | `voice.bypass_family`, `voice.event_schema_version`, `voice.mind_id`, `voice.platform` | `voice.attempt_index`, `voice.attempts`, `voice.auto_bypass_enabled`, `voice.consecutive_deaf_warnings`, `voice.error`, `voice.error_type`, `voice.outcomes`, `voice.reason`, `voice.strategies`, `voice.strategy_name`, `voice.threshold`, `voice.verdict`, `voice.voice_clarity_active` |
 | `voice.stream.opened` | PortAudio capture stream opened with negotiated format. | `voice.channel_count`, `voice.device_id`, `voice.mode`, `voice.sample_rate`, `voice.stream_id` | — |
 | `voice.device.hotplug` | OS audio endpoint changed (arrival / removal / default switch). | `voice.device_id`, `voice.device_name`, `voice.endpoint_guid`, `voice.event_type` | — |
 | `plugin.invoke.start` | PluginManager.invoke() entered — tool dispatched to the sandbox. | `plugin.args_preview`, `plugin.timeout_s`, `plugin.tool_name`, `plugin_id` | — |

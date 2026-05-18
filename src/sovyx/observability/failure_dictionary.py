@@ -84,7 +84,8 @@ _SIGNATURES: list[FailureSignature] = [
     FailureSignature(
         {"exc_type": "EOFError", "event": _re(r"^voice\.stt\.")},
         "Audio device disconnected mid-stream — check audio.device.removed "
-        "events earlier in the saga and the audio.apo.bypassed verdict.",
+        "events earlier in the saga and the voice.capture_integrity.bypassed "
+        "(legacy: audio.apo.bypassed) verdict.",
         "warning",
         "docs/runbooks/voice-stt-eof.md",
     ),
@@ -138,8 +139,8 @@ _SIGNATURES: list[FailureSignature] = [
     FailureSignature(
         {"event": "voice.heartbeat.deaf"},
         "Wake-word deaf for N heartbeats — auto-fix triggers when "
-        "voice_clarity_autofix=True; check voice.apo.bypass_triggered "
-        "in the next saga.",
+        "voice_clarity_autofix=True; check voice.capture_integrity.bypass_triggered "
+        "(legacy: voice.apo.bypass_triggered) in the next saga.",
         "warning",
         "docs/runbooks/wake-word-deaf.md",
     ),

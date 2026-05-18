@@ -279,6 +279,127 @@ class TestGetVoiceStatus:
         assert set(status.keys()) == expected_keys
 
 
+class TestH2CaptureBypassEventMetadata:
+    """Mission H2 §T2.10 — VoiceStatusCapture forward-additive platform metadata.
+
+    Quality Gate 8 (anti-pattern #40) round-trip pair: the producer dict
+    shape in :mod:`sovyx.dashboard.voice_status.get_voice_status` MUST
+    parse through :class:`VoiceStatusResponse.model_validate` for every
+    populated value of ``last_bypass_event_platform`` +
+    ``last_bypass_event_family``. Without this pairing the v0.51.0
+    promotion of these fields from optional to required would surface
+    silent boundary drift across the dual-emission window.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_pristine_status_carries_null_platform_metadata(
+        self, mock_registry: MagicMock
+    ) -> None:
+        """Default snapshot — no bypass dispatch has fired yet — carries
+        ``None`` for the new platform-metadata fields."""
+        status = await get_voice_status(mock_registry)
+        assert status["capture"]["last_bypass_event_platform"] is None
+        assert status["capture"]["last_bypass_event_family"] is None
+
+    def test_round_trip_with_linux_alsa_metadata(self) -> None:
+        """Operator's L1067 forensic shape (Linux Mint + ALSA capture
+        chain) parses through ``VoiceStatusResponse.model_validate``."""
+        from sovyx.dashboard.routes.voice import VoiceStatusResponse
+
+        shape = {
+            "pipeline": {"running": True, "state": "listening", "latency_ms": 22.5},
+            "capture": {
+                "running": True,
+                "input_device": 5,
+                "host_api": "ALSA",
+                "sample_rate": 16_000,
+                "frames_delivered": 50,
+                "last_rms_db": -54.4,
+                # Mission H2 §T2.10 platform metadata
+                "last_bypass_event_platform": "linux",
+                "last_bypass_event_family": "alsa_capture_chain",
+            },
+            "stt": {"engine": "MoonshineSTT", "model": "moonshine-tiny", "state": "ready"},
+            "tts": {"engine": "PiperTTS", "model": "pt_BR-faber-medium", "initialized": True},
+            "wake_word": {"enabled": False, "phrase": None},
+            "vad": {"enabled": True},
+            "wyoming": {"connected": False, "endpoint": None},
+            "hardware": {"tier": "MINI_PC", "ram_mb": 8192},
+            "preflight_warnings": [],
+        }
+        response = VoiceStatusResponse.model_validate(shape)
+        assert response.capture.last_bypass_event_platform == "linux"
+        assert response.capture.last_bypass_event_family == "alsa_capture_chain"
+
+    def test_round_trip_with_windows_voice_clarity_metadata(self) -> None:
+        """Windows Voice Clarity dispatch shape parses cleanly."""
+        from sovyx.dashboard.routes.voice import VoiceStatusResponse
+
+        shape = {
+            "capture": {
+                "running": True,
+                "last_bypass_event_platform": "windows",
+                "last_bypass_event_family": "voice_clarity",
+            },
+        }
+        response = VoiceStatusResponse.model_validate(shape)
+        assert response.capture.last_bypass_event_platform == "windows"
+        assert response.capture.last_bypass_event_family == "voice_clarity"
+
+    def test_round_trip_with_null_metadata_is_forward_compatible(self) -> None:
+        """Legacy clients (pre-Phase-1.B status snapshots) MUST continue
+        to round-trip — ``None``-valued metadata fields are explicit."""
+        from sovyx.dashboard.routes.voice import VoiceStatusResponse
+
+        shape = {
+            "capture": {
+                "running": False,
+                "last_bypass_event_platform": None,
+                "last_bypass_event_family": None,
+            },
+        }
+        response = VoiceStatusResponse.model_validate(shape)
+        assert response.capture.last_bypass_event_platform is None
+        assert response.capture.last_bypass_event_family is None
+
+    def test_round_trip_without_h2_fields_is_backwards_compatible(self) -> None:
+        """Pre-mission status payloads (no platform-metadata fields at
+        all) MUST continue to validate — anti-pattern #29 forward-
+        additive optional discipline."""
+        from sovyx.dashboard.routes.voice import VoiceStatusResponse
+
+        shape = {
+            "capture": {
+                "running": True,
+                "input_device": 5,
+                "host_api": "ALSA",
+                "sample_rate": 16_000,
+                "frames_delivered": 50,
+                "last_rms_db": -54.4,
+            },
+        }
+        response = VoiceStatusResponse.model_validate(shape)
+        # Both metadata fields default to None when absent.
+        assert response.capture.last_bypass_event_platform is None
+        assert response.capture.last_bypass_event_family is None
+
+    def test_unknown_platform_value_passes_extra_allow(self) -> None:
+        """``extra="allow"`` preserves forward-additive shape — operator
+        platforms like ``freebsd`` / ``wsl`` flow through unblocked even
+        before the Literal enum is widened."""
+        from sovyx.dashboard.routes.voice import VoiceStatusResponse
+
+        shape = {
+            "capture": {
+                "running": True,
+                "last_bypass_event_platform": "other",
+                "last_bypass_event_family": "alsa_capture_chain",
+            },
+        }
+        response = VoiceStatusResponse.model_validate(shape)
+        assert response.capture.last_bypass_event_platform == "other"
+
+
 # ── get_voice_models tests ──
 
 

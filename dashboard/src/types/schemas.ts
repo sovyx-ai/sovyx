@@ -1759,6 +1759,15 @@ const VoiceStatusCaptureSchema = z
     sample_rate: z.number().nullable().optional(),
     frames_delivered: z.number().optional(),
     last_rms_db: z.number().nullable().optional(),
+    // Mission H2 §T2.10 (ADR-D15) — platform metadata from the last
+    // bypass-coordinator dispatch. Optional + nullable while the
+    // ADR-D14 dual-emission calibration window is open; promoted to
+    // required at v0.51.0 STRICT.
+    last_bypass_event_platform: z
+      .enum(["linux", "windows", "darwin", "other"])
+      .nullable()
+      .optional(),
+    last_bypass_event_family: z.string().nullable().optional(),
   })
   .passthrough();
 

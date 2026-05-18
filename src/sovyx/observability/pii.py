@@ -247,6 +247,18 @@ _PROTECTED_KEYS: Final[frozenset[str]] = frozenset(
 # correlated events use ``device_name``; Windows APO detector uses
 # ``friendly_name`` / ``active_device_name`` / ``endpoint_id``.
 #
+# Mission H2 v0.49.7 — the redaction set is KEY-driven, not event-name-
+# driven, so the H2 rename of ``audio.apo.bypassed`` /
+# ``voice_apo_bypass_*`` to ``voice.capture_integrity.*`` does NOT
+# require updating this frozenset: every fingerprint field that flows
+# under a NEW neutral event name continues to be redacted because the
+# KEY (e.g. ``voice.active_endpoint_name``) is unchanged. The Phase
+# 1.D rename of ``audio.apo.scan*`` to ``audio.capture_chain.scan*``
+# follows the same invariant. See ``tests/security/test_pii_redaction_h2.py``
+# for the continuity regression that verifies the same fingerprint
+# payload is redacted identically whether carried under a legacy
+# event name or a neutral one.
+#
 # Each key resolves independently because dotted forms (``voice.X``)
 # never collide with the bare form (``X``) at the structlog dict
 # layer — they are distinct keys on the wire. Listing both forms is

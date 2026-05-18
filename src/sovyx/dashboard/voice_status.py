@@ -38,6 +38,16 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
             "sample_rate": None,
             "frames_delivered": 0,
             "last_rms_db": None,
+            # Mission H2 §T2.10 (ADR-D15) — platform metadata from the
+            # last bypass-coordinator dispatch. None on pristine boots
+            # + on every status snapshot before the first dispatch
+            # fires; populated lazily as the bypass coordinator emits
+            # ``voice.capture_integrity.bypass*`` events. The producer
+            # at :mod:`sovyx.voice.pipeline._capture_integrity_emit` is
+            # the canonical write site; this snapshot reads the latest
+            # observed values via the registry's status_snapshot path.
+            "last_bypass_event_platform": None,
+            "last_bypass_event_family": None,
         },
         "stt": {
             "engine": None,
