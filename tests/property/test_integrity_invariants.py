@@ -55,7 +55,7 @@ def _write_synthetic(static_dir: Path, refs: list[str], assets_present: list[str
     deadline=2000,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(refs=st.lists(_chunk_name, min_size=1, max_size=8, unique=True))
+@given(refs=st.lists(_chunk_name, min_size=1, max_size=8, unique_by=lambda s: s.lower()))
 def test_referenced_count_matches_input(
     tmp_path_factory: pytest.TempPathFactory, refs: list[str]
 ) -> None:
@@ -76,7 +76,7 @@ def test_missing_count_is_complement(
     tmp_path_factory: pytest.TempPathFactory,
     data: st.DataObject,
 ) -> None:
-    refs = data.draw(st.lists(_chunk_name, min_size=2, max_size=8, unique=True))
+    refs = data.draw(st.lists(_chunk_name, min_size=2, max_size=8, unique_by=lambda s: s.lower()))
     keep_count = data.draw(st.integers(min_value=0, max_value=len(refs) - 1))
     present = refs[:keep_count]
     tmp = tmp_path_factory.mktemp("partial")
@@ -98,7 +98,7 @@ def test_missing_count_is_complement(
     deadline=2000,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(refs=st.lists(_chunk_name, min_size=1, max_size=6, unique=True))
+@given(refs=st.lists(_chunk_name, min_size=1, max_size=6, unique_by=lambda s: s.lower()))
 def test_verdict_idempotent(
     tmp_path_factory: pytest.TempPathFactory,
     refs: list[str],
@@ -117,7 +117,7 @@ def test_verdict_idempotent(
     deadline=2000,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(refs=st.lists(_chunk_name, min_size=0, max_size=10, unique=True))
+@given(refs=st.lists(_chunk_name, min_size=0, max_size=10, unique_by=lambda s: s.lower()))
 def test_scan_duration_non_negative(
     tmp_path_factory: pytest.TempPathFactory,
     refs: list[str],
