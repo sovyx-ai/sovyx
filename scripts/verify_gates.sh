@@ -45,7 +45,7 @@ else
 fi
 
 GATE_NUM=0
-GATE_TOTAL=13
+GATE_TOTAL=14
 FAILURES=()
 
 ok() {
@@ -143,6 +143,18 @@ else
     if grep -qE "[0-9]+ failed.*in [0-9]+\.[0-9]+s" "$LOG"; then
         FAILED=$(grep -oE "[0-9]+ failed" "$LOG" | head -1)
         bad "pytest — $FAILED; log: $LOG"
+    elif grep -qE "[0-9]+ passed.*in [0-9]+\.[0-9]+s" "$LOG"; then
+        # Windows post-pytest shutdown noise (comtypes CoUninitialize log error
+        # writing to a closed stream after pytest collected its summary). The
+        # framework completed cleanly — summary line confirms ``N passed, 0
+        # failed`` — but the interpreter shutdown surfaces a non-zero exit.
+        # Sibling of CLAUDE.md anti-pattern #30 (psutil shutdown hang) +
+        # anti-pattern #22 (Windows timing noise). Pre-v0.49.10 this hit
+        # verify_gates.sh as a false-positive "hang" verdict and blocked
+        # local pre-push proof. Fix: when exit is nonzero AND the summary
+        # line is present AND no failure count is reported, treat as success.
+        PASSED=$(grep -oE "[0-9]+ passed" "$LOG" | head -1)
+        ok "pytest — $PASSED (exit nonzero post-test; framework completed clean)"
     else
         bad "pytest — non-zero exit, NO summary line; likely hung; log: $LOG"
         exit 2
@@ -302,6 +314,33 @@ else
     # Non-zero exit — LENIENT phase, warn only; do NOT fail verify_gates.sh.
     # Phase 3 v0.51.0 STRICT promotion will replace this branch with `bad ...`.
     printf '%s⚠%s gate %d/%d — platform-neutral event names LENIENT warn (Mission H2 v0.49.6; STRICT at v0.51.0); log: %s\n' \
+        "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$LOG"
+fi
+
+# ── Gate 14: quarantine reason discipline (Mission H3 §T1.4) ─────────
+# Mission H3 Phase 1.A LENIENT — warn-only locally; STRICT in publish.yml's
+# post-build verify (Mission H3 §T1.4). Phase 3 v0.53.0 promotes this to
+# STRICT in verify_gates.sh as well, per ADR-D13. Pre-mission baseline:
+# 0 violations across `_quarantine.py` + `capture_integrity.py` (the only
+# call sites pass `reason=_DEFAULT_QUARANTINE_REASON` which expands to a
+# string literal; Gate 14 LENIENT reports this as a literal_terminal
+# violation, but Phase 1.B refactors the call site to use the SSoT
+# resolver before STRICT enforcement).
+GATE_NUM=14
+LOG="$LOG_DIR/14-quarantine-reason-discipline.log"
+if uv run python scripts/dev/check_quarantine_reason_discipline.py >"$LOG" 2>&1; then
+    if grep -q "discipline: PASS" "$LOG"; then
+        ok "quarantine reason discipline — PASS"
+    else
+        # exit 0 but violations present (LENIENT report-only) — surface as warn
+        VIOLATIONS=$(grep -oE "[0-9]+ violation\(s\)" "$LOG" | head -1 || echo "0 violations")
+        printf '%s⚠%s gate %d/%d — quarantine reason discipline LENIENT warn: %s (Mission H3 v0.49.10; STRICT at v0.53.0); log: %s\n' \
+            "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$VIOLATIONS" "$LOG"
+    fi
+else
+    # Non-zero exit — LENIENT phase, warn only; do NOT fail verify_gates.sh.
+    # Phase 3 v0.53.0 STRICT promotion will replace this branch with `bad ...`.
+    printf '%s⚠%s gate %d/%d — quarantine reason discipline LENIENT warn (Mission H3 v0.49.10; STRICT at v0.53.0); log: %s\n' \
         "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$LOG"
 fi
 

@@ -124,6 +124,29 @@ jobs:
           uv run python scripts/dev/check_platform_neutral_event_names.py
           echo "✓ Platform-neutral event-name discipline reported (Mission H2 §T1.5)"
 
+      - name: Verify quarantine reason discipline
+        # Mission H3 §T1.4 — REPORT post-build gate during staged adoption
+        # (Phase 1.A v0.49.10 .. Phase 1.D v0.49.13). Runs the AST scanner
+        # against the repo tree. The scanner walks every `*.py` under
+        # `src/sovyx/` and reports any `*.add(reason=<literal>)` call site
+        # outside the four compliant shapes: (a) QuarantineReason enum
+        # member, (b) resolve_reason_from_verdict / _diagnosis SSoT
+        # resolver, (c) field passthrough (.reason / .derived_reason /
+        # .resolved_reason), (d) lifecycle-tag literal with explicit
+        # `# h3-allowlist:` inline comment. Closes the canonical instance
+        # of CLAUDE.md anti-pattern #39(a) output side revealed by the
+        # v0.43.1 forensic audit §H3. The post-build verify is REPORT-only
+        # during v0.49.10..v0.52.x staged adoption (matches Gate 14's
+        # LENIENT shape in verify_gates.sh). Phase 3 v0.53.0 swaps to
+        # `--strict` here AND in verify_gates.sh; legacy literal default
+        # at `capture_integrity.py:1264` is rewritten + remaining lifecycle
+        # tags carry `# h3-allowlist:` comments per anti-pattern #46
+        # escape hatch (d).
+        run: |
+          set -euo pipefail
+          uv run python scripts/dev/check_quarantine_reason_discipline.py
+          echo "✓ Quarantine reason discipline reported (Mission H3 §T1.4)"
+
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:

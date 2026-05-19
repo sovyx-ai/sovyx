@@ -58,6 +58,15 @@ from sovyx.voice.health._quarantine import (
     get_default_quarantine,
     reset_default_quarantine,
 )
+from sovyx.voice.health._quarantine_reasons import (
+    LEGACY_TWIN_MAP_REASONS,
+    QuarantineReason,
+    is_apo_class_reason,
+    is_lifecycle_tag,
+    is_recheck_eligible,
+    resolve_reason_from_diagnosis,
+    resolve_reason_from_verdict,
+)
 from sovyx.voice.health._self_feedback import SelfFeedbackGate, SelfFeedbackMode
 from sovyx.voice.health.capture_overrides import CaptureOverrides
 from sovyx.voice.health.cascade import (
@@ -185,6 +194,7 @@ __all__ = [
     "IntegrityResult",
     "IntegrityVerdict",
     "KernelInvalidatedRechecker",
+    "LEGACY_TWIN_MAP_REASONS",
     "LINUX_CASCADE",
     "LoadReport",
     "MACOS_CASCADE",
@@ -226,6 +236,7 @@ __all__ = [
     "ProbeMode",
     "ProbeResult",
     "QuarantineEntry",
+    "QuarantineReason",
     "RecheckProbeCallable",
     "RemediationHint",
     "SelfFeedbackGate",
@@ -256,10 +267,15 @@ __all__ = [
     "detect_hardware_context",
     "detect_user_customization",
     "get_default_quarantine",
+    "is_apo_class_reason",
+    "is_lifecycle_tag",
+    "is_recheck_eligible",
     "preflight_warnings_file_path",
     "probe",
     "read_preflight_warnings_file",
     "reset_default_quarantine",
+    "resolve_reason_from_diagnosis",
+    "resolve_reason_from_verdict",
     "run_cascade",
     "run_preflight",
     "write_preflight_warnings_file",
