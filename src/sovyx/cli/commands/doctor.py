@@ -2741,4 +2741,77 @@ def _render_platform_diagnostics_table(payload: dict[str, object]) -> None:
                         )
 
 
+@doctor_app.command("resources")
+def doctor_resources(
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the resource snapshot as a JSON object on stdout.",
+    ),
+    cohort: str | None = typer.Option(
+        None,
+        "--cohort",
+        help="Filter the table to one cohort section "
+        "(process / asyncio / to_thread / lock_dict / onnx / gc / "
+        "tracemalloc / exception_cohort).",
+    ),
+) -> None:
+    """Mission H4 §T3.2 — render the engine resource-cohort snapshot.
+
+    Operator-facing surface for the Phase 1.A + 1.B in-process
+    :class:`ResourceRegistry`. Renders the same fields that fire on
+    every ``self.health.snapshot`` log record, but as a one-shot
+    structured table — operators no longer need to grep raw JSON Lines
+    to inspect ONNX session counts, LRULockDict cardinality, or
+    asyncio.to_thread dispatch totals.
+
+    Use ``--cohort to_thread`` to scope to one section; use ``--json``
+    for piped consumption (Grafana exporters, CI checks).
+
+    Returns 0 unconditionally — diagnostic-only; the Phase 1.D
+    ResourceCohortGovernor will introduce non-zero exit semantics
+    when a cohort breaches budget.
+    """
+    from sovyx.observability._resource_registry import (
+        _HEALTH_SNAPSHOT_FIELDS,
+        get_default_resource_registry,
+    )
+
+    fields = get_default_resource_registry().snapshot_fields()
+
+    if output_json:
+        # Stable shape for piped consumers: dotted-key dict mirroring
+        # the structured-log envelope.
+        print(json.dumps(fields, indent=2, default=str))
+        return
+
+    console = Console()
+    sections: dict[str, list[tuple[str, object]]] = {}
+    for key, value in fields.items():
+        spec = _HEALTH_SNAPSHOT_FIELDS.get(key)
+        section = spec.section if spec else "other"
+        sections.setdefault(section, []).append((key, value))
+
+    if cohort is not None and cohort not in sections:
+        console.print(
+            f"[yellow]No fields registered under cohort '{cohort}'.[/]"
+            f"  Known cohorts: {', '.join(sorted(sections))}",
+        )
+        return
+
+    for section, entries in sorted(sections.items()):
+        if cohort is not None and section != cohort:
+            continue
+        table = Table(
+            title=f"Engine resources — {section}",
+            show_lines=False,
+            show_header=True,
+        )
+        table.add_column("field", min_width=30)
+        table.add_column("value")
+        for key, value in sorted(entries):
+            table.add_row(key, str(value))
+        console.print(table)
+
+
 __all__ = ["doctor_app"]
