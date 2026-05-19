@@ -87,6 +87,51 @@ describe("Locale completeness — voice namespace", () => {
     }
   });
 
+  it("Mission H4 §T3.5 + §T3.6 — all resources.* + heapSnapshot.* keys present in 3 locales", () => {
+    const en = pathSet(enVoice as AnyJson);
+    const pt = pathSet(ptVoice as AnyJson);
+    const es = pathSet(esVoice as AnyJson);
+
+    const requiredKeys = [
+      "resources.title",
+      "resources.subtitle",
+      "resources.loading",
+      "resources.degraded",
+      "resources.fieldsLabel",
+      "resources.sections.process.title",
+      "resources.sections.process.description",
+      "resources.sections.asyncio.title",
+      "resources.sections.asyncio.description",
+      "resources.sections.to_thread.title",
+      "resources.sections.to_thread.description",
+      "resources.sections.lock_dict.title",
+      "resources.sections.lock_dict.description",
+      "resources.sections.onnx.title",
+      "resources.sections.onnx.description",
+      "resources.sections.gc.title",
+      "resources.sections.gc.description",
+      "resources.sections.tracemalloc.title",
+      "resources.sections.tracemalloc.description",
+      "resources.sections.exception_cohort.title",
+      "resources.sections.exception_cohort.description",
+      "heapSnapshot.title",
+      "heapSnapshot.subtitle",
+      "heapSnapshot.cohortContext",
+      "heapSnapshot.loading",
+      "heapSnapshot.notFound",
+      "heapSnapshot.error",
+      "heapSnapshot.col.rank",
+      "heapSnapshot.col.size",
+      "heapSnapshot.col.count",
+      "heapSnapshot.col.traceback",
+    ];
+    for (const key of requiredKeys) {
+      expect(en.has(key), `EN missing ${key}`).toBe(true);
+      expect(pt.has(key), `pt-BR missing ${key}`).toBe(true);
+      expect(es.has(key), `ES missing ${key}`).toBe(true);
+    }
+  });
+
   it("Mission C5 §T3.6 — all degraded.dashboard.* keys present in 3 locales", () => {
     const en = pathSet(enVoice as AnyJson);
     const pt = pathSet(ptVoice as AnyJson);

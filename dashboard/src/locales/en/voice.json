@@ -799,6 +799,20 @@
       "fallback": "Playback failed."
     }
   },
+  "heapSnapshot": {
+    "title": "Heap snapshot",
+    "subtitle": "Top {{count}} allocators by retained bytes (tracemalloc).",
+    "cohortContext": "Captured on cohort={{cohort}} breach (observed={{observed}}, budget={{budget}}).",
+    "loading": "Loading heap snapshot…",
+    "notFound": "Heap snapshot #{{timestamp}} not found (may have been rotated out or tracemalloc was disabled when the cohort fired).",
+    "error": "Failed to load heap snapshot: {{error}}.",
+    "col": {
+      "rank": "#",
+      "size": "Size",
+      "count": "Count",
+      "traceback": "Traceback"
+    }
+  },
   "resources": {
     "title": "Engine resources",
     "subtitle": "Live per-cohort registry state (Mission H4 §T3.4). Polls /api/engine/resources every 30 s.",

@@ -799,6 +799,20 @@
       "fallback": "Falló la reproducción."
     }
   },
+  "heapSnapshot": {
+    "title": "Snapshot de heap",
+    "subtitle": "Top {{count}} asignadores por bytes retenidos (tracemalloc).",
+    "cohortContext": "Capturado en breach del cohort={{cohort}} (observado={{observed}}, presupuesto={{budget}}).",
+    "loading": "Cargando snapshot de heap…",
+    "notFound": "Snapshot de heap #{{timestamp}} no encontrado (puede haber sido rotado o tracemalloc no estaba habilitado cuando el cohort disparó).",
+    "error": "Error al cargar snapshot de heap: {{error}}.",
+    "col": {
+      "rank": "#",
+      "size": "Tamaño",
+      "count": "Conteo",
+      "traceback": "Traceback"
+    }
+  },
   "resources": {
     "title": "Recursos del engine",
     "subtitle": "Estado vivo del registry por cohort (Mission H4 §T3.4). Polling en /api/engine/resources cada 30 s.",
