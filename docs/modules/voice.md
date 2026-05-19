@@ -220,6 +220,43 @@ voice:
     voice: en_US-amy-medium
 ```
 
+## Capture-chain integrity terminology (Mission H2 v0.49.6..v0.49.9)
+
+Sovyx's capture-chain bypass coordinator runs on **every** supported
+platform (Linux, Windows, macOS) — not just Windows. Mission H2 v0.49.6
+renames the bypass-coordinator log-event family from the
+Windows-platform-specific `audio.apo.bypassed` / `voice_apo_bypass_*`
+namespace to the cross-platform-neutral `voice.capture_integrity.*`
+namespace. Operators reading logs on Linux see correct platform
+attribution at the log-line level (e.g. `voice.platform=linux`,
+`voice.bypass_family=alsa_capture_chain`) instead of following a
+Windows-APO playbook on a Linux capture-chain reset cascade.
+
+Legacy `audio.apo.bypassed` / `voice_apo_bypass_*` event names continue
+firing through v0.51.0 STRICT per ADR-D14 dual-emission discipline.
+Operator playbooks pinning on the legacy names continue to resolve
+during the calibration window.
+
+| Linux capture-chain layer | `voice.bypass_family` value |
+|---|---|
+| ALSA mixer + capture chain | `alsa_capture_chain` |
+| PulseAudio / PipeWire `module-echo-cancel` | `module_echo_cancel` |
+| PipeWire filter chain | `pipewire_filter_chain` |
+| WirePlumber session-manager default-source | `wireplumber_default_source` |
+
+| Windows capture-chain layer | `voice.bypass_family` value |
+|---|---|
+| Voice Clarity APO + VocaEffectPack | `voice_clarity` |
+
+| macOS capture-chain layer | `voice.bypass_family` value |
+|---|---|
+| Voice Isolation (system effect) | `voice_isolation` |
+| CoreAudio VoiceProcessing AU | `coreaudio_voice_processing` |
+
+For Linux operator remediation see `docs/modules/voice-troubleshooting-linux.md`;
+the Windows-specific Voice Clarity playbook stays under the heading
+below.
+
 ## Windows Voice Clarity / capture APO handling
 
 Since early 2026, Windows Update ships the *Voice Clarity* package

@@ -418,7 +418,9 @@ Per the privacy contract enforced by
 
 ### Voice telemetry — `host_api` label (v0.31.7 LOW.6)
 
-The voice subsystem emits a `host_api` field on `audio.apo.scan`,
+The voice subsystem emits a `host_api` field on `audio.apo.scan`
+(legacy) / `audio.capture_chain.scan` (Mission H2 v0.49.9 neutral
+sibling — dual-emitted through v0.51.0 STRICT per ADR-D14),
 `voice_apo_detected`, `voice.health.cold_probe`, and other
 audio-stack-tagging events. The value is a closed-enum bounded-
 cardinality label identifying the audio host API in use:

@@ -21,6 +21,21 @@ emits. Out of scope: log-event names (covered by JSON-schema files
 under `src/sovyx/observability/log_schema/`), tracing span names
 (covered by saga conventions in `docs/modules/observability.md`).
 
+> **Mission H2 v0.49.6..v0.49.9 cross-reference:** the bypass-coordinator
+> log-event family was renamed from `audio.apo.bypassed` /
+> `voice_apo_bypass_*` to neutral `voice.capture_integrity.*` per
+> CLAUDE.md anti-pattern #39(b). Legacy event names dual-emit through
+> v0.51.0 STRICT per ADR-D14. The new events carry three v2.0.0 schema
+> metadata fields — `voice.platform` (Literal `linux` / `windows` /
+> `darwin` / `other`), `voice.bypass_family` (open string mirroring
+> `PlatformAudioFamily` values), and `voice.event_schema_version`
+> (Literal `"2.0.0"`) — that downstream OTel exporters can lift into
+> resource attributes for cross-platform observability filtering. See
+> `docs/observability.md` catalog row `voice.capture_integrity.bypass`
+> and the mission spec at
+> `docs-internal/missions/MISSION-h2-platform-neutral-event-naming-2026-05-18.md`
+> for the canonical surface.
+
 The 53 instruments under `sovyx.voice.*` decompose into seven
 functional sub-namespaces:
 

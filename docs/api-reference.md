@@ -105,7 +105,7 @@ promotion (post-v0.39.0)" for the event contract.
 
 | Method | Path                              | Description                                                           |
 | ------ | --------------------------------- | --------------------------------------------------------------------- |
-| GET    | `/api/voice/status`               | Voice pipeline state and device info.                                 |
+| GET    | `/api/voice/status`               | Voice pipeline state and device info. **Mission H2 v0.49.7+**: the `capture` sub-object carries two optional+nullable platform-metadata fields populated from the most recent bypass-coordinator dispatch — `last_bypass_event_platform` (Literal `linux` / `windows` / `darwin` / `other`) and `last_bypass_event_family` (open string mirroring `PlatformAudioFamily` — `alsa_capture_chain`, `voice_clarity`, `module_echo_cancel`, `pipewire_filter_chain`, `wireplumber_default_source`, `voice_isolation`, `coreaudio_voice_processing`, or `noop`). Both default `null` on pristine boots + on every snapshot before the first dispatch fires. Promoted to required at v0.51.0 STRICT per ADR-D15 + anti-pattern #29 forward-additive optional discipline. |
 | GET    | `/api/voice/service-health`       | Aggregated readiness probe (T6.20). 4-field response for monitoring.  |
 | GET    | `/api/voice/models`               | Installed STT/TTS/VAD model catalogue.                                |
 | GET    | `/api/voice/models/status`        | Per-model on-disk status (present / downloading / missing).           |
