@@ -799,6 +799,47 @@
       "fallback": "Falha na reprodução."
     }
   },
+  "resources": {
+    "title": "Recursos do engine",
+    "subtitle": "Estado vivo do registry por cohort (Mission H4 §T3.4). Polling em /api/engine/resources a cada 30 s.",
+    "loading": "Carregando snapshot de recursos…",
+    "degraded": "Endpoint de snapshot indisponível. O log estruturado continua sendo a fonte da verdade.",
+    "fieldsLabel": "campos",
+    "sections": {
+      "process": {
+        "title": "Processo",
+        "description": "Métricas psutil do SO: RSS, threads, descritores de arquivo, CPU."
+      },
+      "asyncio": {
+        "title": "asyncio",
+        "description": "Contagem de tasks do event-loop (total / em execução / pendentes)."
+      },
+      "to_thread": {
+        "title": "to_thread",
+        "description": "Estado do pool default-executor do asyncio + contadores de dispatch por label."
+      },
+      "lock_dict": {
+        "title": "Lock dicts",
+        "description": "Cardinalidade agregada + por-owner dos LRULockDict."
+      },
+      "onnx": {
+        "title": "Sessões ONNX",
+        "description": "Contagem de InferenceSession vivas + labels (rastreio via weakref)."
+      },
+      "gc": {
+        "title": "GC",
+        "description": "Coletas por geração + total de objetos rastreados."
+      },
+      "tracemalloc": {
+        "title": "tracemalloc",
+        "description": "Rastreio de alocador (opt-in via SOVYX_OBSERVABILITY__FEATURES__TRACEMALLOC=true)."
+      },
+      "exception_cohort": {
+        "title": "Cohort de exceções",
+        "description": "Bytes estimados retidos por cadeias ExceptionGroup recentes."
+      }
+    }
+  },
   "failoverHistory": {
     "title": "Histórico de Failover",
     "subtitle": "Execuções recentes da escada de failover em tempo real (Mission C3 §T2.9).",

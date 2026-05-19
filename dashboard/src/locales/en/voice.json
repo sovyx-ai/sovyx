@@ -799,6 +799,47 @@
       "fallback": "Playback failed."
     }
   },
+  "resources": {
+    "title": "Engine resources",
+    "subtitle": "Live per-cohort registry state (Mission H4 §T3.4). Polls /api/engine/resources every 30 s.",
+    "loading": "Loading resource snapshot…",
+    "degraded": "Resource snapshot endpoint unavailable. The structured-log stream remains the source of truth.",
+    "fieldsLabel": "fields",
+    "sections": {
+      "process": {
+        "title": "Process",
+        "description": "OS-level psutil metrics: RSS, threads, file descriptors, CPU."
+      },
+      "asyncio": {
+        "title": "asyncio",
+        "description": "Event-loop task counts (total / running / pending)."
+      },
+      "to_thread": {
+        "title": "to_thread",
+        "description": "asyncio default-executor pool state + per-label dispatch counters."
+      },
+      "lock_dict": {
+        "title": "Lock dicts",
+        "description": "Aggregate + per-owner LRULockDict cardinality."
+      },
+      "onnx": {
+        "title": "ONNX sessions",
+        "description": "Live InferenceSession count + labels (weakref-tracked)."
+      },
+      "gc": {
+        "title": "GC",
+        "description": "Per-generation collection counts + total tracked objects."
+      },
+      "tracemalloc": {
+        "title": "tracemalloc",
+        "description": "Allocator tracing (opt-in via SOVYX_OBSERVABILITY__FEATURES__TRACEMALLOC=true)."
+      },
+      "exception_cohort": {
+        "title": "Exception cohort",
+        "description": "Estimated retained bytes from recent ExceptionGroup chains."
+      }
+    }
+  },
   "failoverHistory": {
     "title": "Failover History",
     "subtitle": "Recent runtime failover ladder runs (Mission C3 §T2.9).",

@@ -49,6 +49,7 @@ import type {
 } from "@/types/api";
 import { FailoverHistoryResponseSchema } from "@/types/schemas";
 import { DegradedBannerPerPageMount } from "@/components/voice/DegradedBannerPerPageMount";
+import { ResourceHealthSection } from "@/components/engine/ResourceHealthSection";
 
 /* ── Helpers ── */
 
@@ -1448,6 +1449,13 @@ export default function VoiceHealthPage() {
           iterating across the full candidate set rather than
           collapsing to source. */}
       <FailoverHistorySection />
+
+      {/* Mission H4 §T3.4 — ResourceHealthSection. Surfaces the live
+          per-cohort registry state (process / asyncio / to_thread /
+          lock_dict / onnx / gc / tracemalloc / exception_cohort) +
+          polls /api/engine/resources every 30 s with backoff. Closes
+          the v0.43.1 forensic-audit §H4 operator-visibility gap. */}
+      <ResourceHealthSection />
 
       {/* Mixer KB — independent of cascade state; shows shipped + user
           profile pools plus an inline YAML-validate panel for reviewers. */}
