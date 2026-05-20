@@ -799,6 +799,13 @@
       "fallback": "Falha na reprodução."
     }
   },
+  "threadSnapshot": {
+    "title": "Snapshot de threads",
+    "subtitle": "Stacks por thread capturados via sys._current_frames() ({{count}} threads).",
+    "loading": "Carregando snapshot de threads…",
+    "notFound": "Snapshot de threads #{{timestamp}} não encontrado (pode ter sido rotacionado).",
+    "error": "Falha ao carregar snapshot de threads: {{error}}."
+  },
   "heapSnapshot": {
     "title": "Snapshot de heap",
     "subtitle": "Top {{count}} alocadores por bytes retidos (tracemalloc).",
@@ -1103,7 +1110,16 @@
       },
       "actions": {
         "viewResources": "Ver recursos do engine",
-        "viewHeapSnapshot": "Ver snapshot do heap"
+        "viewHeapSnapshot": "Ver snapshot do heap",
+        "viewThreadSnapshot": "Ver snapshot de threads",
+        "viewLockDicts": "Ver detalhamento de lock-dicts",
+        "viewOnnx": "Ver sessões ONNX",
+        "viewExceptionCohort": "Ver cohort de exceções",
+        "viewRecent500s": "Ver erros 500 recentes",
+        "viewSnapshot": "Ver snapshot",
+        "openDoctor": "Abrir resource doctor",
+        "adjustLruDocs": "Ajustar maxsize do LRULockDict",
+        "ack": "Reconhecer breach"
       }
     }
   }

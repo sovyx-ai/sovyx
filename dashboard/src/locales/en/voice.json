@@ -813,6 +813,13 @@
       "traceback": "Traceback"
     }
   },
+  "threadSnapshot": {
+    "title": "Thread snapshot",
+    "subtitle": "Per-thread stacks captured from sys._current_frames() ({{count}} threads).",
+    "loading": "Loading thread snapshot…",
+    "notFound": "Thread snapshot #{{timestamp}} not found (may have been rotated out).",
+    "error": "Failed to load thread snapshot: {{error}}."
+  },
   "resources": {
     "title": "Engine resources",
     "subtitle": "Live per-cohort registry state (Mission H4 §T3.4). Polls /api/engine/resources every 30 s.",
@@ -1103,7 +1110,16 @@
       },
       "actions": {
         "viewResources": "View engine resources",
-        "viewHeapSnapshot": "View heap snapshot"
+        "viewHeapSnapshot": "View heap snapshot",
+        "viewThreadSnapshot": "View thread snapshot",
+        "viewLockDicts": "View lock dict breakdown",
+        "viewOnnx": "View ONNX session list",
+        "viewExceptionCohort": "View exception cohort",
+        "viewRecent500s": "View recent 500s",
+        "viewSnapshot": "View snapshot",
+        "openDoctor": "Open resource doctor",
+        "adjustLruDocs": "Adjust LRULockDict maxsize",
+        "ack": "Acknowledge breach"
       }
     }
   }

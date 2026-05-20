@@ -154,6 +154,25 @@ describe("Locale completeness — voice namespace", () => {
       "degraded.engine_resources.heap_snapshot_triggered.body",
       "degraded.engine_resources.actions.viewResources",
       "degraded.engine_resources.actions.viewHeapSnapshot",
+      // Mission H4 v0.49.25 — ADR-D8 per-cohort chip mapping.
+      // 11 chip labels total (2 chips × 6 reasons, with overlap on
+      // openDoctor + viewHeapSnapshot reused across cohorts).
+      "degraded.engine_resources.actions.viewThreadSnapshot",
+      "degraded.engine_resources.actions.viewLockDicts",
+      "degraded.engine_resources.actions.viewOnnx",
+      "degraded.engine_resources.actions.viewExceptionCohort",
+      "degraded.engine_resources.actions.viewRecent500s",
+      "degraded.engine_resources.actions.viewSnapshot",
+      "degraded.engine_resources.actions.openDoctor",
+      "degraded.engine_resources.actions.adjustLruDocs",
+      "degraded.engine_resources.actions.ack",
+      // threadSnapshot.* namespace (sibling of heapSnapshot.* —
+      // Mission H4 §4.8 ADR-D8 thread-snapshot deep-link page).
+      "threadSnapshot.title",
+      "threadSnapshot.subtitle",
+      "threadSnapshot.loading",
+      "threadSnapshot.notFound",
+      "threadSnapshot.error",
     ];
     for (const key of requiredKeys) {
       expect(en.has(key), `EN missing ${key}`).toBe(true);

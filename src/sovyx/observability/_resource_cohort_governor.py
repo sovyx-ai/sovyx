@@ -723,40 +723,35 @@ def _record_heap_snapshot_to_composite_store(
 
     Records ``engine_resources.heap_snapshot_triggered`` into the C4
     composite store on every successful tracemalloc snapshot capture.
-    The action chip deep-links the operator at the HeapSnapshotViewer
-    widget for the captured timestamp so the forensic file is one click
-    away from the banner.
+    Action chips are sourced from :func:`_chips_for_reason` so the
+    heap-snapshot path uses the same ADR-D8 mapping as every other
+    cohort — primary deep-link at the HeapSnapshotViewer widget,
+    secondary ack chip targeting ``POST /api/engine/resources/cohort/ack``.
 
     Best-effort: store unavailability cannot block the snapshot path.
     """
     try:
         from sovyx.engine._degraded_store import (  # noqa: PLC0415 — lazy
-            ActionChip,
             DegradedEntry,
             get_default_degraded_store,
         )
 
         now_monotonic = time.monotonic()
+        metadata: dict[str, object] = {
+            "cohort": cohort,
+            "heap_snapshot_path": str(path),
+            "heap_snapshot_timestamp": timestamp,
+            "cohort_observed": cohort_observed,
+            "cohort_budget": cohort_budget,
+        }
         entry = DegradedEntry(
             axis="engine_resources",
             reason=_REASON_HEAP_SNAPSHOT_TRIGGERED,
             severity="warning",
             title_token="degraded.engine_resources.heap_snapshot_triggered.title",
             body_token="degraded.engine_resources.heap_snapshot_triggered.body",
-            action_chips=(
-                ActionChip(
-                    label_token="degraded.engine_resources.actions.viewHeapSnapshot",
-                    action="navigate",
-                    target=f"/engine/resources?heapSnapshot={timestamp}",
-                ),
-            ),
-            metadata={
-                "cohort": cohort,
-                "heap_snapshot_path": str(path),
-                "heap_snapshot_timestamp": timestamp,
-                "cohort_observed": cohort_observed,
-                "cohort_budget": cohort_budget,
-            },
+            action_chips=_chips_for_reason(_REASON_HEAP_SNAPSHOT_TRIGGERED, metadata),
+            metadata=metadata,
             first_observed_monotonic=now_monotonic,
             last_observed_monotonic=now_monotonic,
             occurrence_count=1,
@@ -901,6 +896,170 @@ def record_resource_snapshot_emission(*, final: bool) -> None:
         logger.debug("engine.resources.snapshot_emission_counter_failed", exc_info=True)
 
 
+def _latest_snapshot_timestamp(prefix: str) -> int | None:
+    """Locate the most-recent persisted snapshot file timestamp.
+
+    Mission H4 §4.8 ADR-D8 — heap/thread snapshot chips deep-link the
+    operator at the latest persisted file via ``<latest_ts>`` substitution.
+    Best-effort: filesystem unavailability returns None and the calling
+    chip-builder falls back to a generic anchor URL.
+    """
+    try:
+        diag_dir = _diagnostics_dir()
+        files = sorted(diag_dir.glob(f"{prefix}*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not files:
+            return None
+        # Filenames are ``heap-snapshot-<ts>.json`` / ``thread-snapshot-<ts>.txt``.
+        stem = files[0].stem  # strips final extension
+        # Remove the leading prefix (sans trailing dash) — leaves the ts substr.
+        ts_str = stem.removeprefix(prefix.rstrip("-") + "-")
+        return int(ts_str)
+    except (OSError, ValueError):
+        return None
+
+
+def _chips_for_reason(
+    reason: str,
+    metadata: Mapping[str, object],
+) -> tuple[Any, ...]:
+    """Mission H4 §4.8 ADR-D8 — per-cohort-reason action chip mapping.
+
+    Each cohort reason carries 2 chips: a primary cohort-specific chip
+    (deep-link to the relevant detail view) + a secondary general-action
+    chip (CLI hint, docs link, ack, or cross-axis reference). The chips
+    are constructed lazily via dotted-string lookup so the
+    ``ActionChip`` dataclass import stays inside the caller's try block.
+
+    Returns the chip tuple; the caller wraps in the DegradedEntry. The
+    target URLs reference the v0.49.25 React routes added to
+    ``router.tsx`` (``/engine/resources``, ``/engine/resources/heap-snapshot/<ts>``,
+    ``/engine/resources/thread-snapshot/<ts>``).
+
+    Per ADR-D8, mappings:
+
+    * ``rss_growth_spike`` → heap snapshot (latest_ts substitution) +
+      ``sovyx doctor resources`` CLI hint.
+    * ``thread_count_spike`` → thread snapshot + CLI hint.
+    * ``lock_dict_cardinality_saturated`` → ``/engine/resources#lock-dicts``
+      anchor + docs link explaining LRULockDict maxsize tuning.
+    * ``onnx_session_unexpected_count`` → ``/engine/resources#onnx`` anchor
+      + ``sovyx doctor resources`` (RPC reload is not exposed at HEAD —
+      doctor CLI is the closest operator-actionable surface; ADR-D8
+      noted ``reloadModels`` as an alias for the CLI command).
+    * ``exception_cohort_retention_high`` → ``/engine/resources#exception-cohort``
+      anchor + C2 surface link (``/voice/health`` 500-history section).
+    * ``heap_snapshot_triggered`` → heap snapshot deep-link + ack chip.
+    """
+    from sovyx.engine._degraded_store import ActionChip  # noqa: PLC0415 — lazy
+
+    if reason == "engine_resources.rss_growth_spike":
+        ts = _latest_snapshot_timestamp("heap-snapshot-")
+        primary_target = (
+            f"/engine/resources/heap-snapshot/{ts}" if ts else "/engine/resources#heap"
+        )
+        return (
+            ActionChip(
+                label_token="degraded.engine_resources.actions.viewHeapSnapshot",
+                action="navigate",
+                target=primary_target,
+            ),
+            ActionChip(
+                label_token="degraded.engine_resources.actions.openDoctor",
+                action="command_hint",
+                target="sovyx doctor resources",
+            ),
+        )
+    if reason == "engine_resources.thread_count_spike":
+        ts = _latest_snapshot_timestamp("thread-snapshot-")
+        primary_target = (
+            f"/engine/resources/thread-snapshot/{ts}" if ts else "/engine/resources#threads"
+        )
+        return (
+            ActionChip(
+                label_token="degraded.engine_resources.actions.viewThreadSnapshot",
+                action="navigate",
+                target=primary_target,
+            ),
+            ActionChip(
+                label_token="degraded.engine_resources.actions.openDoctor",
+                action="command_hint",
+                target="sovyx doctor resources",
+            ),
+        )
+    if reason == "engine_resources.lock_dict_cardinality_saturated":
+        return (
+            ActionChip(
+                label_token="degraded.engine_resources.actions.viewLockDicts",
+                action="navigate",
+                target="/engine/resources#lock-dicts",
+            ),
+            ActionChip(
+                label_token="degraded.engine_resources.actions.adjustLruDocs",
+                action="external_link",
+                target="https://sovyx.dev/docs/observability/resource-hygiene#lock-dicts",
+            ),
+        )
+    if reason == "engine_resources.onnx_session_unexpected_count":
+        return (
+            ActionChip(
+                label_token="degraded.engine_resources.actions.viewOnnx",
+                action="navigate",
+                target="/engine/resources#onnx",
+            ),
+            ActionChip(
+                label_token="degraded.engine_resources.actions.openDoctor",
+                action="command_hint",
+                target="sovyx doctor resources --cohort onnx",
+            ),
+        )
+    if reason == "engine_resources.exception_cohort_retention_high":
+        return (
+            ActionChip(
+                label_token="degraded.engine_resources.actions.viewExceptionCohort",
+                action="navigate",
+                target="/engine/resources#exception-cohort",
+            ),
+            ActionChip(
+                label_token="degraded.engine_resources.actions.viewRecent500s",
+                action="navigate",
+                target="/voice/health#status-500-history",
+            ),
+        )
+    if reason == "engine_resources.heap_snapshot_triggered":
+        snapshot_ts = metadata.get("heap_snapshot_timestamp")
+        target = (
+            f"/engine/resources/heap-snapshot/{snapshot_ts}"
+            if isinstance(snapshot_ts, int)
+            else "/engine/resources#heap"
+        )
+        return (
+            ActionChip(
+                label_token="degraded.engine_resources.actions.viewSnapshot",
+                action="navigate",
+                target=target,
+            ),
+            ActionChip(
+                label_token="degraded.engine_resources.actions.ack",
+                action="api_post",
+                target="/api/engine/resources/cohort/ack",
+            ),
+        )
+    # Fallback for any future reason added without an explicit mapping:
+    # one generic chip pointing at the resources page. Surface a debug
+    # log so the gap is visible during local dev.
+    logger.debug(
+        "engine.resources.chip_mapping_fallback",
+        reason=reason,
+    )
+    return (
+        ActionChip(
+            label_token="degraded.engine_resources.actions.viewResources",
+            action="navigate",
+            target="/engine/resources",
+        ),
+    )
+
+
 def _record_to_composite_store(evaluation: CohortEvaluation) -> None:
     """Best-effort record into C4 :class:`EngineDegradedStore`.
 
@@ -910,7 +1069,6 @@ def _record_to_composite_store(evaluation: CohortEvaluation) -> None:
     """
     try:
         from sovyx.engine._degraded_store import (  # noqa: PLC0415 — lazy import
-            ActionChip,
             DegradedEntry,
             get_default_degraded_store,
         )
@@ -927,6 +1085,12 @@ def _record_to_composite_store(evaluation: CohortEvaluation) -> None:
             f"engine_resources.{evaluation.axis.value}",
         )
         reason_suffix = reason.split(".", 1)[1] if "." in reason else reason
+        metadata: dict[str, object] = {
+            "cohort": evaluation.axis.value,
+            "observed": evaluation.observed,
+            "budget": evaluation.budget,
+            "note": evaluation.note,
+        }
         # Severity per ADR-D6: 1 cohort = warn. The composite endpoint
         # escalates to error/critical when N axes co-occur.
         entry = DegradedEntry(
@@ -935,19 +1099,8 @@ def _record_to_composite_store(evaluation: CohortEvaluation) -> None:
             severity="warning",
             title_token=f"degraded.engine_resources.{reason_suffix}.title",
             body_token=f"degraded.engine_resources.{reason_suffix}.body",
-            action_chips=(
-                ActionChip(
-                    label_token="degraded.engine_resources.actions.viewResources",
-                    action="navigate",
-                    target="/engine/resources",
-                ),
-            ),
-            metadata={
-                "cohort": evaluation.axis.value,
-                "observed": evaluation.observed,
-                "budget": evaluation.budget,
-                "note": evaluation.note,
-            },
+            action_chips=_chips_for_reason(reason, metadata),
+            metadata=metadata,
             first_observed_monotonic=now_monotonic,
             last_observed_monotonic=now_monotonic,
             occurrence_count=1,

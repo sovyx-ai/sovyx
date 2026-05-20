@@ -31,6 +31,16 @@ const VoiceHealthPage = lazy(() => import("@/pages/voice-health"));
 const VoicePlatformDiagnosticsPage = lazy(
   () => import("@/pages/voice-platform-diagnostics"),
 );
+// Mission H4 §4.8 ADR-D8 + v0.49.25 — dedicated engine resources route
+// hosting the H4 cohort widgets + deep-link sub-routes for the persisted
+// forensic snapshot files referenced by the per-cohort action chips.
+const EngineResourcesPage = lazy(() => import("@/pages/engine-resources"));
+const EngineResourcesHeapSnapshotPage = lazy(
+  () => import("@/pages/engine-resources-heap-snapshot"),
+);
+const EngineResourcesThreadSnapshotPage = lazy(
+  () => import("@/pages/engine-resources-thread-snapshot"),
+);
 const ChatPage = lazy(() => import("@/pages/chat"));
 const PluginsPage = lazy(() => import("@/pages/plugins"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
@@ -176,6 +186,30 @@ export const router = createBrowserRouter([
         element: (
           <PageWrapper name="voice-platform-diagnostics">
             <VoicePlatformDiagnosticsPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "engine/resources",
+        element: (
+          <PageWrapper name="engine-resources">
+            <EngineResourcesPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "engine/resources/heap-snapshot/:ts",
+        element: (
+          <PageWrapper name="engine-resources-heap-snapshot">
+            <EngineResourcesHeapSnapshotPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "engine/resources/thread-snapshot/:ts",
+        element: (
+          <PageWrapper name="engine-resources-thread-snapshot">
+            <EngineResourcesThreadSnapshotPage />
           </PageWrapper>
         ),
       },

@@ -292,3 +292,82 @@ class TestSpecLiteralReasonNames:
             suffix = expected_reason.split(".", 1)[1]
             assert entry.title_token == f"degraded.engine_resources.{suffix}.title"
             assert entry.body_token == f"degraded.engine_resources.{suffix}.body"
+
+
+class TestAdrD8ChipMapping:
+    """Mission H4 §4.8 ADR-D8 + v0.49.25 — per-cohort-reason chip mapping.
+
+    Validates that each reason produces 2 chips with cohort-specific
+    target URLs (NOT the generic ``/engine/resources`` fallback). Closes
+    the v0.49.24 audit-cycle finding that chips were 1-per-reason with
+    a phantom ``/engine/resources`` target.
+    """
+
+    def test_rss_growth_chips_are_heap_snapshot_plus_doctor(self) -> None:
+        from sovyx.observability._resource_cohort_governor import _chips_for_reason
+
+        chips = _chips_for_reason("engine_resources.rss_growth_spike", {})
+        assert len(chips) == 2
+        # Primary chip routes at a heap-snapshot deep-link (latest_ts
+        # substituted to /engine/resources#heap when no file persisted).
+        assert chips[0].label_token == "degraded.engine_resources.actions.viewHeapSnapshot"
+        assert chips[0].action == "navigate"
+        assert chips[0].target.startswith("/engine/resources")
+        # Secondary chip is the doctor CLI hint.
+        assert chips[1].label_token == "degraded.engine_resources.actions.openDoctor"
+        assert chips[1].action == "command_hint"
+
+    def test_thread_count_chips_are_thread_snapshot_plus_doctor(self) -> None:
+        from sovyx.observability._resource_cohort_governor import _chips_for_reason
+
+        chips = _chips_for_reason("engine_resources.thread_count_spike", {})
+        assert len(chips) == 2
+        assert chips[0].label_token == "degraded.engine_resources.actions.viewThreadSnapshot"
+        assert chips[0].target.startswith("/engine/resources")
+
+    def test_lock_dict_chips_anchor_plus_docs(self) -> None:
+        from sovyx.observability._resource_cohort_governor import _chips_for_reason
+
+        chips = _chips_for_reason("engine_resources.lock_dict_cardinality_saturated", {})
+        assert len(chips) == 2
+        assert chips[0].target == "/engine/resources#lock-dicts"
+        assert chips[1].label_token == "degraded.engine_resources.actions.adjustLruDocs"
+        assert chips[1].action == "external_link"
+
+    def test_onnx_chips_anchor_plus_doctor(self) -> None:
+        from sovyx.observability._resource_cohort_governor import _chips_for_reason
+
+        chips = _chips_for_reason("engine_resources.onnx_session_unexpected_count", {})
+        assert len(chips) == 2
+        assert chips[0].target == "/engine/resources#onnx"
+
+    def test_exception_cohort_chips_anchor_plus_c2_link(self) -> None:
+        from sovyx.observability._resource_cohort_governor import _chips_for_reason
+
+        chips = _chips_for_reason("engine_resources.exception_cohort_retention_high", {})
+        assert len(chips) == 2
+        assert chips[0].target == "/engine/resources#exception-cohort"
+        assert chips[1].label_token == "degraded.engine_resources.actions.viewRecent500s"
+
+    def test_heap_snapshot_triggered_chips_view_plus_ack(self) -> None:
+        from sovyx.observability._resource_cohort_governor import _chips_for_reason
+
+        chips = _chips_for_reason(
+            "engine_resources.heap_snapshot_triggered",
+            {"heap_snapshot_timestamp": 1716143280},
+        )
+        assert len(chips) == 2
+        assert chips[0].target == "/engine/resources/heap-snapshot/1716143280"
+        assert chips[1].label_token == "degraded.engine_resources.actions.ack"
+        assert chips[1].action == "api_post"
+        assert chips[1].target == "/api/engine/resources/cohort/ack"
+
+    def test_unknown_reason_falls_back_to_generic_chip(self) -> None:
+        from sovyx.observability._resource_cohort_governor import _chips_for_reason
+
+        chips = _chips_for_reason("engine_resources.future_reason_v2", {})
+        # Fallback is 1 generic chip (current behaviour — a new reason
+        # added in a future minor MUST land with a paired chip mapping
+        # entry; the fallback exists so the banner does not crash).
+        assert len(chips) == 1
+        assert chips[0].target == "/engine/resources"
