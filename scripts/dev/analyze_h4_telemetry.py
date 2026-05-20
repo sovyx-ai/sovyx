@@ -44,29 +44,52 @@ from typing import Any
 
 _DEFAULT_LOG = Path.home() / ".sovyx" / "logs" / "sovyx.log"
 
-# 22 H4-new snapshot fields — must be a subset of the SSoT in
-# ``_HEALTH_SNAPSHOT_FIELDS``. Kept in sync manually because this
-# script is intentionally stdlib-only (no PYTHONPATH manipulation).
+# 22 H4-new snapshot fields per Mission H4 §3 F2 literal enumeration.
+# Must be a subset of the SSoT in ``_HEALTH_SNAPSHOT_FIELDS``. Kept in
+# sync manually because this script is intentionally stdlib-only (no
+# PYTHONPATH manipulation).
+#
+# Mission H4 §22 v0.49.31 closure addendum: the 12th + 13th
+# audit-discipline cycles caught a count-vs-enumeration drift between
+# this analyzer's 18-entry set and §3 F2's 22-name enumeration. The set
+# NOW matches the F2 literal list exactly (22 names). The bonus
+# emit-side field ``to_thread.queue_depth`` — emitted by code but NOT
+# in F2 — is intentionally excluded so F2 = 22/22 reports honestly
+# against spec.
 _H4_NEW_FIELDS: frozenset[str] = frozenset(
     {
+        # to_thread block (5 names per F2)
         "to_thread.pool_size",
-        "to_thread.queue_depth",
+        "to_thread.active_workers",  # v0.49.31 — F2 literal
         "to_thread.max_workers",
         "to_thread.dispatch_count_total",
         "to_thread.dispatch_count_per_label",
+        # lock_dict block (3 names per F2)
         "lock_dict.total_cardinality",
         "lock_dict.per_owner",
         "lock_dict.instance_count",
+        # onnx block (2 names per F2)
         "onnx.session_count",
         "onnx.session_labels",
+        # gc block (2 names per F2)
         "gc.collections_by_gen",
         "gc.objects_count",
+        # tracemalloc block (3 names per F2)
         "tracemalloc.is_tracing",
         "tracemalloc.current_kb",
         "tracemalloc.peak_kb",
+        # exception_cohort block (3 names per F2)
         "exception_cohort.retained_bytes_estimate",
         "exception_cohort.distinct_group_id_count",
         "exception_cohort.last_observation_monotonic",
+        # process block extension (3 names per F2; v0.49.31 closure)
+        "process.memory_percent",
+        "process.cpu_times_user_s",
+        "process.cpu_times_system_s",
+        # asyncio block extension (1 name per F2; v0.49.31 closure)
+        # F2 does NOT include ``asyncio.default_executor_state`` — only
+        # the task-name field is in the falsifiability list.
+        "asyncio.current_running_task_name",
     },
 )
 

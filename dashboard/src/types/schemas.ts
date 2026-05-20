@@ -1974,6 +1974,8 @@ export const ResourceCohortMetricsSchema = z
   .object({
     // to_thread block
     "to_thread.pool_size": z.number().int().nonnegative().optional(),
+    // Mission H4 §3 F2 + §22 v0.49.32 — canonical alias of pool_size.
+    "to_thread.active_workers": z.number().int().nonnegative().optional(),
     "to_thread.queue_depth": z.number().int().nonnegative().optional(),
     "to_thread.max_workers": z.number().int().nonnegative().optional(),
     "to_thread.dispatch_count_total": z.number().int().nonnegative().optional(),

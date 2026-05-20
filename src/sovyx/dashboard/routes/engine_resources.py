@@ -73,6 +73,10 @@ class ResourceCohortMetrics(BaseModel):
 
     # to_thread
     to_thread_pool_size: int = Field(0, alias="to_thread.pool_size")
+    # Mission H4 §3 F2 + §22 v0.49.32 — canonical alias of pool_size per
+    # spec literal naming (Python ThreadPoolExecutor exposes only
+    # ``len(_threads)`` so both fields surface the same source counter).
+    to_thread_active_workers: int = Field(0, alias="to_thread.active_workers")
     to_thread_queue_depth: int = Field(0, alias="to_thread.queue_depth")
     to_thread_max_workers: int = Field(0, alias="to_thread.max_workers")
     to_thread_dispatch_count_total: int = Field(0, alias="to_thread.dispatch_count_total")
