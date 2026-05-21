@@ -2771,6 +2771,19 @@ class ObservabilityFeaturesConfig(BaseSettings):
     # Phase 2 calibration. The structured `self.health.snapshot` stream
     # is unaffected.
     cohort_governor: bool = True
+    # Mission B B-P0-3 — controls whether the cohort governor calls
+    # ``EngineDegradedStore.clear_reason()`` on the BUDGET_EXCEEDED →
+    # HEALTHY transition (after N consecutive HEALTHY ticks of hysteresis,
+    # tuned by ``cohort_clear_consecutive_healthy_threshold``). Default
+    # TRUE per anti-pattern #34 INVERSE — the clear IS the operator-trust
+    # feature; default-False would ship the bug forever. Operator
+    # override to revert to v0.49.36 stuck-banner behavior:
+    # SOVYX_OBSERVABILITY__FEATURES__COHORT_AXIS_AUTO_CLEAR=false. The
+    # ack endpoint at ``POST /api/engine/resources/cohort/ack`` also
+    # respects this flag — when false, ack only clears the in-process
+    # breaker (v0.49.36 behavior); when true, ack ALSO calls
+    # clear_reason on the composite store (closes B-P1-03).
+    cohort_axis_auto_clear: bool = True
     # Phase 11 Task 11.6 — opt-in dedicated Prometheus scrape port. Default
     # off because operators commonly run behind a firewall that doesn't
     # expose 9101; the dashboard also serves /metrics on its own port for
@@ -2888,6 +2901,16 @@ class ObservabilityTuningConfig(BaseSettings):
     cohort_onnx_session_soft_cap: int = Field(default=8, ge=1, le=1_024)
     cohort_breaker_threshold: int = Field(default=3, ge=1, le=100)
     cohort_breaker_window_s: int = Field(default=3_600, ge=60, le=86_400)
+    # Mission B B-P0-3 — N consecutive HEALTHY ticks required before the
+    # cohort governor calls ``EngineDegradedStore.clear_reason()`` on a
+    # BUDGET_EXCEEDED → HEALTHY transition. Hysteresis prevents flicker on
+    # threshold-adjacent workloads (anti-pattern #54). Default 3 ≈ 3
+    # minutes at default 60s cohort cadence (per ``perf_hotpath_interval_seconds``).
+    # Operators can RAISE to 5-10 if their workload sits at the threshold
+    # edge; LOWER to 1 only when explicitly accepting flicker for faster
+    # banner-clear UX. Bounded [1, 20] so a misconfigured high value
+    # cannot indefinitely defer the clear.
+    cohort_clear_consecutive_healthy_threshold: int = Field(default=3, ge=1, le=20)
     exception_cohort_window_s: int = Field(default=300, ge=5, le=3_600)
     exception_cohort_retained_bytes_cap: int = Field(
         default=16 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024 * 1024

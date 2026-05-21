@@ -471,8 +471,15 @@ async def bootstrap(
                     _SINGLETON_LOCK,
                 )
 
+                # Mission B B-P0-3 — propagate the auto-clear feature
+                # flag through from_tuning so the governor's HEALTHY-tick
+                # state machine is gated by the operator override.
                 governor = ResourceCohortGovernor.from_tuning(
-                    engine_config.observability.tuning, enabled=True
+                    engine_config.observability.tuning,
+                    enabled=True,
+                    auto_clear_enabled=(
+                        engine_config.observability.features.cohort_axis_auto_clear
+                    ),
                 )
                 import sovyx.observability._resource_cohort_governor as _governor_mod
 

@@ -44,6 +44,7 @@ from starlette.status import HTTP_404_NOT_FOUND
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability._resource_cohort_governor import (
+    _REASON_FOR_AXIS,
     get_default_resource_cohort_governor,
 )
 from sovyx.observability._resource_registry import (
@@ -285,6 +286,27 @@ async def post_cohort_ack(body: CohortAckRequest) -> CohortAckResponse:
         ) from exc
     governor = get_default_resource_cohort_governor()
     governor.clear_breaker(axis)
+    # Mission B B-P1-03 (B.1.P3 closure 2026-05-21) — the operator ack
+    # now ALSO drops the composite-store entry under ``axis="engine_resources"
+    # reason=_REASON_FOR_AXIS[axis]`` so the banner clears synchronously
+    # with the breaker. Pre-fix the ack cleared only the in-process
+    # breaker (governor.clear_breaker) and the banner stayed lit
+    # because EngineDegradedStore was never touched — operators saw
+    # "the ack button is broken" exactly as the B-P0-1 dead URL was
+    # being acked nowhere. Best-effort import per #34 + #42 — store
+    # unavailability cannot block the ack response.
+    reason = _REASON_FOR_AXIS.get(axis)
+    if reason is not None:
+        try:
+            from sovyx.engine._degraded_store import get_default_degraded_store
+
+            get_default_degraded_store().clear_reason(reason)
+        except Exception:  # noqa: BLE001 — observability-only surface
+            # Mission B B-P1-03 — clear is best-effort. Failure here
+            # leaves the banner lit but the breaker still engaged-clear;
+            # next governor HEALTHY transition (per #54 hysteresis) will
+            # auto-clear if observability.features.cohort_axis_auto_clear.
+            pass
     return CohortAckResponse(
         cohort=axis.value,
         breaker_engaged=governor.is_breaker_engaged(axis),

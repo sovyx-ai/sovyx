@@ -188,11 +188,21 @@ class TestH4ForensicAnchorReplay:
         plateau (1.78 GB) → Δ stays small (10 MiB) so the cohort
         returns HEALTHY in the absolute-Δ sense.
 
-        This documents the rolling-window semantics: a once-and-done
-        spike fires the cohort at the inflection tick but does NOT
-        sustain firing across subsequent ticks. The composite-store
-        entry recorded at tick 5 persists until manually cleared OR
-        the rolling window cycles past the spike.
+        Mission B B-P0-3 update (2026-05-21): this test previously
+        documented "composite-store entry recorded at tick 5 persists
+        until manually cleared OR the rolling window cycles past the
+        spike" as expected behavior — which was the canonical statement
+        of the B-P0-3 bug. The bug-as-spec docstring made this
+        regression case the FORENSIC ANCHOR for the bug class.
+
+        Post-B.1.P3 the verdict assertion stays HEALTHY (governor
+        verdict is correct at tick 6 — the rolling window has cycled
+        past the spike). The STORE-SIDE invariant is now exercised by
+        ``tests/unit/observability/test_resource_cohort_governor_hysteresis.py``
+        which drives sustained N consecutive HEALTHY ticks and asserts
+        ``clear_reason`` fires. This replay test deliberately keeps
+        scope narrow (verdict-only) so the forensic-anchor trajectory
+        stays comparable across versions.
         """
         governor = ResourceCohortGovernor()
         per_tick = _drive_trajectory(governor)
@@ -200,9 +210,8 @@ class TestH4ForensicAnchorReplay:
         rss = next(r for r in tick6 if r.axis == CohortAxis.RSS_GROWTH)
         # At tick 6 the rolling window covers uptime [300s, 360s] →
         # samples [1770 MiB, 1780 MiB] → Δ=10 MiB < 512 MiB budget.
-        # Post-mission this is the correct HEALTHY verdict; an operator
-        # acting on the tick-5 banner entry is the operator-actionable
-        # surface.
+        # Post-mission this is the correct HEALTHY verdict; the B-P0-3
+        # hysteresis test now exercises the consequent store-side clear.
         assert rss.verdict == CohortVerdict.HEALTHY, (
             f"Tick 6 (uptime 360s, rolling-window covers only the "
             f"plateau) MUST be HEALTHY; got {rss.verdict} "

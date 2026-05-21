@@ -218,14 +218,27 @@ class ResourceCohortGovernor:
     after each ``_emit_snapshot``. Each cohort's per-tick verdict
     drives optional emissions:
 
-    * ``HEALTHY`` — no-op (most ticks). Clears any prior
-      ``engine_resources.<axis>`` entries from the
-      :class:`EngineDegradedStore` per C4 ADR-D5 axis-clear-on-success.
+    * ``HEALTHY`` — when the previous verdict for this cohort was
+      ``BUDGET_EXCEEDED`` the governor increments a per-axis
+      ``_consecutive_healthy`` counter; on the N-th consecutive HEALTHY
+      tick (``clear_threshold`` — default 3, tunable via
+      ``ObservabilityTuningConfig.cohort_clear_consecutive_healthy_threshold``)
+      it calls :meth:`EngineDegradedStore.clear_reason` for the cohort's
+      canonical reason and best-effort
+      :meth:`OperatorAcksStore.clear_ack` on the matching ack-key.
+      Per anti-pattern #54 (record-without-clear pairing). Gated by
+      ``observability.features.cohort_axis_auto_clear`` (default True
+      per anti-pattern #34 INVERSE — the clear IS the operator-trust
+      feature). Mission B B-P0-3 closure (2026-05-21).
     * ``BUDGET_EXCEEDED`` — emit WARN + record axis entry in the
       composite store + (Phase 1.E) trigger heap snapshot / engage
-      circuit-breaker.
-    * ``INSUFFICIENT_DATA`` — silent (warmup window not yet
-      filled).
+      circuit-breaker. Resets the per-axis ``_consecutive_healthy``
+      counter to 0 so a single re-breach restarts the hysteresis count
+      from scratch.
+    * ``INSUFFICIENT_DATA`` — silent (warmup window not yet filled).
+      Does NOT reset the hysteresis counter — INSUFFICIENT_DATA after
+      a sustained HEALTHY streak is treated as a transient observation
+      gap, not as a re-breach.
 
     Thread-safe via internal :class:`Lock`; safe to invoke from the
     snapshotter loop or a future test fixture.
@@ -235,6 +248,14 @@ class ResourceCohortGovernor:
     enabled: bool = True
     breaker_threshold: int = 3
     breaker_window_s: int = 3_600
+    # Mission B B-P0-3 — auto-clear hysteresis. ``clear_threshold`` is the
+    # N consecutive HEALTHY ticks required to trigger ``clear_reason()`` on
+    # a prior BUDGET_EXCEEDED. ``auto_clear_enabled`` gates the entire
+    # clear path (operator override
+    # ``SOVYX_OBSERVABILITY__FEATURES__COHORT_AXIS_AUTO_CLEAR=false``
+    # restores v0.49.36 stuck-banner behavior).
+    clear_threshold: int = 3
+    auto_clear_enabled: bool = True
     _rss_history: deque[tuple[float, int]] = field(
         default_factory=lambda: deque(maxlen=_OBSERVATION_RING_MAX),
     )
@@ -252,11 +273,22 @@ class ResourceCohortGovernor:
         default_factory=lambda: {axis: deque(maxlen=64) for axis in CohortAxis},
     )
     _engaged_acks: dict[CohortAxis, float] = field(default_factory=dict)
+    # Mission B B-P0-3 — per-axis last verdict + consecutive-HEALTHY
+    # counter for the clear_reason hysteresis. Populated by
+    # :func:`emit_axis_entries` on every snapshot tick. Kept under
+    # ``_lock`` so concurrent snapshot ticks don't race the counter
+    # increment.
+    _last_verdict: dict[CohortAxis, CohortVerdict] = field(default_factory=dict)
+    _consecutive_healthy: dict[CohortAxis, int] = field(default_factory=dict)
     _lock: Lock = field(default_factory=Lock)
 
     @classmethod
     def from_tuning(
-        cls, tuning: ObservabilityTuningConfig, *, enabled: bool = True
+        cls,
+        tuning: ObservabilityTuningConfig,
+        *,
+        enabled: bool = True,
+        auto_clear_enabled: bool = True,
     ) -> ResourceCohortGovernor:
         """Build a governor from operator-tunable knobs.
 
@@ -264,12 +296,20 @@ class ResourceCohortGovernor:
         :class:`ObservabilityTuningConfig` so the 12 ``cohort_*`` env
         overrides take effect. Tests using the bare ``ResourceCohortGovernor()``
         constructor get the v0.49.17 hardcoded defaults — backward-compat.
+
+        Mission B B-P0-3 (2026-05-21) — ``auto_clear_enabled`` carries
+        :attr:`ObservabilityFeaturesConfig.cohort_axis_auto_clear`; pass
+        ``False`` to restore v0.49.36 stuck-banner behavior (clear
+        path becomes a no-op). The clear-threshold N comes from
+        ``tuning.cohort_clear_consecutive_healthy_threshold``.
         """
         return cls(
             budgets=_budgets_from_tuning(tuning),
             enabled=enabled,
             breaker_threshold=tuning.cohort_breaker_threshold,
             breaker_window_s=tuning.cohort_breaker_window_s,
+            clear_threshold=tuning.cohort_clear_consecutive_healthy_threshold,
+            auto_clear_enabled=auto_clear_enabled,
         )
 
     # ── Circuit-breaker (Phase 1.D §8 T4.1 (e) + §11 ADR-D14) ──
@@ -338,11 +378,22 @@ class ResourceCohortGovernor:
         Called by the ``POST /api/engine/resources/cohort/ack`` endpoint
         when the operator dismisses the breach. Subsequent breaches
         re-arm the breaker normally.
+
+        Note: this clears governor IN-PROCESS state only. The composite-store
+        entry under ``axis="engine_resources"`` is cleared by
+        :func:`_clear_axis_entry_for_reason` invoked from the ack endpoint
+        (Mission B B-P1-03 closure) — the two stores are intentionally
+        kept decoupled at the API level so test fixtures can exercise
+        each path independently.
         """
         with self._lock:
             self._engaged_acks[axis] = time.monotonic()
             if axis in self._breach_history:
                 self._breach_history[axis].clear()
+            # Mission B B-P0-3 — operator-ack also resets the per-axis
+            # hysteresis state so a future recovery starts clean.
+            self._last_verdict[axis] = CohortVerdict.HEALTHY
+            self._consecutive_healthy[axis] = 0
 
     def evaluate_snapshot(self, snapshot: Mapping[str, object]) -> list[CohortEvaluation]:
         """Evaluate every cohort against the given snapshot.
@@ -569,7 +620,8 @@ class ResourceCohortGovernor:
 
 
 def emit_axis_entries(evaluations: list[CohortEvaluation]) -> int:
-    """Emit ``engine.resources.cohort_budget_exceeded`` for every breached cohort.
+    """Emit ``engine.resources.cohort_budget_exceeded`` for every breached cohort
+    AND clear stale composite-store entries on sustained recovery.
 
     Routes each BUDGET_EXCEEDED entry to the :class:`EngineDegradedStore`
     with ``axis="engine_resources"`` so the existing C4
@@ -579,6 +631,20 @@ def emit_axis_entries(evaluations: list[CohortEvaluation]) -> int:
     RSS-driven or thread-driven (Phase 1.D heap-snapshot trigger) and
     advances the circuit-breaker state per ADR-D14.
 
+    Mission B B-P0-3 (2026-05-21) — per-axis state machine for the
+    BUDGET_EXCEEDED → HEALTHY transition. The governor tracks
+    ``_last_verdict[axis]`` + ``_consecutive_healthy[axis]``; after
+    ``governor.clear_threshold`` consecutive HEALTHY ticks following any
+    BUDGET_EXCEEDED, calls :func:`_clear_axis_entry_for_reason` which
+    invokes ``EngineDegradedStore.clear_reason(_REASON_FOR_AXIS[axis])``
+    (per-reason, not per-axis — protects sibling cohort entries) and
+    best-effort ``OperatorAcksStore.clear_ack`` on the matching
+    ``engine_resources.<reason>`` ack-key (closes B-P1-15 stale-ack
+    suppression of re-degradation). Gated by ``governor.auto_clear_enabled``
+    (operator override
+    ``SOVYX_OBSERVABILITY__FEATURES__COHORT_AXIS_AUTO_CLEAR=false``
+    restores v0.49.36 stuck-banner behavior). Anti-pattern #54.
+
     Returns the count of BUDGET_EXCEEDED emissions for caller-side
     metrics. Caller does NOT need to act on the count — the WARN log
     line + composite-store entry are the operator-actionable surfaces.
@@ -586,41 +652,156 @@ def emit_axis_entries(evaluations: list[CohortEvaluation]) -> int:
     emitted = 0
     governor = get_default_resource_cohort_governor()
     for evaluation in evaluations:
-        if evaluation.verdict != CohortVerdict.BUDGET_EXCEEDED:
+        if evaluation.verdict == CohortVerdict.BUDGET_EXCEEDED:
+            emitted += 1
+            logger.warning(
+                "engine.resources.cohort_budget_exceeded",
+                **{
+                    "engine.resources.cohort": evaluation.axis.value,
+                    "engine.resources.observed": evaluation.observed,
+                    "engine.resources.budget": evaluation.budget,
+                    "engine.resources.note": evaluation.note,
+                    # MISSION-A.2.P2 F-018: operator-trust disclosure.
+                    # Operators reading the breach WARN see the env-var to
+                    # tune WITHOUT a separate ``sovyx doctor resources
+                    # --explain`` round-trip.
+                    "engine.resources.tuning_env_path": _TUNING_ENV_PATH_FOR_AXIS.get(
+                        evaluation.axis, ""
+                    ),
+                },
+            )
+            # Mission H4 §8 T4.1 (e) + §4.6 ADR-D6 v0.49.29 — circuit-breaker
+            # state advancement HAPPENS FIRST so the severity computation in
+            # _record_to_composite_store sees the current breach in the
+            # temporal window count. Without this ordering, the 2nd breach
+            # within 5 min still resolves to "warning" because the prior
+            # breach is the only one in the history at compute time.
+            governor.record_breach(evaluation.axis)
+            _record_to_composite_store(evaluation)
+            _increment_cohort_budget_counter(evaluation)
+            # Mission B B-P0-3 — reset hysteresis on every fresh breach
+            # so the clear_threshold count restarts from zero. Storing
+            # the verdict and the reset count under the same lock as
+            # the rest of the per-axis state.
+            with governor._lock:  # noqa: SLF001 — same module
+                governor._last_verdict[evaluation.axis] = CohortVerdict.BUDGET_EXCEEDED  # noqa: SLF001
+                governor._consecutive_healthy[evaluation.axis] = 0  # noqa: SLF001
+            # Mission H4 §8 T4.1 (c-d) — snapshot persistence on RSS / thread
+            # breach. Best-effort; failures absorbed at debug level.
+            if evaluation.axis == CohortAxis.RSS_GROWTH:
+                _persist_heap_snapshot(evaluation)
+            elif evaluation.axis == CohortAxis.THREAD_COUNT:
+                _persist_thread_snapshot(evaluation)
             continue
-        emitted += 1
-        logger.warning(
-            "engine.resources.cohort_budget_exceeded",
+
+        if evaluation.verdict == CohortVerdict.HEALTHY:
+            # Mission B B-P0-3 — hysteresis state machine. Only advance
+            # the consecutive-healthy counter when the prior verdict was
+            # BUDGET_EXCEEDED (i.e. we are in a recovery sequence). On
+            # the N-th consecutive HEALTHY, invoke the clear path.
+            with governor._lock:  # noqa: SLF001
+                prior = governor._last_verdict.get(evaluation.axis)  # noqa: SLF001
+                if prior == CohortVerdict.BUDGET_EXCEEDED or (
+                    governor._consecutive_healthy.get(evaluation.axis, 0) > 0  # noqa: SLF001
+                ):
+                    governor._consecutive_healthy[evaluation.axis] = (  # noqa: SLF001
+                        governor._consecutive_healthy.get(evaluation.axis, 0) + 1  # noqa: SLF001
+                    )
+                    consecutive = governor._consecutive_healthy[evaluation.axis]  # noqa: SLF001
+                else:
+                    # No prior breach to recover from; nothing to clear.
+                    governor._last_verdict[evaluation.axis] = CohortVerdict.HEALTHY  # noqa: SLF001
+                    continue
+                should_clear = (
+                    governor.auto_clear_enabled and consecutive >= governor.clear_threshold
+                )
+                if should_clear:
+                    # Reset under lock so a concurrent breach observation
+                    # cannot double-clear.
+                    governor._last_verdict[evaluation.axis] = CohortVerdict.HEALTHY  # noqa: SLF001
+                    governor._consecutive_healthy[evaluation.axis] = 0  # noqa: SLF001
+            if should_clear:
+                _clear_axis_entry_for_reason(evaluation.axis)
+            continue
+
+        # INSUFFICIENT_DATA: transient observation gap; do not reset
+        # hysteresis (operator should not lose recovery progress on a
+        # single psutil hiccup). No emission.
+    return emitted
+
+
+def _clear_axis_entry_for_reason(axis: CohortAxis) -> None:
+    """Mission B B-P0-3 — clear the composite-store entry + ack on cohort recovery.
+
+    Calls ``EngineDegradedStore.clear_reason(_REASON_FOR_AXIS[axis])``
+    (per-reason — protects sibling cohort entries under
+    ``axis="engine_resources"``) and best-effort
+    ``OperatorAcksStore.clear_ack`` on the matching ack-key
+    ``engine_resources.<reason>``. Closes B-P1-15: stale ack suppressing
+    re-degradation under the same axis+reason.
+
+    Emits ``engine.resources.cohort_auto_cleared`` INFO with the cohort
+    + reason + threshold so operators can correlate the banner-drop on
+    the dashboard with the recovery edge. Best-effort; failures absorbed
+    at debug level to preserve the "observability never breaks the
+    operator's process" invariant from #42.
+    """
+    reason = _REASON_FOR_AXIS.get(axis)
+    if reason is None:
+        return
+    try:
+        from sovyx.engine._degraded_store import get_default_degraded_store
+
+        cleared = get_default_degraded_store().clear_reason(reason)
+    except Exception:  # noqa: BLE001 — observability-only surface
+        logger.debug("b_p0_3_degraded_store_clear_failed", axis=axis.value, reason=reason)
+        return
+    if cleared:
+        logger.info(
+            "engine.resources.cohort_auto_cleared",
             **{
-                "engine.resources.cohort": evaluation.axis.value,
-                "engine.resources.observed": evaluation.observed,
-                "engine.resources.budget": evaluation.budget,
-                "engine.resources.note": evaluation.note,
-                # MISSION-A.2.P2 F-018: operator-trust disclosure.
-                # Operators reading the breach WARN see the env-var to
-                # tune WITHOUT a separate ``sovyx doctor resources
-                # --explain`` round-trip.
-                "engine.resources.tuning_env_path": _TUNING_ENV_PATH_FOR_AXIS.get(
-                    evaluation.axis, ""
+                "engine.resources.cohort": axis.value,
+                "engine.resources.reason": reason,
+                "engine.resources.consecutive_healthy_threshold": (
+                    get_default_resource_cohort_governor().clear_threshold
                 ),
             },
         )
-        # Mission H4 §8 T4.1 (e) + §4.6 ADR-D6 v0.49.29 — circuit-breaker
-        # state advancement HAPPENS FIRST so the severity computation in
-        # _record_to_composite_store sees the current breach in the
-        # temporal window count. Without this ordering, the 2nd breach
-        # within 5 min still resolves to "warning" because the prior
-        # breach is the only one in the history at compute time.
-        governor.record_breach(evaluation.axis)
-        _record_to_composite_store(evaluation)
-        _increment_cohort_budget_counter(evaluation)
-        # Mission H4 §8 T4.1 (c-d) — snapshot persistence on RSS / thread
-        # breach. Best-effort; failures absorbed at debug level.
-        if evaluation.axis == CohortAxis.RSS_GROWTH:
-            _persist_heap_snapshot(evaluation)
-        elif evaluation.axis == CohortAxis.THREAD_COUNT:
-            _persist_thread_snapshot(evaluation)
-    return emitted
+    # Mission B B-P1-15 — DEFERRED FROM B.1.P3 SCOPE:
+    #
+    # Closing the B-P1-15 "stale ack suppresses re-degradation" pathway
+    # at the AUTO-clear edge would require resolving the
+    # ``OperatorAcksStore`` instance from this module — but the store
+    # is constructed at bootstrap and held in ``ServiceRegistry`` (no
+    # module-level singleton helper exists). Wiring the resolution
+    # would either (a) couple the observability cohort governor to the
+    # service registry (architectural expansion outside B.1 scope), or
+    # (b) require adding a ``get_default_operator_acks_store`` lazy
+    # singleton helper (scope expansion). Per the operator's 2026-05-21
+    # Mission B.1 directive "no opportunistic cleanup / no governance
+    # expansion", we defer the auto-edge ack-clear to a sibling B.3
+    # ticket.
+    #
+    # Remaining risk after B.1: if the operator ack'd a prior breach
+    # with a long TTL (e.g. 24 h) and the cohort recovers + re-breaches
+    # within the ack TTL, the ack-suppression at
+    # ``engine_degraded.py::_aggregate_ack_state`` still suppresses the
+    # NEW banner entry that this auto-clear path just allowed to
+    # reform. The store entry exists; the banner stays muted. Operator
+    # workaround: TTL expiry OR explicit re-ack on the new entry. The
+    # operator-driven path at
+    # ``POST /api/engine/resources/cohort/ack`` already calls
+    # ``clear_reason`` (B.1.P3 closure) but does NOT yet call
+    # ``clear_ack`` — same deferred B-P1-15 closure.
+    #
+    # This is an EXPLICIT semantic gap with classification:
+    #   - Severity: P1 (operator-trust degraded; not catastrophic).
+    #   - Sunset target: Mission B.3 (closes within v0.49.38..v0.50.0).
+    #   - Anti-pattern reference: #54 sibling — the record↔clear
+    #     pairing applies to the ack store as well as the degraded
+    #     store, but the wiring across stores is governance-level
+    #     work, not a single-tag patch.
+    # See `MISSION-B-FINDINGS-REGISTER-2026-05-21.md` §2 B-P1-15.
 
 
 # ── Phase 1.D snapshot persistence + rotation (spec §8 T4.1 c+d) ──
