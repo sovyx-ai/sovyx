@@ -4,11 +4,13 @@ import {
   CaptureRestartFrameSchema,
   CaptureRestartReasonSchema,
   EngineDegradedResponseSchema,
+  EngineResourcesResponseSchema,
   FailoverHistoryEntrySchema,
   FailoverHistoryResponseSchema,
   ForgetMindResponseSchema,
   OnboardingCompleteResponseSchema,
   PruneRetentionResponseSchema,
+  ResourceCohortMetricsSchema,
   StartTrainingRequestSchema,
   StartTrainingResponseSchema,
   TrainingJobDetailResponseSchema,
@@ -1556,5 +1558,126 @@ describe("EngineDegradedResponseSchema (Mission D.1)", () => {
     };
     const result = EngineDegradedResponseSchema.safeParse(payload);
     expect(result.success).toBe(true);
+  });
+});
+
+// Mission C C-P0-1 / Phase C.2 — pin the ResourceCohortMetricsSchema
+// typed-view completeness so a regression of the post-A.1 SSoT
+// canonical key set is loud at the TS boundary, not just at the
+// `check_zod_twin_completeness.py` gate.
+describe("ResourceCohortMetricsSchema (Mission C C-P0-1)", () => {
+  it("accepts the full canonical key set with passthrough-safe values", () => {
+    const payload = {
+      // process
+      "process.open_files_status": "ok",
+      "process.connections_status": "ok",
+      // asyncio canonical
+      "asyncio.all_task_names": ["snapshotter", "heartbeat"],
+      "asyncio.not_done_count": 4,
+      "asyncio.awaiting_count": 3,
+      // to_thread canonical (post-A.1 freshness-suffixed)
+      "to_thread.pool_size_at_last_dispatch": 8,
+      "to_thread.queue_depth_at_last_dispatch": 2,
+      "to_thread.max_workers_at_last_dispatch": 16,
+      // to_thread legacy aliases (LENIENT dual-emit; sunset v0.55.0)
+      "to_thread.pool_size": 8,
+      "to_thread.active_workers": 8,
+      "to_thread.queue_depth": 2,
+      "to_thread.max_workers": 16,
+      "to_thread.dispatch_count_total": 142,
+      "to_thread.dispatch_count_per_label": { onnx: 99, vad: 43 },
+      // lock_dict
+      "lock_dict.total_cardinality": 12,
+      "lock_dict.per_owner": { brain: 5, voice: 7 },
+      "lock_dict.instance_count": 2,
+      // onnx
+      "onnx.session_count": 4,
+      "onnx.session_labels": ["silero", "moonshine", "piper", "kokoro"],
+      // gc
+      "gc.collections_by_gen": [12, 3, 1],
+      "gc.objects_count": 99999,
+      // tracemalloc
+      "tracemalloc.is_tracing": true,
+      "tracemalloc.current_kb": 8192,
+      "tracemalloc.peak_kb": 16384,
+      // exception_cohort canonical (cumulative + window split)
+      "exception_cohort.cumulative_retained_bytes_since_start": 1024,
+      "exception_cohort.cumulative_distinct_group_id_count": 7,
+      "exception_cohort.window_retained_bytes": 256,
+      "exception_cohort.window_distinct_group_id_count": 3,
+      "exception_cohort.last_observation_monotonic": 1234.5,
+      // exception_cohort legacy aliases (LENIENT dual-emit; sunset v0.55.0)
+      "exception_cohort.retained_bytes_estimate": 1024,
+      "exception_cohort.distinct_group_id_count": 7,
+    };
+    const result = ResourceCohortMetricsSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  it("typed view exposes the post-A.1 canonical keys after parse", () => {
+    const payload = {
+      "to_thread.pool_size_at_last_dispatch": 7,
+      "asyncio.not_done_count": 5,
+      "exception_cohort.window_retained_bytes": 128,
+    };
+    const result = ResourceCohortMetricsSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Pre-C.2 these reads returned `unknown` via .passthrough(); after
+      // C.2 they're first-class typed reads.
+      expect(result.data["to_thread.pool_size_at_last_dispatch"]).toBe(7);
+      expect(result.data["asyncio.not_done_count"]).toBe(5);
+      expect(result.data["exception_cohort.window_retained_bytes"]).toBe(128);
+    }
+  });
+
+  it("legacy LENIENT keys still parse during the sunset window", () => {
+    // Pre-v0.55.0: producer dual-emits both canonical and legacy.
+    // Consumers reading legacy keys MUST keep working until sunset.
+    const payload = {
+      "to_thread.pool_size": 4,
+      "to_thread.active_workers": 4,
+      "exception_cohort.retained_bytes_estimate": 64,
+      "exception_cohort.distinct_group_id_count": 2,
+    };
+    const result = ResourceCohortMetricsSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  it("passthrough still tolerates a forward-additive H4 Phase 1.D field", () => {
+    const payload = {
+      "to_thread.pool_size_at_last_dispatch": 8,
+      // Future H4 Phase 1.D extension key not yet typed in the schema.
+      "engine_resources.future_governor_verdict": "HEALTHY",
+    };
+    const result = ResourceCohortMetricsSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a typed key with the wrong shape", () => {
+    const payload = {
+      // pool_size_at_last_dispatch typed as nonneg int; string fails.
+      "to_thread.pool_size_at_last_dispatch": "should-be-a-number",
+    };
+    const result = ResourceCohortMetricsSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it("EngineResourcesResponseSchema embeds the canonical typed cohorts", () => {
+    const payload = {
+      observed_at_unix: 1779410000,
+      cohorts: {
+        "to_thread.pool_size_at_last_dispatch": 8,
+        "asyncio.not_done_count": 4,
+        "exception_cohort.cumulative_retained_bytes_since_start": 1024,
+      },
+      canonical_field_count: 33,
+      legacy_alias_count: 9,
+    };
+    const result = EngineResourcesResponseSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cohorts["to_thread.pool_size_at_last_dispatch"]).toBe(8);
+    }
   });
 });

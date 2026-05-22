@@ -1985,7 +1985,47 @@ export const EngineDegradedResponseSchema = z
  */
 export const ResourceCohortMetricsSchema = z
   .object({
-    // to_thread block
+    // Mission C C-P0-1 / Phase C.2 — post-A.1 SSoT canonical key set.
+    // The typed view declares every field the pydantic peer at
+    // src/sovyx/dashboard/routes/engine_resources.py:62-168
+    // emits via Field(alias=...), so z.infer<typeof Schema>
+    // reflects the WIRE shape rather than depending on
+    // .passthrough() for fields the consumer wants to read.
+    //
+    // Anti-pattern #59 (proposed) instance closure — Gate 17
+    // mechanically prevents future drift.
+
+    // process block (MISSION-A.2.P4 F-012)
+    "process.open_files_status": z.string().optional(),
+    "process.connections_status": z.string().optional(),
+
+    // asyncio block (MISSION-A.1.P3 F-005 + F-014; ADR-D15 + ADR-D16)
+    "asyncio.all_task_names": z.array(z.string()).optional(),
+    "asyncio.not_done_count": z.number().int().nonnegative().optional(),
+    "asyncio.awaiting_count": z.number().int().nonnegative().optional(),
+
+    // to_thread canonical (MISSION-A.1.P3.b F-007; ADR-D16):
+    // *_at_last_dispatch is the freshness-suffixed canonical;
+    // pool_size / active_workers / queue_depth / max_workers are
+    // LENIENT dual-emit legacy aliases that sunset at v0.55.0.
+    "to_thread.pool_size_at_last_dispatch": z
+      .number()
+      .int()
+      .nonnegative()
+      .optional(),
+    "to_thread.queue_depth_at_last_dispatch": z
+      .number()
+      .int()
+      .nonnegative()
+      .optional(),
+    "to_thread.max_workers_at_last_dispatch": z
+      .number()
+      .int()
+      .nonnegative()
+      .optional(),
+    // to_thread legacy aliases (LENIENT dual-emit; sunset v0.55.0
+    // per ADR-D14). Kept in the typed view so consumers can still
+    // read the old names during the sunset window.
     "to_thread.pool_size": z.number().int().nonnegative().optional(),
     // Mission H4 §3 F2 + §22 v0.49.32 — canonical alias of pool_size.
     "to_thread.active_workers": z.number().int().nonnegative().optional(),
@@ -2007,7 +2047,34 @@ export const ResourceCohortMetricsSchema = z
     "tracemalloc.is_tracing": z.boolean().optional(),
     "tracemalloc.current_kb": z.number().int().nonnegative().optional(),
     "tracemalloc.peak_kb": z.number().int().nonnegative().optional(),
-    // exception_cohort block
+
+    // exception_cohort canonical (MISSION-A.1 F-002 + F-003; ADR-D14).
+    // Cumulative fields are monotonic since process start; window
+    // fields decay as observations age out of the deque
+    // (exception_cohort_window_s). The legacy
+    // retained_bytes_estimate / distinct_group_id_count aliases
+    // remain in the typed view through the sunset window.
+    "exception_cohort.cumulative_retained_bytes_since_start": z
+      .number()
+      .int()
+      .nonnegative()
+      .optional(),
+    "exception_cohort.cumulative_distinct_group_id_count": z
+      .number()
+      .int()
+      .nonnegative()
+      .optional(),
+    "exception_cohort.window_retained_bytes": z
+      .number()
+      .int()
+      .nonnegative()
+      .optional(),
+    "exception_cohort.window_distinct_group_id_count": z
+      .number()
+      .int()
+      .nonnegative()
+      .optional(),
+    // exception_cohort legacy aliases (LENIENT dual-emit; sunset v0.55.0).
     "exception_cohort.retained_bytes_estimate": z
       .number()
       .int()
