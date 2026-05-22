@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Request
 if TYPE_CHECKING:
     from sovyx.persistence.pool import DatabasePool
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
@@ -17,6 +18,46 @@ from sovyx.observability.logging import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/emotions", dependencies=[Depends(verify_token)])
+
+
+class CurrentMoodResponse(BaseModel):
+    """Response of `GET /api/emotions/current` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    valence: float
+    arousal: float
+    dominance: float
+    label: str | None = None
+    description: str | None = None
+    quadrant: str | None = None
+    episode_count: int = 0
+
+
+class EmotionTimelineResponse(BaseModel):
+    """Response of `GET /api/emotions/timeline` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    points: list[dict[str, object]] = []
+    period: str = ""
+
+
+class EmotionTriggersResponse(BaseModel):
+    """Response of `GET /api/emotions/triggers` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    triggers: list[dict[str, object]] = []
+
+
+class EmotionDistributionResponse(BaseModel):
+    """Response of `GET /api/emotions/distribution` (Mission C C.4).
+
+    Counts is the operator-facing histogram by quadrant; total is the
+    sample size in the period."""
+
+    model_config = ConfigDict(extra="allow")
+    counts: dict[str, int] = {}
+    period: str = ""
+    total: int = 0
 
 # ── PAD → human label mapping ──
 
@@ -54,7 +95,7 @@ def _period_hours(period: str) -> int:
     return mapping.get(period, 168)
 
 
-@router.get("/current")
+@router.get("/current", response_model=CurrentMoodResponse)
 async def get_current_mood(request: Request) -> JSONResponse:
     """Current emotional state from the last 20 episodes."""
     pool = await _get_brain_pool(request)
@@ -94,7 +135,7 @@ async def get_current_mood(request: Request) -> JSONResponse:
         return JSONResponse(_empty_current())
 
 
-@router.get("/timeline")
+@router.get("/timeline", response_model=EmotionTimelineResponse)
 async def get_timeline(request: Request) -> JSONResponse:
     """Emotional timeline — one point per episode or bucketed by day."""
     period = request.query_params.get("period", "7d")
@@ -141,7 +182,7 @@ async def get_timeline(request: Request) -> JSONResponse:
         return JSONResponse({"points": [], "period": period})
 
 
-@router.get("/triggers")
+@router.get("/triggers", response_model=EmotionTriggersResponse)
 async def get_triggers(request: Request) -> JSONResponse:
     """Concepts most associated with strong emotions."""
     limit = min(int(request.query_params.get("limit", "10")), 20)
@@ -186,7 +227,7 @@ async def get_triggers(request: Request) -> JSONResponse:
         return JSONResponse({"triggers": []})
 
 
-@router.get("/distribution")
+@router.get("/distribution", response_model=EmotionDistributionResponse)
 async def get_distribution(request: Request) -> JSONResponse:
     """Mood distribution by quadrant over a period."""
     period = request.query_params.get("period", "30d")

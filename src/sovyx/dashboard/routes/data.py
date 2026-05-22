@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, ConfigDict
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
@@ -25,6 +26,18 @@ _IMPORT_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB streaming read chunk size.
 
 
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
+
+
+class MindImportResponse(BaseModel):
+    """Response of `POST /api/import` (Mission C C.4).
+
+    Success: `ok=True` + `mind_id`. Failure (4xx/5xx): `error`.
+    Forward-additive via ``extra="allow"`` (anti-pattern #40)."""
+
+    model_config = ConfigDict(extra="allow")
+    ok: bool | None = None
+    mind_id: str | None = None
+    error: str | None = None
 
 
 # c-allowlist: response_model_skip reason=ZIP file download — StreamingResponse with Content-Disposition
@@ -67,7 +80,7 @@ async def export_mind_endpoint(request: Request) -> Response:
     )
 
 
-@router.post("/import")
+@router.post("/import", response_model=MindImportResponse)
 async def import_mind_endpoint(request: Request) -> JSONResponse:
     """Import a mind from an uploaded .sovyx-mind ZIP archive.
 
