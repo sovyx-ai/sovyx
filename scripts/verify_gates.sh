@@ -202,22 +202,29 @@ else
     fi
 fi
 
-# ── Gate 8: boundary round-trip coverage (Mission C2 §T4.1) ──────────
+# ── Gate 8: boundary round-trip coverage (Mission C2 §T4.1 + C C.6 §1) ──
+# STRICT-flip Variant A (Mission C C.6 §1): harness invokes the gate
+# with --scope all --strict so the all-routes coverage is enforced
+# across every src/sovyx/dashboard/routes/*.py module. The script's
+# own default scope stays "voice" so individual dev invocations
+# (`uv run python scripts/dev/check_boundary_round_trip_coverage.py`)
+# continue to produce the original voice-scope summary; only the
+# harness gate is STRICT-flipped. Layer-1 rollback: remove --scope all
+# --strict (script reverts to voice-scope STRICT default).
 GATE_NUM=8
 LOG="$LOG_DIR/08-boundary-round-trip.log"
-if uv run python scripts/dev/check_boundary_round_trip_coverage.py >"$LOG" 2>&1; then
-    # Success line format:
-    # "Quality Gate 8 — boundary round-trip coverage: N model(s) across M call site(s), all paired with tests"
-    if grep -qE "boundary round-trip coverage:.*all paired" "$LOG"; then
-        SUMMARY=$(grep -oE "[0-9]+ model\(s\) across [0-9]+ call site\(s\)" "$LOG" | head -1)
-        ok "boundary round-trip coverage — $SUMMARY"
-    elif grep -q "vacuous pass" "$LOG"; then
-        ok "boundary round-trip coverage — vacuous pass (no model_validate sites)"
+if uv run python scripts/dev/check_boundary_round_trip_coverage.py --scope all --strict >"$LOG" 2>&1; then
+    # All-scope STRICT success line format:
+    # "Quality Gate 8 — boundary round-trip coverage (all-routes scope, STRICT): N file(s), M unique model(s) across K call site(s)."
+    # "all-routes coverage: every model has a paired test"
+    if grep -qE "all-routes coverage: every model has a paired test" "$LOG"; then
+        SUMMARY=$(grep -oE "[0-9]+ unique model\(s\) across [0-9]+ call site\(s\)" "$LOG" | head -1)
+        ok "boundary round-trip coverage — $SUMMARY (all-routes scope, STRICT)"
     else
-        bad "boundary round-trip coverage — exit 0 but no summary line; log: $LOG"
+        bad "boundary round-trip coverage — exit 0 but no all-routes summary line; log: $LOG"
     fi
 else
-    bad "boundary round-trip coverage — uncovered model(s) detected; log: $LOG"
+    bad "boundary round-trip coverage — uncovered model(s) detected (STRICT all-scope); log: $LOG"
 fi
 
 # ── Gate 9: ladder iteration discipline (Mission C3 §T4.1) ───────────
