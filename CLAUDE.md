@@ -53,6 +53,7 @@ Gates (in order):
 # 15 resource_hygiene_discipline     — LENIENT v0.49.14..v0.53.x; STRICT v0.54.0 (H4, V-H4-13)
 # 16 zod_twin_completeness           — LENIENT v0.49.38..v0.52.x; STRICT v0.53.x (C, C-P0-1)
 # 17 response_model_presence         — LENIENT v0.49.38..v0.52.x; STRICT v0.53.x (C, C.4 body)
+# 18 boundary_helper_real            — LENIENT v0.49.38..v0.52.x; STRICT v0.53.x (C, C.6 body)
 ```
 
 Plus `uv lock --check` on version bumps. Always grep gate summary line — never trust harness exit code (pre-v0.42.2 `2>&1 | tail -N` masked 6 failures; see `feedback_ci_preflight`).

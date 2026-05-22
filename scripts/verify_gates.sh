@@ -45,7 +45,7 @@ else
 fi
 
 GATE_NUM=0
-GATE_TOTAL=17
+GATE_TOTAL=18
 FAILURES=()
 
 ok() {
@@ -417,6 +417,28 @@ if uv run python scripts/dev/check_response_model_presence.py >"$LOG" 2>&1; then
     fi
 else
     printf '%s⚠%s gate %d/%d — response_model presence LENIENT warn (Mission C v0.49.38; STRICT at v0.53.x); log: %s\n' \
+        "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$LOG"
+fi
+
+# ── Gate 20: boundary helper realism (Mission C §C.0) ───────────────
+# Mission C Phase C.0-c LENIENT — warn-only locally; STRICT in
+# publish.yml post-build verify is NOT yet wired. Phase C.6 progressively
+# migrates inline `helper_factory=lambda:` callsites to named callables
+# that mirror the real producer's runtime-bound dict shape (anti-pattern
+# #40 sibling; closes proposed anti-pattern #60). Pre-mission baseline:
+# 51 violations across 5 boundary test files.
+GATE_NUM=18
+LOG="$LOG_DIR/18-boundary-helper-real.log"
+if uv run python scripts/dev/check_boundary_helper_real.py >"$LOG" 2>&1; then
+    if grep -q "boundary helper discipline: PASS" "$LOG"; then
+        ok "boundary helper realism — PASS"
+    else
+        VIOLATIONS=$(grep -oE "[0-9]+ violation\(s\)" "$LOG" | head -1 || echo "0 violations")
+        printf '%s⚠%s gate %d/%d — boundary helper realism LENIENT warn: %s (Mission C v0.49.38; STRICT at v0.53.x); log: %s\n' \
+            "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$VIOLATIONS" "$LOG"
+    fi
+else
+    printf '%s⚠%s gate %d/%d — boundary helper realism LENIENT warn (Mission C v0.49.38; STRICT at v0.53.x); log: %s\n' \
         "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$LOG"
 fi
 
