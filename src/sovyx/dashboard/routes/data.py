@@ -40,7 +40,7 @@ class MindImportResponse(BaseModel):
     error: str | None = None
 
 
-# c-allowlist: response_model_skip reason=ZIP file download — StreamingResponse with Content-Disposition
+# c-allowlist: response_model_skip reason=ZIP file download (StreamingResponse)
 @router.get("/export")
 async def export_mind_endpoint(request: Request) -> Response:
     """Export the active mind as a .sovyx-mind ZIP archive download.

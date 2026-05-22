@@ -78,6 +78,7 @@ class ObservabilityHealthResponse(BaseModel):
     schema_version: str | None = None
     self_check_passed: bool | None = None
 
+
 # ── Self-check thresholds (mirror §27.1) ──────────────────────────
 _QUEUE_DEPTH_PCT_FAIL: float = 0.80
 _DROPPED_60S_FAIL: int = 10

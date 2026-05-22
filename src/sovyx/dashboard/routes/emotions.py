@@ -59,6 +59,7 @@ class EmotionDistributionResponse(BaseModel):
     period: str = ""
     total: int = 0
 
+
 # ── PAD → human label mapping ──
 
 _QUADRANT_LABELS: dict[str, dict[str, str]] = {
