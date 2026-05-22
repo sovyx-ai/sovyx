@@ -47,6 +47,9 @@ Mission anchor:
 
 from __future__ import annotations
 
+from functools import partial
+from typing import Any
+
 import pytest
 
 from sovyx.dashboard.routes.voice import (
@@ -58,6 +61,33 @@ from sovyx.dashboard.routes.voice import (
 from tests.dashboard._boundary_helpers import assert_boundary_accepts
 
 # ── /api/voice/bypass-tier-status — group A ─────────────────────────
+
+
+def _bypass_tier_fresh_payload() -> dict[str, Any]:
+    """Mirror ``_bypass_tier_snapshot()`` baseline (all counters 0, no
+    tier engaged) — the v0.32.3 fresh-boot shape."""
+    return {
+        "current_bypass_tier": None,
+        "tier1_raw_attempted": 0,
+        "tier1_raw_succeeded": 0,
+        "tier2_host_api_rotate_attempted": 0,
+        "tier2_host_api_rotate_succeeded": 0,
+        "tier3_wasapi_exclusive_attempted": 0,
+        "tier3_wasapi_exclusive_succeeded": 0,
+    }
+
+
+def _bypass_tier3_engaged_payload() -> dict[str, Any]:
+    """Mirror ``_bypass_tier_snapshot()`` when WASAPI-exclusive engaged."""
+    return {
+        "current_bypass_tier": 3,
+        "tier1_raw_attempted": 2,
+        "tier1_raw_succeeded": 0,
+        "tier2_host_api_rotate_attempted": 1,
+        "tier2_host_api_rotate_succeeded": 0,
+        "tier3_wasapi_exclusive_attempted": 1,
+        "tier3_wasapi_exclusive_succeeded": 1,
+    }
 
 
 class TestVoiceBypassTierStatusBoundary:
@@ -75,15 +105,7 @@ class TestVoiceBypassTierStatusBoundary:
         """All counters zero, no tier engaged — the v0.32.3 baseline shape."""
         response = assert_boundary_accepts(
             VoiceBypassTierStatusResponse,
-            helper_factory=lambda: {
-                "current_bypass_tier": None,
-                "tier1_raw_attempted": 0,
-                "tier1_raw_succeeded": 0,
-                "tier2_host_api_rotate_attempted": 0,
-                "tier2_host_api_rotate_succeeded": 0,
-                "tier3_wasapi_exclusive_attempted": 0,
-                "tier3_wasapi_exclusive_succeeded": 0,
-            },
+            helper_factory=_bypass_tier_fresh_payload,
             field_assertions={
                 "current_bypass_tier": None,
                 "tier1_raw_attempted": 0,
@@ -95,15 +117,7 @@ class TestVoiceBypassTierStatusBoundary:
         """``current_bypass_tier=3`` with non-zero counters."""
         assert_boundary_accepts(
             VoiceBypassTierStatusResponse,
-            helper_factory=lambda: {
-                "current_bypass_tier": 3,
-                "tier1_raw_attempted": 2,
-                "tier1_raw_succeeded": 0,
-                "tier2_host_api_rotate_attempted": 1,
-                "tier2_host_api_rotate_succeeded": 0,
-                "tier3_wasapi_exclusive_attempted": 1,
-                "tier3_wasapi_exclusive_succeeded": 1,
-            },
+            helper_factory=_bypass_tier3_engaged_payload,
             field_assertions={
                 "current_bypass_tier": 3,
                 "tier3_wasapi_exclusive_succeeded": 1,
@@ -112,6 +126,71 @@ class TestVoiceBypassTierStatusBoundary:
 
 
 # ── /api/voice/quality-snapshot — group A ───────────────────────────
+
+
+def _quality_snapshot_no_samples_payload() -> dict[str, Any]:
+    """Mirror the route's fresh-boot dict (no SNR samples yet, noise
+    floor not ready, AGC2 not wired)."""
+    return {
+        "snr_p50_db": None,
+        "snr_sample_count": 0,
+        "snr_verdict": "no_signal",
+        "noise_floor": {
+            "short_avg_db": None,
+            "long_avg_db": None,
+            "drift_db": None,
+            "ready": False,
+            "short_sample_count": 0,
+            "long_sample_count": 0,
+        },
+        "agc2": None,
+        "dnsmos_extras_installed": False,
+    }
+
+
+def _quality_snapshot_excellent_with_agc2_payload() -> dict[str, Any]:
+    """Mirror the route's live shape with AGC2 wired and healthy SNR."""
+    return {
+        "snr_p50_db": 22.5,
+        "snr_sample_count": 240,
+        "snr_verdict": "excellent",
+        "noise_floor": {
+            "short_avg_db": -54.2,
+            "long_avg_db": -54.0,
+            "drift_db": 0.2,
+            "ready": True,
+            "short_sample_count": 100,
+            "long_sample_count": 1200,
+        },
+        "agc2": {
+            "frames_processed": 12_345,
+            "frames_silenced": 100,
+            "frames_vad_silenced": 50,
+            "current_gain_db": 6.5,
+            "speech_level_dbfs": -18.2,
+        },
+        "dnsmos_extras_installed": True,
+    }
+
+
+def _quality_snapshot_with_verdict_payload(*, verdict: str) -> dict[str, Any]:
+    """Parametrized-test mirror — same baseline as no-samples, but with
+    the verdict literal varied to exercise every ``_QualityVerdict``."""
+    return {
+        "snr_p50_db": 0.0,
+        "snr_sample_count": 10,
+        "snr_verdict": verdict,
+        "noise_floor": {
+            "short_avg_db": None,
+            "long_avg_db": None,
+            "drift_db": None,
+            "ready": False,
+            "short_sample_count": 0,
+            "long_sample_count": 0,
+        },
+        "agc2": None,
+        "dnsmos_extras_installed": False,
+    }
 
 
 class TestVoiceQualitySnapshotBoundary:
@@ -127,21 +206,7 @@ class TestVoiceQualitySnapshotBoundary:
         """Fresh-boot shape: SNR has no samples, noise floor not ready."""
         response = assert_boundary_accepts(
             VoiceQualitySnapshotResponse,
-            helper_factory=lambda: {
-                "snr_p50_db": None,
-                "snr_sample_count": 0,
-                "snr_verdict": "no_signal",
-                "noise_floor": {
-                    "short_avg_db": None,
-                    "long_avg_db": None,
-                    "drift_db": None,
-                    "ready": False,
-                    "short_sample_count": 0,
-                    "long_sample_count": 0,
-                },
-                "agc2": None,
-                "dnsmos_extras_installed": False,
-            },
+            helper_factory=_quality_snapshot_no_samples_payload,
             field_assertions={
                 "snr_verdict": "no_signal",
                 "snr_p50_db": None,
@@ -154,27 +219,7 @@ class TestVoiceQualitySnapshotBoundary:
         """Live shape: AGC2 wired + healthy SNR."""
         response = assert_boundary_accepts(
             VoiceQualitySnapshotResponse,
-            helper_factory=lambda: {
-                "snr_p50_db": 22.5,
-                "snr_sample_count": 240,
-                "snr_verdict": "excellent",
-                "noise_floor": {
-                    "short_avg_db": -54.2,
-                    "long_avg_db": -54.0,
-                    "drift_db": 0.2,
-                    "ready": True,
-                    "short_sample_count": 100,
-                    "long_sample_count": 1200,
-                },
-                "agc2": {
-                    "frames_processed": 12_345,
-                    "frames_silenced": 100,
-                    "frames_vad_silenced": 50,
-                    "current_gain_db": 6.5,
-                    "speech_level_dbfs": -18.2,
-                },
-                "dnsmos_extras_installed": True,
-            },
+            helper_factory=_quality_snapshot_excellent_with_agc2_payload,
             field_assertions={
                 "snr_verdict": "excellent",
                 "agc2.frames_processed": 12_345,
@@ -190,26 +235,68 @@ class TestVoiceQualitySnapshotBoundary:
         """Every documented ``_QualityVerdict`` literal accepts."""
         assert_boundary_accepts(
             VoiceQualitySnapshotResponse,
-            helper_factory=lambda v=verdict: {
-                "snr_p50_db": 0.0,
-                "snr_sample_count": 10,
-                "snr_verdict": v,
-                "noise_floor": {
-                    "short_avg_db": None,
-                    "long_avg_db": None,
-                    "drift_db": None,
-                    "ready": False,
-                    "short_sample_count": 0,
-                    "long_sample_count": 0,
-                },
-                "agc2": None,
-                "dnsmos_extras_installed": False,
-            },
+            helper_factory=partial(
+                _quality_snapshot_with_verdict_payload,
+                verdict=verdict,
+            ),
             field_assertions={"snr_verdict": verdict},
         )
 
 
 # ── /api/voice/models — group B ────────────────────────────────────
+
+
+def _voice_models_no_selector_payload() -> dict[str, Any]:
+    """Mirror ``get_voice_models`` fresh-install shape — no auto-selector,
+    only the static ``available_tiers`` table populated."""
+    return {
+        "detected_tier": None,
+        "active": None,
+        "available_tiers": {
+            "PI5": {
+                "stt_primary": "moonshine-tiny",
+                "stt_streaming": "moonshine-tiny",
+                "tts_primary": "piper",
+                "tts_quality": "piper",
+                "wake": "openwakeword",
+                "vad": "silero-v5",
+            },
+            "N100": {
+                "stt_primary": "moonshine-base",
+                "stt_streaming": "moonshine-base",
+                "tts_primary": "kokoro",
+                "tts_quality": "kokoro",
+                "wake": "openwakeword",
+                "vad": "silero-v5",
+            },
+        },
+    }
+
+
+def _voice_models_selector_registered_payload() -> dict[str, Any]:
+    """Mirror ``get_voice_models`` live shape — auto-selector engaged,
+    detected_tier + active selection populated."""
+    return {
+        "detected_tier": "PI5",
+        "active": {
+            "stt_primary": "moonshine-tiny",
+            "stt_streaming": "moonshine-tiny",
+            "tts_primary": "piper",
+            "tts_quality": "piper",
+            "wake": "openwakeword",
+            "vad": "silero-v5",
+        },
+        "available_tiers": {
+            "PI5": {
+                "stt_primary": "moonshine-tiny",
+                "stt_streaming": "moonshine-tiny",
+                "tts_primary": "piper",
+                "tts_quality": "piper",
+                "wake": "openwakeword",
+                "vad": "silero-v5",
+            },
+        },
+    }
 
 
 class TestVoiceModelsBoundary:
@@ -225,28 +312,7 @@ class TestVoiceModelsBoundary:
         """Fresh-install shape: no auto-selector, just static available_tiers."""
         response = assert_boundary_accepts(
             VoiceModelsResponse,
-            helper_factory=lambda: {
-                "detected_tier": None,
-                "active": None,
-                "available_tiers": {
-                    "PI5": {
-                        "stt_primary": "moonshine-tiny",
-                        "stt_streaming": "moonshine-tiny",
-                        "tts_primary": "piper",
-                        "tts_quality": "piper",
-                        "wake": "openwakeword",
-                        "vad": "silero-v5",
-                    },
-                    "N100": {
-                        "stt_primary": "moonshine-base",
-                        "stt_streaming": "moonshine-base",
-                        "tts_primary": "kokoro",
-                        "tts_quality": "kokoro",
-                        "wake": "openwakeword",
-                        "vad": "silero-v5",
-                    },
-                },
-            },
+            helper_factory=_voice_models_no_selector_payload,
             field_assertions={
                 "detected_tier": None,
                 "active": None,
@@ -259,27 +325,7 @@ class TestVoiceModelsBoundary:
         """Live shape with auto-selector + active selection populated."""
         response = assert_boundary_accepts(
             VoiceModelsResponse,
-            helper_factory=lambda: {
-                "detected_tier": "PI5",
-                "active": {
-                    "stt_primary": "moonshine-tiny",
-                    "stt_streaming": "moonshine-tiny",
-                    "tts_primary": "piper",
-                    "tts_quality": "piper",
-                    "wake": "openwakeword",
-                    "vad": "silero-v5",
-                },
-                "available_tiers": {
-                    "PI5": {
-                        "stt_primary": "moonshine-tiny",
-                        "stt_streaming": "moonshine-tiny",
-                        "tts_primary": "piper",
-                        "tts_quality": "piper",
-                        "wake": "openwakeword",
-                        "vad": "silero-v5",
-                    },
-                },
-            },
+            helper_factory=_voice_models_selector_registered_payload,
             field_assertions={
                 "detected_tier": "PI5",
                 "active.stt_primary": "moonshine-tiny",
@@ -289,6 +335,64 @@ class TestVoiceModelsBoundary:
 
 
 # ── /api/voice/models/download — group B (POST + GET share model) ──
+
+
+def _download_running_payload() -> dict[str, Any]:
+    """Mirror the route's mid-download dict — status=running, no error."""
+    return {
+        "task_id": "task-abc123",
+        "status": "running",
+        "total_models": 5,
+        "completed_models": 2,
+        "current_model": "moonshine-tiny",
+        "error": None,
+        "error_code": None,
+        "retry_after_seconds": None,
+    }
+
+
+def _download_done_payload() -> dict[str, Any]:
+    """Mirror the route's terminal-success dict — status=done."""
+    return {
+        "task_id": "task-xyz789",
+        "status": "done",
+        "total_models": 5,
+        "completed_models": 5,
+        "current_model": None,
+        "error": None,
+        "error_code": None,
+        "retry_after_seconds": None,
+    }
+
+
+def _download_error_cooldown_payload() -> dict[str, Any]:
+    """Mirror the operator-facing cooldown error shape — status=error
+    + error_code="cooldown" + retry_after_seconds populated."""
+    return {
+        "task_id": "task-cooldown",
+        "status": "error",
+        "total_models": 5,
+        "completed_models": 1,
+        "current_model": None,
+        "error": "Mirror cooldown active",
+        "error_code": "cooldown",
+        "retry_after_seconds": 600,
+    }
+
+
+def _download_with_status_payload(*, status: str) -> dict[str, Any]:
+    """Parametrized-test mirror — minimal valid shape with status
+    varied to exercise every ``_DownloadStatus`` literal."""
+    return {
+        "task_id": "task-anyone",
+        "status": status,
+        "total_models": 1,
+        "completed_models": 0,
+        "current_model": None,
+        "error": None,
+        "error_code": None,
+        "retry_after_seconds": None,
+    }
 
 
 class TestVoiceModelDownloadProgressBoundary:
@@ -304,16 +408,7 @@ class TestVoiceModelDownloadProgressBoundary:
         """Mid-download shape — no error, current_model set."""
         response = assert_boundary_accepts(
             VoiceModelDownloadProgressResponse,
-            helper_factory=lambda: {
-                "task_id": "task-abc123",
-                "status": "running",
-                "total_models": 5,
-                "completed_models": 2,
-                "current_model": "moonshine-tiny",
-                "error": None,
-                "error_code": None,
-                "retry_after_seconds": None,
-            },
+            helper_factory=_download_running_payload,
             field_assertions={
                 "task_id": "task-abc123",
                 "status": "running",
@@ -326,16 +421,7 @@ class TestVoiceModelDownloadProgressBoundary:
         """Terminal-success shape."""
         assert_boundary_accepts(
             VoiceModelDownloadProgressResponse,
-            helper_factory=lambda: {
-                "task_id": "task-xyz789",
-                "status": "done",
-                "total_models": 5,
-                "completed_models": 5,
-                "current_model": None,
-                "error": None,
-                "error_code": None,
-                "retry_after_seconds": None,
-            },
+            helper_factory=_download_done_payload,
             field_assertions={
                 "status": "done",
                 "completed_models": 5,
@@ -348,16 +434,7 @@ class TestVoiceModelDownloadProgressBoundary:
         countdown payload."""
         response = assert_boundary_accepts(
             VoiceModelDownloadProgressResponse,
-            helper_factory=lambda: {
-                "task_id": "task-cooldown",
-                "status": "error",
-                "total_models": 5,
-                "completed_models": 1,
-                "current_model": None,
-                "error": "Mirror cooldown active",
-                "error_code": "cooldown",
-                "retry_after_seconds": 600,
-            },
+            helper_factory=_download_error_cooldown_payload,
             field_assertions={
                 "error_code": "cooldown",
                 "retry_after_seconds": 600,
@@ -373,16 +450,7 @@ class TestVoiceModelDownloadProgressBoundary:
         """Every documented ``_DownloadStatus`` literal validates."""
         assert_boundary_accepts(
             VoiceModelDownloadProgressResponse,
-            helper_factory=lambda s=status: {
-                "task_id": "task-anyone",
-                "status": s,
-                "total_models": 1,
-                "completed_models": 0,
-                "current_model": None,
-                "error": None,
-                "error_code": None,
-                "retry_after_seconds": None,
-            },
+            helper_factory=partial(_download_with_status_payload, status=status),
             field_assertions={"status": status},
         )
 
