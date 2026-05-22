@@ -91,6 +91,18 @@ class LLMTestConnectionBody(BaseModel):
     model: str | None = Field(default=None, description="Reserved for future per-model probes.")
 
 
+class LLMTestConnectionResponse(BaseModel):
+    """Response of POST /api/llm/test-connection (Mission C C.4).
+
+    Returned on both success + failure paths; `ok` distinguishes them.
+    Forward-additive via ``extra="allow"`` (anti-pattern #40)."""
+
+    model_config = ConfigDict(extra="allow")
+    ok: bool
+    message: str
+    latency_ms: float | None = None
+
+
 def _report_to_response(report: LLMRouterDiscoveryReport) -> dict[str, Any]:
     return {
         "verdict": report.verdict.value,
@@ -115,7 +127,7 @@ def _report_to_response(report: LLMRouterDiscoveryReport) -> dict[str, Any]:
     }
 
 
-@router.get("/llm/health")
+@router.get("/llm/health", response_model=LLMHealthResponse)
 async def get_llm_health(request: Request) -> JSONResponse:
     """Return the cached LLM router discovery report.
 
@@ -157,7 +169,7 @@ async def get_llm_health(request: Request) -> JSONResponse:
         )
 
 
-@router.post("/llm/test-connection")
+@router.post("/llm/test-connection", response_model=LLMTestConnectionResponse)
 async def test_llm_connection(
     request: Request,
     body: LLMTestConnectionBody,

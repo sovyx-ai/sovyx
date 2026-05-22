@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
@@ -14,7 +15,65 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
 
 
-@router.get("/providers")
+class ProviderEntryModel(BaseModel):
+    """One entry in `GET /providers` providers list.
+
+    Forward-additive via ``extra="allow"`` (anti-pattern #40); future
+    fields (e.g. ``circuit_breaker_state``, ``last_call_at``) land
+    without a schema migration."""
+
+    model_config = ConfigDict(extra="allow")
+    name: str
+    configured: bool
+    available: bool
+
+
+class ProviderActiveModel(BaseModel):
+    """Top-level `active` block in `GET /providers` (current MindConfig)."""
+
+    model_config = ConfigDict(extra="allow")
+    provider: str = ""
+    model: str = ""
+    fast_model: str = ""
+
+
+class ProvidersListResponse(BaseModel):
+    """Response of `GET /api/providers` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    providers: list[ProviderEntryModel] = []
+    active: ProviderActiveModel = ProviderActiveModel()
+    # Error-path fallback: when the engine isn't running the route emits
+    # `{"error": "..."}` with a 503 status; declared here so the typed
+    # consumer can branch on `data.error` instead of an opaque shape.
+    error: str | None = None
+
+
+class PricingInfoResponse(BaseModel):
+    """Response of `GET /api/providers/pricing-info` (Mission C C.4).
+
+    The ``source`` field is the contract surface for the dashboard
+    fallback banner: anything other than ``"exact"`` means cost
+    reports for this model are estimated, not authoritative."""
+
+    model_config = ConfigDict(extra="allow")
+    model: str = ""
+    provider: str = ""
+    input_per_1m_usd: float
+    output_per_1m_usd: float
+    source: str
+
+
+class ProviderUpdateResponse(BaseModel):
+    """Response of `PUT /api/providers` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    ok: bool
+    changes: dict[str, str] | None = None
+    error: str | None = None
+
+
+@router.get("/providers", response_model=ProvidersListResponse)
 async def get_providers(request: Request) -> JSONResponse:
     """LLM provider status, availability, and available models.
 
@@ -75,7 +134,7 @@ async def get_providers(request: Request) -> JSONResponse:
     return JSONResponse({"providers": providers_out, "active": active})
 
 
-@router.get("/providers/pricing-info")
+@router.get("/providers/pricing-info", response_model=PricingInfoResponse)
 async def get_pricing_info(
     request: Request,
     model: str | None = None,
@@ -131,7 +190,7 @@ async def get_pricing_info(
     )
 
 
-@router.put("/providers")
+@router.put("/providers", response_model=ProviderUpdateResponse)
 async def update_provider(request: Request) -> JSONResponse:
     """Change active LLM provider and model at runtime.
 
