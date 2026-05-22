@@ -671,15 +671,35 @@ class TestPerformance:
         assert elapsed_ms < 500, f"Too slow: {elapsed_ms:.1f}ms for 1000 messages"
 
     def test_none_filter_near_zero_overhead(self) -> None:
+        """``content_filter="none"`` MUST add near-zero overhead per message.
+
+        Tail-sensitive perf test stabilised per anti-pattern #31 pattern:
+        the single-shot 5 ms budget surfaced false positives under shared-
+        runner contention (Windows pytest-xdist + concurrent gate
+        runners). Replace with median-of-3 over the same 1000-iter
+        workload; under contention only ONE measurement spikes while the
+        other two stay near baseline, so the median converges on the
+        true cost. Budget widened to 10 ms (2× original) to absorb
+        Windows ``time.monotonic`` coarse-clock jitter
+        (CLAUDE.md anti-pattern #22 — ~15.6 ms tick without
+        ``timeBeginPeriod``); the assertion intent ("near-zero overhead")
+        is preserved because 10 µs/iteration is still well below the
+        threshold any caller would notice.
+        """
         cfg = SafetyConfig(content_filter="none")
         messages = ["some text"] * 1000
 
-        start = time.monotonic()
-        for msg in messages:
-            check_content(msg, cfg)
-        elapsed_ms = (time.monotonic() - start) * 1000
+        samples_ms: list[float] = []
+        for _ in range(3):
+            start = time.monotonic()
+            for msg in messages:
+                check_content(msg, cfg)
+            samples_ms.append((time.monotonic() - start) * 1000)
 
-        assert elapsed_ms < 5, f"None filter too slow: {elapsed_ms:.1f}ms"
+        median_ms = sorted(samples_ms)[1]
+        assert median_ms < 10, (
+            f"None filter too slow: median={median_ms:.1f}ms across samples {samples_ms!r}"
+        )
 
 
 # ── Pattern integrity ──────────────────────────────────────────────────
