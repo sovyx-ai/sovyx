@@ -126,7 +126,9 @@ class AnomalyDetector:
     __slots__ = (
         "_cooldown_s",
         "_error_factor",
-        "_error_window",
+        "_error_floor",
+        "_error_window_current",
+        "_error_window_previous",
         "_error_window_s",
         "_http_error_cooldown_s",
         "_http_error_count_threshold",
@@ -152,6 +154,11 @@ class AnomalyDetector:
         self._latency_factor = tuning.anomaly_latency_factor
         self._error_window_s = tuning.anomaly_error_rate_window_s
         self._error_factor = tuning.anomaly_error_rate_factor
+        # Mission B.3.P1 (B-P1-01 + B-P1-13) — operator-tunable floor on
+        # the previous-window baseline. Default 2 preserves the legacy
+        # ``previous < 2`` behavior (suppresses 0→1 noise); floor=0
+        # detects the FIRST burst from a quiet system.
+        self._error_floor = tuning.anomaly_error_rate_floor
         self._memory_window_s = tuning.anomaly_memory_growth_window_s
         self._memory_growth_pct = tuning.anomaly_memory_growth_pct
         self._cooldown_s = tuning.anomaly_cooldown_s
@@ -165,10 +172,31 @@ class AnomalyDetector:
 
         self._seen_events: set[str] = set()
         self._latency_per_event: dict[str, StreamingPercentile] = {}
-        # Timestamps of error-or-worse entries for rate-spike detection.
-        # Sized at 4× the window so historic baselines remain available
-        # for ratio calculation even after the active window fills.
-        self._error_window: deque[float] = deque(maxlen=max(100, self._error_window_s * 4))
+        # Mission B.3.P1 (B-P1-02) — dual-window split.
+        #
+        # Pre-mission used a SINGLE deque sized at 4× the window. Under a
+        # sustained storm exceeding ~4 errors/sec the deque saturated, the
+        # OLDEST baseline samples evicted, ``previous`` dropped toward
+        # zero, the ratio test never fired, and the detector went silent
+        # mid-storm. (Confidence-5 finding per Mission B audit §B1-F-002.)
+        #
+        # Post-mission: two independent deques, one per window.
+        # ``_error_window_current`` holds [now-window_s, now] timestamps
+        # for the active rate measurement; ``_error_window_previous``
+        # holds [now-2*window_s, now-window_s] for the baseline. Each
+        # bounded by ``max(1000, window_s * 100)`` so the explicit
+        # ``popleft()`` aging path in ``_observe_error`` ALWAYS runs
+        # before the deque saturates under any sane error storm
+        # (~100/s peak × any operator-configured window_s ≤ 3600s).
+        # The pre-mission single-deque path used ``max(100, window_s * 4)``
+        # which silently evicted promotion candidates at sustained 10/s
+        # on the default 60s window (the B-P1-02 root cause).
+        # ``maxlen`` is the SAFETY NET; the explicit aging is the
+        # PRIMARY mechanism — preserves window-boundary semantics
+        # independent of arrival rate.
+        _deque_cap = max(1000, self._error_window_s * 100)
+        self._error_window_current: deque[float] = deque(maxlen=_deque_cap)
+        self._error_window_previous: deque[float] = deque(maxlen=_deque_cap)
         # (timestamp_s, rss_bytes) snapshots for memory growth detection.
         self._rss_history: deque[tuple[float, int]] = deque(
             maxlen=max(20, self._memory_window_s // 5)
@@ -298,16 +326,66 @@ class AnomalyDetector:
         )
 
     def _observe_error(self, now: float) -> None:
+        # Mission B.3.P1 (B-P1-01 + B-P1-02 + B-P1-13) — dual-window
+        # accounting + operator-tunable floor.
+        #
+        # Aging: every observation first promotes timestamps that have
+        # aged past ``window_s`` (now stale-for-current, fresh-for-previous)
+        # OR past ``2*window_s`` (stale-for-both, drop). The ``current``
+        # deque appends every fresh observation; the ``previous`` deque
+        # receives promoted entries and gets pruned of doubly-stale ones.
+        # This preserves the LEFT edge of the previous-window even under
+        # sustained 10/s+ storms (the saturation regression that
+        # silenced the pre-mission single-deque path).
+        window_start = now - self._error_window_s
+        baseline_start = now - (self._error_window_s * 2)
         with self._lock:
-            self._error_window.append(now)
-            window_start = now - self._error_window_s
-            baseline_start = now - (self._error_window_s * 2)
-            current = sum(1 for ts in self._error_window if ts >= window_start)
-            previous = sum(1 for ts in self._error_window if baseline_start <= ts < window_start)
+            # Promote current → previous for ts that aged out of current.
+            while self._error_window_current and self._error_window_current[0] < window_start:
+                self._error_window_previous.append(self._error_window_current.popleft())
+            # Drop previous-window entries older than baseline_start.
+            while self._error_window_previous and self._error_window_previous[0] < baseline_start:
+                self._error_window_previous.popleft()
+            # Append fresh observation to the current window.
+            self._error_window_current.append(now)
+            current = len(self._error_window_current)
+            previous = len(self._error_window_previous)
 
-        # Need at least one previous-window sample to compute a ratio,
-        # plus a small floor on previous to suppress 0→1 noise spikes.
-        if previous < 2:  # noqa: PLR2004
+        # Operator-tunable floor (B-P1-01 + B-P1-13). Default 2 preserves
+        # the legacy ``previous < 2`` behavior (suppresses 0→1 noise);
+        # floor=0 lets the FIRST burst on a quiet system fire via the
+        # below ``previous == 0`` branch.
+        if previous == 0:
+            # Without a baseline we cannot compute a ratio. Two paths:
+            # (a) floor > 0 → suppress, same as pre-mission (the legacy
+            #     `previous < 2` collapsed to this branch for previous=0);
+            # (b) floor == 0 → operator opted in to detecting the FIRST
+            #     burst on a previously-quiet system. Emit when the
+            #     current window has at least ``ceil(factor)`` events
+            #     so the rate is at least the configured threshold.
+            if self._error_floor > 0:
+                return
+            if current < max(1, int(self._error_factor)):
+                return
+            # Synthesise a baseline of 1 so the emit's ``factor`` field
+            # is well-defined (current / 1 = current). Downstream
+            # operators reading ``anomaly.baseline_count == 0`` know
+            # this fired via the floor-0 quiet-start path.
+            self._emit(
+                "anomaly.error_rate_spike",
+                "_global",
+                now,
+                level="warning",
+                fields={
+                    "anomaly.window_s": self._error_window_s,
+                    "anomaly.current_count": current,
+                    "anomaly.baseline_count": 0,
+                    "anomaly.factor": float(current),
+                    "anomaly.floor": self._error_floor,
+                },
+            )
+            return
+        if previous < self._error_floor:
             return
         if current <= previous * self._error_factor:
             return
@@ -321,6 +399,10 @@ class AnomalyDetector:
                 "anomaly.current_count": current,
                 "anomaly.baseline_count": previous,
                 "anomaly.factor": round(current / max(1, previous), 3),
+                # Mission B.3.P1 — expose effective floor for operator
+                # post-mortems; helps distinguish "no fire because floor
+                # blocked" from "no fire because ratio insufficient".
+                "anomaly.floor": self._error_floor,
             },
         )
 

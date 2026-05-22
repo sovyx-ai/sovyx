@@ -2869,6 +2869,17 @@ class ObservabilityTuningConfig(BaseSettings):
     anomaly_latency_factor: float = Field(default=2.0, ge=1.1, le=100.0)
     anomaly_error_rate_window_s: int = Field(default=60, ge=5, le=3600)
     anomaly_error_rate_factor: float = Field(default=3.0, ge=1.1, le=100.0)
+    # Mission B.3.P1 (B-P1-01 + B-P1-13) — operator-tunable floor on the
+    # PREVIOUS-window baseline count required to fire
+    # ``anomaly.error_rate_spike``. Pre-mission the literal ``previous < 2``
+    # silently blocked 0→N and 1→N error storms — a previously-healthy
+    # service hitting its first outage produced ZERO anomaly events.
+    # ``floor=2`` preserves the historical default (suppresses 0→1 noise
+    # spikes); operators experiencing real outages with healthy baselines
+    # can set ``floor=0`` to detect the first burst from a quiet system.
+    # Range matches the literal ceiling enforced by Mission B audit
+    # §B-P1-01 closure (``ge=0, le=100``).
+    anomaly_error_rate_floor: int = Field(default=2, ge=0, le=100)
     anomaly_memory_growth_window_s: int = Field(default=300, ge=30, le=3600)
     anomaly_memory_growth_pct: float = Field(default=10.0, ge=1.0, le=100.0)
     anomaly_cooldown_s: int = Field(default=60, ge=1, le=3600)
