@@ -4,13 +4,32 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from sovyx.dashboard.routes._deps import verify_token
 
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
 
 
-@router.get("/conversations")
+class ConversationsListResponse(BaseModel):
+    """Response of `GET /api/conversations` (Mission C C.4).
+
+    Per-conversation entry shape varies by source; typed as opaque
+    dicts. Forward-additive via ``extra="allow"`` (anti-pattern #40)."""
+
+    model_config = ConfigDict(extra="allow")
+    conversations: list[dict[str, object]] = []
+
+
+class ConversationDetailResponse(BaseModel):
+    """Response of `GET /api/conversations/{id}` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    conversation_id: str
+    messages: list[dict[str, object]] = []
+
+
+@router.get("/conversations", response_model=ConversationsListResponse)
 async def get_conversations(
     request: Request,
     limit: int = Query(default=50, ge=0, le=500),
@@ -26,7 +45,10 @@ async def get_conversations(
     return JSONResponse({"conversations": []})
 
 
-@router.get("/conversations/{conversation_id}")
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=ConversationDetailResponse,
+)
 async def get_conversation_detail(
     request: Request,
     conversation_id: str,

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 from starlette.status import HTTP_202_ACCEPTED, HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
@@ -101,10 +102,47 @@ def _upload_extension(platform: str) -> str:
     return "zip" if _is_vault_platform(platform) else "json"
 
 
+class ConversationImportStartResponse(BaseModel):
+    """Response of `POST /api/import/conversations` (Mission C C.4).
+
+    Success path (202 Accepted): `job_id`, `platform`,
+    `conversations_total`. Error path (4xx/5xx): `error`.
+    Forward-additive via ``extra="allow"`` (anti-pattern #40)."""
+
+    model_config = ConfigDict(extra="allow")
+    job_id: str | None = None
+    platform: str | None = None
+    conversations_total: int | None = None
+    error: str | None = None
+
+
+class ConversationImportProgressResponse(BaseModel):
+    """Response of `GET /api/import/{job_id}/progress` (Mission C C.4).
+
+    All metric fields default-None so partial progress states (just
+    started, just completed, error path) all parse cleanly."""
+
+    model_config = ConfigDict(extra="allow")
+    job_id: str | None = None
+    platform: str | None = None
+    state: str | None = None
+    conversations_total: int | None = None
+    conversations_processed: int | None = None
+    conversations_skipped: int | None = None
+    episodes_created: int | None = None
+    concepts_learned: int | None = None
+    warnings: list[str] | None = None
+    error: str | None = None
+    elapsed_ms: int | None = None
+
+
 # ── POST /api/import/conversations ────────────────────────────────
 
 
-@router.post("/import/conversations")
+@router.post(
+    "/import/conversations",
+    response_model=ConversationImportStartResponse,
+)
 async def start_conversation_import(request: Request) -> JSONResponse:
     """Start a conversation-import background job.
 
@@ -251,7 +289,10 @@ async def start_conversation_import(request: Request) -> JSONResponse:
 # ── GET /api/import/{job_id}/progress ─────────────────────────────
 
 
-@router.get("/import/{job_id}/progress")
+@router.get(
+    "/import/{job_id}/progress",
+    response_model=ConversationImportProgressResponse,
+)
 async def get_conversation_import_progress(
     job_id: str,
     request: Request,

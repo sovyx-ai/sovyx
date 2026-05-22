@@ -6,13 +6,31 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from sovyx.dashboard.routes._deps import verify_token
 
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
 
 
-@router.get("/settings")
+class EngineSettingsResponse(BaseModel):
+    """Response of `GET /api/settings` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    log_level: str | None = None
+    data_dir: str | None = None
+
+
+class SettingsUpdateResponse(BaseModel):
+    """Response of `PUT /api/settings` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    ok: bool
+    changes: dict[str, str] | None = None
+    error: str | None = None
+
+
+@router.get("/settings", response_model=EngineSettingsResponse)
 async def get_settings(request: Request) -> JSONResponse:
     """Current engine settings."""
     from sovyx.dashboard.settings import get_settings as _get_settings
@@ -28,7 +46,7 @@ async def get_settings(request: Request) -> JSONResponse:
     return JSONResponse(_get_settings(config))
 
 
-@router.put("/settings")
+@router.put("/settings", response_model=SettingsUpdateResponse)
 async def update_settings(request: Request) -> JSONResponse:
     """Update mutable settings (e.g. log_level)."""
     from sovyx.dashboard.settings import apply_settings

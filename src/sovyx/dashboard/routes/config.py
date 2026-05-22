@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
@@ -11,7 +12,28 @@ from sovyx.dashboard.routes._deps import verify_token
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
 
 
-@router.get("/config")
+class MindConfigResponse(BaseModel):
+    """Response of `GET /api/config` (Mission C C.4).
+
+    The current mind configuration shape is rich (personality,
+    OCEAN, safety, brain, LLM, etc.) and evolves with mind features.
+    Typed as opaque top-level dict + `extra="allow"` for
+    forward-additive evolution (anti-pattern #40)."""
+
+    model_config = ConfigDict(extra="allow")
+    error: str | None = None
+
+
+class ConfigUpdateResponse(BaseModel):
+    """Response of `PUT /api/config` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    ok: bool
+    changes: dict[str, str] | None = None
+    error: str | None = None
+
+
+@router.get("/config", response_model=MindConfigResponse)
 async def get_config(request: Request) -> JSONResponse:
     """Current mind configuration (personality, OCEAN, safety, brain, LLM)."""
     from sovyx.dashboard.config import get_config as _get_config
@@ -26,7 +48,7 @@ async def get_config(request: Request) -> JSONResponse:
     return JSONResponse(_get_config(mind_config))
 
 
-@router.put("/config")
+@router.put("/config", response_model=ConfigUpdateResponse)
 async def update_config(request: Request) -> JSONResponse:
     """Update mutable mind config (personality, OCEAN, safety, name, language, timezone)."""
     from sovyx.dashboard.config import apply_config

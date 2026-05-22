@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 from starlette.responses import StreamingResponse
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
@@ -25,7 +26,23 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_token)])
 
 
-@router.post("/chat")
+class ChatResponse(BaseModel):
+    """Response of `POST /api/chat` (Mission C C.4).
+
+    Success path: `response`, `conversation_id`, `mind_id`,
+    `timestamp` + optional `tags`/`cost`. Error path: `error`
+    (carried alongside a 422/500 status). Forward-additive via
+    ``extra="allow"`` (anti-pattern #40)."""
+
+    model_config = ConfigDict(extra="allow")
+    response: str | None = None
+    conversation_id: str | None = None
+    mind_id: str | None = None
+    timestamp: str | None = None
+    error: str | None = None
+
+
+@router.post("/chat", response_model=ChatResponse)
 @trace_saga("dashboard_chat", kind="dashboard")
 async def chat(request: Request) -> JSONResponse:
     """Send a message and get AI response — no external channel needed.
