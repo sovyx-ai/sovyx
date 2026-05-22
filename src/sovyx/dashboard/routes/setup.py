@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
@@ -23,6 +23,48 @@ class ConfigureRequest(BaseModel):
     """Request body for plugin configuration."""
 
     config: dict[str, object]
+
+
+class SetupSchemaResponse(BaseModel):
+    """Response of `GET /api/setup/{plugin_name}/schema` (Mission C C.4).
+
+    Schema shape varies by plugin; typed as opaque dict via
+    extra="allow"."""
+
+    model_config = ConfigDict(extra="allow")
+    schema_: dict[str, object] | None = None
+    error: str | None = None
+
+
+class SetupTestConnectionResponse(BaseModel):
+    """Response of `POST /api/setup/{plugin_name}/test-connection`
+    (Mission C C.4). Mirrors the LLM test-connection shape."""
+
+    model_config = ConfigDict(extra="allow")
+    ok: bool
+    message: str | None = None
+    latency_ms: float | None = None
+    error: str | None = None
+
+
+class SetupConfigureResponse(BaseModel):
+    """Response of `POST /api/setup/{plugin_name}/configure` (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    ok: bool
+    plugin: str | None = None
+    error: str | None = None
+
+
+class SetupActionResponse(BaseModel):
+    """Shared response of `POST /api/setup/{plugin_name}/{enable,disable}`
+    (Mission C C.4)."""
+
+    model_config = ConfigDict(extra="allow")
+    ok: bool
+    plugin: str | None = None
+    status: str | None = None
+    error: str | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -43,7 +85,7 @@ async def _get_manager(request: Request) -> PluginManager | None:
 # ── Schema ───────────────────────────────────────────────────────────
 
 
-@router.get("/{plugin_name}/schema")
+@router.get("/{plugin_name}/schema", response_model=SetupSchemaResponse)
 async def get_setup_schema(
     request: Request,
     plugin_name: str,
@@ -77,7 +119,7 @@ async def get_setup_schema(
 # ── Test Connection ──────────────────────────────────────────────────
 
 
-@router.post("/{plugin_name}/test-connection")
+@router.post("/{plugin_name}/test-connection", response_model=SetupTestConnectionResponse)
 async def test_connection(
     request: Request,
     plugin_name: str,
@@ -123,7 +165,7 @@ async def test_connection(
 # ── Configure ────────────────────────────────────────────────────────
 
 
-@router.post("/{plugin_name}/configure")
+@router.post("/{plugin_name}/configure", response_model=SetupConfigureResponse)
 async def configure_plugin(
     request: Request,
     plugin_name: str,
@@ -194,7 +236,7 @@ async def configure_plugin(
 # ── Enable / Disable ────────────────────────────────────────────────
 
 
-@router.post("/{plugin_name}/enable")
+@router.post("/{plugin_name}/enable", response_model=SetupActionResponse)
 async def enable_plugin(
     request: Request,
     plugin_name: str,
@@ -221,7 +263,7 @@ async def enable_plugin(
     return JSONResponse({"ok": True, "plugin": plugin_name, "action": "enabled"})
 
 
-@router.post("/{plugin_name}/disable")
+@router.post("/{plugin_name}/disable", response_model=SetupActionResponse)
 async def disable_plugin(
     request: Request,
     plugin_name: str,
