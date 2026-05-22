@@ -78,7 +78,19 @@ from typing import Final
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_ROUTES_DIR = _REPO_ROOT / "src" / "sovyx" / "dashboard" / "routes"
-_DEFAULT_TEST_DIR = _REPO_ROOT / "tests" / "dashboard"
+# Mission C C.6 §1 follow-up — paired-test discovery covers BOTH the
+# unit ``tests/dashboard/`` tree (the original C2 §T4.1 scope) AND
+# the ``tests/integration/dashboard/`` tree where the post-A.1
+# resource-cohort + post-H4 boundary fixtures live. The two
+# directories are siblings of the same test category for the
+# purposes of producer/boundary parity; restricting the gate to one
+# of them produces false-uncovered verdicts (e.g. ResourceCohortMetrics
+# has 4 paired calls in tests/integration/dashboard/ but Gate 8
+# pre-widening reported it as uncovered).
+_DEFAULT_TEST_DIRS: Final[tuple[Path, ...]] = (
+    _REPO_ROOT / "tests" / "dashboard",
+    _REPO_ROOT / "tests" / "integration" / "dashboard",
+)
 
 _VALID_SCOPES: Final[frozenset[str]] = frozenset({"voice", "all"})
 
@@ -162,10 +174,10 @@ def find_model_validate_sites(
     return results
 
 
-def _model_has_paired_test(model_name: str, test_dir: Path) -> bool:
-    """Return True iff at least one ``.py`` file under *test_dir*
-    imports *model_name* AND exercises one of the two canonical
-    coverage patterns.
+def _model_has_paired_test(model_name: str, test_dirs: tuple[Path, ...]) -> bool:
+    """Return True iff at least one ``.py`` file under any of
+    *test_dirs* imports *model_name* AND exercises one of the two
+    canonical coverage patterns.
     """
     # Match either ``ModelName.model_validate(`` (direct round-trip)
     # OR ``assert_boundary_accepts(\s*ModelName,`` (shared helper).
@@ -173,21 +185,29 @@ def _model_has_paired_test(model_name: str, test_dir: Path) -> bool:
     helper_re = re.compile(
         rf"\bassert_boundary_accepts\s*\(\s*{re.escape(model_name)}\s*,",
     )
-    for path in test_dir.rglob("*.py"):
-        if path.name.startswith("_") and not path.name.startswith("__"):
-            # Skip private helpers (e.g. ``_boundary_helpers.py``); they
-            # MAY mention the model in a docstring but are not tests.
+    seen: set[Path] = set()
+    for test_dir in test_dirs:
+        if not test_dir.exists():
             continue
-        if path.name == "__init__.py":
-            continue
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if model_name not in content:
-            continue
-        if direct_re.search(content) or helper_re.search(content):
-            return True
+        for path in test_dir.rglob("*.py"):
+            if path in seen:
+                continue
+            seen.add(path)
+            if path.name.startswith("_") and not path.name.startswith("__"):
+                # Skip private helpers (e.g. ``_boundary_helpers.py``);
+                # they MAY mention the model in a docstring but are
+                # not tests.
+                continue
+            if path.name == "__init__.py":
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if model_name not in content:
+                continue
+            if direct_re.search(content) or helper_re.search(content):
+                return True
     return False
 
 
@@ -215,7 +235,7 @@ def _resolve_target_files(routes_root: Path, scope: str) -> list[Path]:
 
 def _scan(
     routes_root: Path,
-    test_dir: Path,
+    test_dirs: tuple[Path, ...],
     *,
     scope: str,
     strict: bool,
@@ -238,7 +258,7 @@ def _scan(
         report.sites.extend(sites)
     report.unique_models = sorted({s.model_name for s in report.sites})
     report.uncovered_models = [
-        model for model in report.unique_models if not _model_has_paired_test(model, test_dir)
+        model for model in report.unique_models if not _model_has_paired_test(model, test_dirs)
     ]
     return report
 
@@ -346,7 +366,8 @@ def _render_all_human(report: GateReport) -> str:
         verdict = "VIOLATIONS" if report.strict else "warn"
         lines.append(
             f"{len(report.uncovered_models)} uncovered model(s) — "
-            "no paired round-trip test in tests/dashboard/ "
+            "no paired round-trip test in tests/dashboard/ or "
+            "tests/integration/dashboard/ "
             f"(LENIENT default; --strict surfaces these as failures): {verdict}"
         )
         for model in report.uncovered_models:
@@ -382,16 +403,23 @@ def main(argv: list[str] | None = None) -> int:
         strict = args.strict or os.environ.get("SOVYX_C_GATE_STRICT") == "1"
 
     routes_root = args.scan_root or _DEFAULT_ROUTES_DIR
-    test_dir = args.test_dir or _DEFAULT_TEST_DIR
+    # ``--test-dir`` (single-path override, used by falsifiability
+    # tests) collapses to a 1-tuple; the production default fans out
+    # across ``_DEFAULT_TEST_DIRS`` (unit + integration dashboard
+    # subtrees) so paired tests in either location count.
+    test_dirs: tuple[Path, ...] = (
+        (args.test_dir,) if args.test_dir is not None else _DEFAULT_TEST_DIRS
+    )
 
     if not routes_root.exists():
         sys.stderr.write(f"FATAL: routes root missing: {routes_root}\n")
         return 1
-    if not test_dir.exists():
-        sys.stderr.write(f"FATAL: test dir missing: {test_dir}\n")
+    missing_dirs = [td for td in test_dirs if not td.exists()]
+    if len(missing_dirs) == len(test_dirs):
+        sys.stderr.write(f"FATAL: no test dir exists; checked: {[str(td) for td in test_dirs]}\n")
         return 1
 
-    report = _scan(routes_root, test_dir, scope=scope, strict=strict)
+    report = _scan(routes_root, test_dirs, scope=scope, strict=strict)
 
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))

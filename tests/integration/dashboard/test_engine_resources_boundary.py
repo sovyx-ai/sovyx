@@ -104,6 +104,64 @@ class TestEngineResourcesBoundaryRoundTrip:
         assert "cohort_governor.budget_state" in extra
         assert "cohort_governor.circuit_breaker_engaged" in extra
 
+    def test_gate8_all_scope_resource_cohort_metrics_pairing(self) -> None:
+        """Mission C C.6 §1 follow-up — explicit Gate 8 all-scope pairing.
+
+        ``check_boundary_round_trip_coverage --scope all`` LENIENT scan
+        identified ``ResourceCohortMetrics`` at
+        ``routes/engine_resources.py:198`` as uncovered until the gate's
+        ``_DEFAULT_TEST_DIRS`` was widened to include
+        ``tests/integration/dashboard/`` alongside ``tests/dashboard/``.
+
+        This test exists to be the *named* boundary-pairing anchor for
+        ``ResourceCohortMetrics``: a single explicit
+        ``ResourceCohortMetrics.model_validate(...)`` call with a
+        producer-mirror payload that the Gate 8 AST regex
+        (``\\bResourceCohortMetrics\\.model_validate\\s*\\(``) matches
+        unambiguously. Sibling tests above (lines 58, 79, 100, 127)
+        already exercise the same round-trip across realistic registry
+        states; this one pins the *contract* for future readers + the
+        gate's discoverability.
+
+        Anti-pattern #40 enforcement; no production code touched.
+        """
+        # Producer-mirror shape — mirrors what
+        # ``ResourceRegistry.snapshot_fields()`` emits at steady state
+        # (post-A.1 SSoT canonical key set; see
+        # ``src/sovyx/observability/_resource_registry.py``).
+        producer_payload: dict[str, object] = {
+            "process.open_files_status": "ok",
+            "process.connections_status": "ok",
+            "asyncio.all_task_names": ["snapshotter", "heartbeat"],
+            "asyncio.not_done_count": 2,
+            "asyncio.awaiting_count": 1,
+            "to_thread.pool_size_at_last_dispatch": 8,
+            "to_thread.queue_depth_at_last_dispatch": 0,
+            "to_thread.max_workers_at_last_dispatch": 16,
+            "to_thread.dispatch_count_total": 42,
+            "to_thread.dispatch_count_per_label": {"onnx": 30, "vad": 12},
+            "lock_dict.total_cardinality": 7,
+            "lock_dict.per_owner": {"bridge.conv_locks": 3, "voice.health": 4},
+            "lock_dict.instance_count": 2,
+            "onnx.session_count": 2,
+            "onnx.session_labels": ["brain.embedding", "voice.vad.silero"],
+            "gc.collections_by_gen": [5, 1, 0],
+            "gc.objects_count": 12345,
+            "tracemalloc.is_tracing": False,
+            "tracemalloc.current_kb": 0,
+            "tracemalloc.peak_kb": 0,
+            "exception_cohort.cumulative_retained_bytes_since_start": 0,
+            "exception_cohort.cumulative_distinct_group_id_count": 0,
+            "exception_cohort.window_retained_bytes": 0,
+            "exception_cohort.window_distinct_group_id_count": 0,
+        }
+        cohorts = ResourceCohortMetrics.model_validate(producer_payload)
+        # Canonical key reads land first-class typed (post-Phase C.2
+        # zod-twin completeness + producer parity).
+        assert cohorts.onnx_session_count == 2
+        assert cohorts.lock_dict_total_cardinality == 7
+        assert cohorts.to_thread_pool_size_at_last_dispatch == 8
+
     def test_to_thread_active_workers_lenient_shim_on_boundary(self) -> None:
         """MISSION-A.1.P3 F-006 (ADR-D15): LENIENT shim survives pydantic boundary.
 
