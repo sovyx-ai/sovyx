@@ -358,6 +358,7 @@ async def bootstrap(
             engine_config.log,
             engine_config.observability,
             data_dir=engine_config.data_dir,
+            engine_session_id_in_logs=engine_config.ox1.session_id_in_logs,
         )
 
         # 0.4. Metrics pipeline (Phase 11 Task 11.6).

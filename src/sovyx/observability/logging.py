@@ -227,6 +227,7 @@ def setup_logging(
     obs_config: ObservabilityConfig | None = None,
     *,
     data_dir: Path | None = None,
+    engine_session_id_in_logs: bool = False,
 ) -> None:
     """Configure structlog for the entire application.
 
@@ -288,13 +289,20 @@ def setup_logging(
         new pipeline is wired in.
     """
     with _setup_lock:
-        _setup_logging_locked(config, obs_config, data_dir)
+        _setup_logging_locked(
+            config,
+            obs_config,
+            data_dir,
+            engine_session_id_in_logs=engine_session_id_in_logs,
+        )
 
 
 def _setup_logging_locked(
     config: LoggingConfig,
     obs_config: ObservabilityConfig | None,
     data_dir: Path | None,
+    *,
+    engine_session_id_in_logs: bool = False,
 ) -> None:
     """Inner setup — called under ``_setup_lock``. Not part of public API."""
     global _setup_done, _async_writer, _data_dir  # noqa: PLW0603
@@ -359,7 +367,7 @@ def _setup_logging_locked(
         structlog.processors.StackInfoRenderer(),
     ]
     if obs_config is not None:
-        shared_processors.append(EnvelopeProcessor())
+        shared_processors.append(EnvelopeProcessor(session_id_alias=engine_session_id_in_logs))
     shared_processors.append(SecretMasker())
     # ExceptionTreeProcessor runs before PII/sampling/clamp so the
     # serialized chain (exc.message, exc.cause_chain entries) flows

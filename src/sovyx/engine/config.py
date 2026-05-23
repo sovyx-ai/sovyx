@@ -3308,6 +3308,41 @@ class ComplianceConfig(BaseModel):
     """
 
 
+class OX1Config(BaseSettings):
+    """Mission OX-1 (Operator Experience) feature flags.
+
+    OX-1.A introduces two independently-toggleable operator-surface
+    flags. Both default OFF per ``feedback_staged_adoption`` — the
+    foundation lands at v0.49.43 with no behavioural impact unless the
+    operator opts in. After one minor cycle of operator validation the
+    defaults may flip to True.
+
+    Splitting the two knobs lets an operator keep ``engine_session_id``
+    on every log line (forensic correlation, harmless additive context)
+    while suppressing the console summary if their orchestration captures
+    stdout for parsing.
+
+    Env vars: ``SOVYX_OX1__STARTUP_READINESS_ENABLED``,
+    ``SOVYX_OX1__SESSION_ID_IN_LOGS``.
+
+    Anchored: ``docs-internal/MISSION-OX1-OPERATOR-EXPERIENCE-RESEARCH-2026-05-23.md`` §8 + §20.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_OX1__")
+
+    startup_readiness_enabled: bool = False
+    """Print a 6-line readiness summary at the end of ``sovyx start`` —
+    LLM verdict, voice device + auto-resume status, embedding readiness,
+    degraded axis count, active ack count, engine session id. Reads
+    existing primitives only; never writes."""
+
+    session_id_in_logs: bool = False
+    """Add ``engine_session_id`` field to every structured log envelope
+    as an operator-friendly alias of ``service.instance.id`` (already on
+    every envelope per OTel semconv). When True, ``grep engine_session_id``
+    in ``sovyx.log`` groups all entries from the same boot."""
+
+
 class EngineConfig(BaseSettings):
     """Global Sovyx daemon configuration.
 
@@ -3342,6 +3377,7 @@ class EngineConfig(BaseSettings):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     compliance: ComplianceConfig = Field(default_factory=ComplianceConfig)
     plugins: PluginConfig = Field(default_factory=PluginConfig)
+    ox1: OX1Config = Field(default_factory=OX1Config)
 
     @model_validator(mode="after")
     def resolve_log_file(self) -> EngineConfig:

@@ -391,6 +391,20 @@ def start(
         await lifecycle.start()
 
         console.print("[bold green]Sovyx daemon started[/bold green]")
+        # Mission OX-1.A — operator-facing readiness summary.
+        # Gated by ``EngineConfig.ox1.startup_readiness_enabled``
+        # (default False per ``feedback_staged_adoption``). Reads
+        # existing primitives only; never writes; never raises.
+        # Wrapped in ``contextlib.suppress`` because a crashing
+        # summary must not block ``sovyx start`` (anti-pattern #27
+        # — canonical intentional-ignore).
+        if config.ox1.startup_readiness_enabled:
+            import contextlib
+
+            from sovyx.cli._startup_readiness import print_startup_readiness
+
+            with contextlib.suppress(Exception):
+                await print_startup_readiness(console, registry, mind_config)
         # v1.3 §4.8 L7 — surface any prior-session preflight warnings
         # before handing off to ``run_forever``. A user booting into a
         # session where the mixer is still saturated should not be

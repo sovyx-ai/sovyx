@@ -109,7 +109,7 @@ class EnvelopeProcessor:
 
     __slots__ = ("_cached", "_counter")
 
-    def __init__(self) -> None:
+    def __init__(self, *, session_id_alias: bool = False) -> None:
         # Envelope (legacy contract) fields stay verbatim — schema
         # ``ENVELOPE_FIELDS`` and the dashboard query layer key off
         # ``host`` / ``process_id`` / ``sovyx_version``. Renaming
@@ -117,6 +117,14 @@ class EnvelopeProcessor:
         # twins below ride alongside as ``extra="allow"`` payload
         # keys, so log forwarders that consume semconv get the
         # canonical names without extra translation.
+        #
+        # Mission OX-1.A — ``session_id_alias`` (gated by
+        # ``EngineConfig.ox1.session_id_in_logs``, default False) adds
+        # ``engine_session_id`` as an operator-friendly alias of
+        # ``service.instance.id``. The OTel-canonical key remains
+        # authoritative; the alias is a `grep` ergonomic for
+        # ``sovyx.log``. No new value computed — both keys map to the
+        # same ``SERVICE_INSTANCE_ID``.
         self._cached: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "process_id": os.getpid(),
@@ -130,6 +138,8 @@ class EnvelopeProcessor:
             "process.runtime.name": sys.implementation.name,
             "process.runtime.version": platform.python_version(),
         }
+        if session_id_alias:
+            self._cached["engine_session_id"] = SERVICE_INSTANCE_ID
         self._counter: Iterator[int] = itertools.count()
 
     def __call__(
