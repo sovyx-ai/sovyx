@@ -473,6 +473,16 @@ async def _apply_provider(
 
             _persist_to_yaml(mind_config, mind_yaml_path)
 
+    # LIVE-1 Bug A — synchronous degraded-axis clear-edge. The boot-time LLM
+    # discovery may have recorded axis="llm" (no_provider_configured) in the
+    # composite store. Hot-registering a provider above does NOT itself clear
+    # that entry, and the periodic liveness probe can mask the recovery when
+    # it lands inside the boot→first-tick window. Re-scan + dispatch now (via
+    # the probe's shared SSoT) so the verdict — and any clear_axis("llm") —
+    # reflects the new provider within this request. Observability-only:
+    # never fail the onboarding action on a refresh hiccup.
+    await _refresh_llm_discovery(request)
+
     logger.info("onboarding_provider_configured", provider=provider_name, model=model)
     return JSONResponse(
         {
@@ -481,6 +491,33 @@ async def _apply_provider(
             "model": model,
         }
     )
+
+
+async def _refresh_llm_discovery(request: Request) -> None:
+    """Trigger an immediate LLM discovery re-scan + composite-store dispatch.
+
+    Resolves the registered :class:`LLMLivenessProbe` and calls
+    :meth:`refresh_now`, which re-scans provider health and routes the verdict
+    through ``dispatch_llm_discovery_verdict`` (the same SSoT the boot path
+    uses). Best-effort — a missing registry/probe or a transient scan error
+    must not turn a successful provider configuration into a failed request.
+    """
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return
+    try:
+        from sovyx.engine._llm_liveness_probe import LLMLivenessProbe
+
+        if not registry.is_registered(LLMLivenessProbe):
+            return
+        probe = await registry.resolve(LLMLivenessProbe)
+        await probe.refresh_now()
+    except Exception as exc:  # noqa: BLE001 — refresh is observability-only
+        logger.warning(
+            "onboarding_llm_refresh_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 def _persist_channel_token(request: Request, token: str) -> None:

@@ -925,6 +925,11 @@ async def bootstrap(
                 ollama_provider=ollama_provider,
                 config=llm_tuning,
                 mind_config=mind_config,
+                # LIVE-1 Bug A — seed the probe with the boot verdict so its
+                # first tick is a real transition check; a provider configured
+                # in the boot→first-tick window then clears axis="llm" instead
+                # of being masked by silent baselining.
+                boot_verdict=_discovery_report.verdict,
             )
             await llm_liveness_probe.start()
             _closables.append(llm_liveness_probe)

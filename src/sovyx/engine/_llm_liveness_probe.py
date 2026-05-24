@@ -92,17 +92,32 @@ class LLMLivenessProbe:
         ollama_provider: OllamaProvider,
         config: LLMTuningConfig,
         mind_config: MindConfig,
+        boot_verdict: DiscoveryVerdict | None = None,
     ) -> None:
         self._router = router
         self._ollama = ollama_provider
         self._config = config
         self._mind_config = mind_config
         self._task: asyncio.Task[None] | None = None
-        self._last_verdict: DiscoveryVerdict | None = None
+        # LIVE-1 Bug A — first-tick reconciliation. Seed ``_last_verdict``
+        # with the verdict the boot-time dispatch already recorded so the
+        # FIRST probe tick is compared against it (a real transition check)
+        # instead of silently baselining. Without this, a recovery that
+        # lands in the boot→first-tick window (e.g. the operator configures
+        # a provider via onboarding within the liveness interval) is masked:
+        # the probe's first observation is already healthy, ``previous is
+        # None`` returns without dispatch, and ``clear_axis("llm")`` never
+        # fires — leaving a stale "no provider configured" banner forever.
+        self._last_verdict: DiscoveryVerdict | None = boot_verdict
         # Monotonic timestamp when the CURRENT non-FULLY_AVAILABLE verdict
         # was first observed. Used by the grace-period filter to suppress
-        # transient blips.
-        self._unhealthy_first_observed: float | None = None
+        # transient blips. Armed at construction when the boot verdict is
+        # already unhealthy so the grace window measures from boot.
+        self._unhealthy_first_observed: float | None = (
+            time.monotonic()
+            if boot_verdict is not None and boot_verdict is not DiscoveryVerdict.FULLY_AVAILABLE
+            else None
+        )
         self._running = False
         # Mission C6 §T4.2 — optional callback wired by bootstrap.py to
         # propagate verdict transitions to the CogLoopGate's
@@ -174,8 +189,13 @@ class LLMLivenessProbe:
                     extra={"error": str(exc), "error_type": type(exc).__name__},
                 )
 
-    async def _tick(self) -> None:
-        """Single probe tick — refreshes the discovery report + maybe dispatches.
+    async def _scan(self) -> LLMRouterDiscoveryReport:
+        """Ping Ollama, compute a fresh discovery report, refresh the cache.
+
+        Shared by :meth:`_tick` (transition-gated dispatch) and
+        :meth:`refresh_now` (unconditional dispatch). Pure observation —
+        does NOT dispatch to the composite store; the caller decides the
+        dispatch discipline.
 
         Tick atomicity: an Ollama ping that takes > liveness_check_interval_sec
         would naturally cause the next tick to start late — that's acceptable;
@@ -197,8 +217,38 @@ class LLMLivenessProbe:
             cloud_key_validation_results=None,
         )
         self._router.update_discovery_report(report)
+        return report
 
+    async def _tick(self) -> None:
+        """Single probe tick — refreshes the discovery report + maybe dispatches."""
+        report = await self._scan()
         self._maybe_dispatch_transition(report)
+
+    async def refresh_now(self) -> None:
+        """Re-scan + UNCONDITIONALLY dispatch the current verdict.
+
+        LIVE-1 Bug A synchronous clear-edge. Called immediately after a
+        provider is hot-registered (e.g. via the dashboard onboarding flow)
+        so the composite-store ``llm`` axis reflects the new state within the
+        same request instead of waiting up to one liveness interval. Routes
+        through the shared :func:`dispatch_llm_discovery_verdict` SSoT, so a
+        recovered verdict (``FULLY_AVAILABLE``) clears ``axis="llm"`` via the
+        same path the boot dispatch used (anti-pattern #54 record/clear
+        pairing). The grace-period filter is intentionally bypassed: an
+        explicit operator configuration action is not a transient blip.
+        Observability-only — never raises into the caller.
+        """
+        report = await self._scan()
+        dispatch_llm_discovery_verdict(report)
+        self._last_verdict = report.verdict
+        self._unhealthy_first_observed = (
+            None if report.verdict is DiscoveryVerdict.FULLY_AVAILABLE else time.monotonic()
+        )
+        logger.info(
+            "llm.liveness_probe.refreshed",
+            extra={"verdict": report.verdict.value},
+        )
+        self._propagate_dependency_state(report.verdict)
 
     def _maybe_dispatch_transition(self, report: LLMRouterDiscoveryReport) -> None:
         """Compare against ``_last_verdict``; dispatch on transition with grace filter."""
@@ -261,22 +311,30 @@ class LLMLivenessProbe:
         else:
             self._unhealthy_first_observed = time.monotonic()
 
-        # Mission C6 §T4.2 — propagate to the gate's dependency_ready_event
-        # so the cognitive-loop worker pauses on degraded states + resumes
-        # on recovery. "Ready" means the router has at least one available
-        # provider; treat PARTIAL_HEALTH as ready (routing continues).
-        if self._dependency_state_callback is not None:
-            ready = new_verdict in (
-                DiscoveryVerdict.FULLY_AVAILABLE,
-                DiscoveryVerdict.PARTIAL_HEALTH,
+        self._propagate_dependency_state(new_verdict)
+
+    def _propagate_dependency_state(self, verdict: DiscoveryVerdict) -> None:
+        """Notify the cognitive-loop gate of the current dependency state.
+
+        Mission C6 §T4.2 — propagate to the gate's ``dependency_ready_event``
+        so the cognitive-loop worker pauses on degraded states + resumes on
+        recovery. "Ready" means the router has at least one available
+        provider; treat PARTIAL_HEALTH as ready (routing continues). Shared by
+        :meth:`_maybe_dispatch_transition` and :meth:`refresh_now`.
+        """
+        if self._dependency_state_callback is None:
+            return
+        ready = verdict in (
+            DiscoveryVerdict.FULLY_AVAILABLE,
+            DiscoveryVerdict.PARTIAL_HEALTH,
+        )
+        try:
+            self._dependency_state_callback(ready)
+        except Exception as exc:  # noqa: BLE001 — callback failure must not break the probe
+            logger.warning(
+                "llm.liveness_probe.callback_failed",
+                extra={"error": str(exc), "ready": ready},
             )
-            try:
-                self._dependency_state_callback(ready)
-            except Exception as exc:  # noqa: BLE001 — callback failure must not break the probe
-                logger.warning(
-                    "llm.liveness_probe.callback_failed",
-                    extra={"error": str(exc), "ready": ready},
-                )
 
 
 __all__ = ["LLMLivenessProbe"]

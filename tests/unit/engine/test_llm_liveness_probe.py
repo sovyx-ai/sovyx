@@ -14,9 +14,37 @@ from sovyx.engine._degraded_store import (
     get_default_degraded_store,
     reset_default_degraded_store,
 )
+from sovyx.engine._llm_dispatch import dispatch_llm_discovery_verdict
 from sovyx.engine._llm_liveness_probe import LLMLivenessProbe
 from sovyx.engine.config import LLMTuningConfig
-from sovyx.llm._provider_health import DiscoveryVerdict
+from sovyx.llm._provider_health import DiscoveryVerdict, scan_llm_provider_health
+
+# All cloud-LLM env vars the discovery scanner reads — cleared in tests that
+# assert NO_PROVIDER_CONFIGURED so an operator key in the CI shell can't leak.
+_CLOUD_KEY_ENV_VARS = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "XGROK_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "MISTRAL_API_KEY",
+    "GROQ_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+)
+
+
+def _record_boot_no_provider() -> None:
+    """Simulate the boot-time dispatch that records ``axis="llm"``."""
+    report = scan_llm_provider_health(
+        env={},
+        ollama_ping_result=False,
+        ollama_models=None,
+        default_provider="",
+        default_model="",
+    )
+    assert report.verdict is DiscoveryVerdict.NO_PROVIDER_CONFIGURED
+    dispatch_llm_discovery_verdict(report)
 
 
 @pytest.fixture(autouse=True)
@@ -218,3 +246,125 @@ class TestSameVerdictNoTransition:
         await probe._tick()
         # Both healthy — no store entries.
         assert get_default_degraded_store().snapshot() == []
+
+
+class TestBootVerdictReconciliation:
+    """LIVE-1 Bug A — Edge 2. Seeding the probe with the boot verdict makes the
+    FIRST tick a real transition check, so a recovery that lands in the
+    boot→first-tick window is not masked by silent baselining."""
+
+    @pytest.mark.asyncio
+    async def test_seeded_boot_verdict_clears_axis_on_first_tick_recovery(self) -> None:
+        _record_boot_no_provider()
+        assert len(get_default_degraded_store().snapshot()) == 1
+        probe = LLMLivenessProbe(
+            router=_make_router(),
+            ollama_provider=_make_ollama(is_available=True, models=["a:b"]),
+            config=_make_tuning(grace_sec=0.0),
+            mind_config=_make_mind_config(),
+            boot_verdict=DiscoveryVerdict.NO_PROVIDER_CONFIGURED,
+        )
+        # First tick observes FULLY_AVAILABLE; previous=boot NO_PROVIDER →
+        # transition → clear_axis("llm").
+        await probe._tick()
+        assert get_default_degraded_store().snapshot() == []
+        assert probe._last_verdict is DiscoveryVerdict.FULLY_AVAILABLE
+
+    @pytest.mark.asyncio
+    async def test_unseeded_first_tick_masks_recovery_regression_guard(self) -> None:
+        """Contrast guard: WITHOUT the boot-verdict seed (legacy behavior) the
+        first tick silently baselines and the boot entry stays stuck — this is
+        the exact LIVE-1 stale-banner bug. Documents why the seed is required."""
+        _record_boot_no_provider()
+        probe = LLMLivenessProbe(
+            router=_make_router(),
+            ollama_provider=_make_ollama(is_available=True, models=["a:b"]),
+            config=_make_tuning(grace_sec=0.0),
+            mind_config=_make_mind_config(),
+        )  # boot_verdict defaults to None → legacy masking path
+        await probe._tick()
+        assert len(get_default_degraded_store().snapshot()) == 1
+
+    @pytest.mark.asyncio
+    async def test_seeded_same_verdict_no_thrash(self) -> None:
+        """Seeded boot verdict + first tick still NO_PROVIDER → no duplicate
+        dispatch; the boot entry remains untouched."""
+        _record_boot_no_provider()
+        probe = LLMLivenessProbe(
+            router=_make_router(),
+            ollama_provider=_make_ollama(is_available=False),
+            config=_make_tuning(grace_sec=0.0),
+            mind_config=_make_mind_config(),
+            boot_verdict=DiscoveryVerdict.NO_PROVIDER_CONFIGURED,
+        )
+        await probe._tick()
+        snap = get_default_degraded_store().snapshot()
+        assert len(snap) == 1
+        assert snap[0].reason == "no_provider_configured"
+
+
+class TestRefreshNow:
+    """LIVE-1 Bug A — Edge 1. ``refresh_now`` re-scans and dispatches the
+    current verdict UNCONDITIONALLY (bypassing the transition gate) so a
+    hot-registered provider clears ``axis="llm"`` synchronously."""
+
+    @pytest.mark.asyncio
+    async def test_refresh_now_clears_axis_on_recovery(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _record_boot_no_provider()
+        assert len(get_default_degraded_store().snapshot()) == 1
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        router = _make_router()
+        probe = LLMLivenessProbe(
+            router=router,
+            ollama_provider=_make_ollama(is_available=False),
+            config=_make_tuning(grace_sec=0.0),
+            mind_config=_make_mind_config(default_provider="openai", default_model="gpt-4o"),
+            boot_verdict=DiscoveryVerdict.NO_PROVIDER_CONFIGURED,
+        )
+        await probe.refresh_now()
+        assert get_default_degraded_store().snapshot() == []
+        assert probe._last_verdict is DiscoveryVerdict.FULLY_AVAILABLE
+        assert router.update_discovery_report.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_now_records_when_still_no_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for var in _CLOUD_KEY_ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
+        probe = LLMLivenessProbe(
+            router=_make_router(),
+            ollama_provider=_make_ollama(is_available=False),
+            config=_make_tuning(grace_sec=0.0),
+            mind_config=_make_mind_config(),
+        )
+        await probe.refresh_now()
+        snap = get_default_degraded_store().snapshot()
+        assert len(snap) == 1
+        assert snap[0].axis == "llm"
+        assert snap[0].reason == "no_provider_configured"
+
+    @pytest.mark.asyncio
+    async def test_refresh_now_dispatches_unconditionally_even_same_verdict(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No transition gating: refresh dispatches even when the freshly
+        scanned verdict equals ``_last_verdict`` — an explicit operator action
+        is not a blip to debounce."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        probe = LLMLivenessProbe(
+            router=_make_router(),
+            ollama_provider=_make_ollama(is_available=False),
+            config=_make_tuning(grace_sec=0.0),
+            mind_config=_make_mind_config(default_provider="openai", default_model="gpt-4o"),
+        )
+        probe._last_verdict = DiscoveryVerdict.FULLY_AVAILABLE  # already healthy
+        seen: list[DiscoveryVerdict] = []
+        monkeypatch.setattr(
+            "sovyx.engine._llm_liveness_probe.dispatch_llm_discovery_verdict",
+            lambda report: seen.append(report.verdict),
+        )
+        await probe.refresh_now()
+        assert seen == [DiscoveryVerdict.FULLY_AVAILABLE]

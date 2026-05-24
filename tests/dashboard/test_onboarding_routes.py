@@ -164,6 +164,120 @@ class TestConfigureProvider:
         assert data["model"] == "llama3.1:latest"
 
 
+class TestProviderConfigClearsDegradedAxis:
+    """LIVE-1 Bug A regression — boot-no-provider → onboarding configure →
+    ``axis="llm"`` clears in the SAME request via the synchronous clear-edge.
+
+    Before the fix the boot-time ``no_provider_configured`` composite-store
+    entry survived a successful provider hot-register (the dashboard kept
+    reporting "no provider configured" for the process lifetime). This test
+    drives the real route + a real ``LLMLivenessProbe.refresh_now`` and asserts
+    the entry is gone.
+    """
+
+    def test_cloud_provider_config_clears_llm_axis(
+        self, client: TestClient, app, tmp_path, monkeypatch
+    ) -> None:
+        import os
+
+        import sovyx.dashboard.routes.onboarding as onboarding_mod
+        from sovyx.engine._degraded_store import (
+            get_default_degraded_store,
+            reset_default_degraded_store,
+        )
+        from sovyx.engine._llm_dispatch import dispatch_llm_discovery_verdict
+        from sovyx.engine._llm_liveness_probe import LLMLivenessProbe
+        from sovyx.engine.config import LLMTuningConfig
+        from sovyx.llm._provider_health import (
+            DiscoveryVerdict,
+            scan_llm_provider_health,
+        )
+        from sovyx.llm.router import LLMRouter
+
+        # Persist API key into a temp data_dir (never the real home).
+        app.state.data_dir = str(tmp_path)
+
+        cloud_keys = (
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_API_KEY",
+            "XGROK_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "MISTRAL_API_KEY",
+            "GROQ_API_KEY",
+            "TOGETHER_API_KEY",
+            "FIREWORKS_API_KEY",
+        )
+        for var in cloud_keys:
+            monkeypatch.delenv(var, raising=False)
+
+        reset_default_degraded_store()
+        try:
+            # 1. Simulate the boot dispatch that recorded the banner.
+            boot_report = scan_llm_provider_health(
+                env={},
+                ollama_ping_result=False,
+                ollama_models=None,
+                default_provider="",
+                default_model="",
+            )
+            dispatch_llm_discovery_verdict(boot_report)
+            assert len(get_default_degraded_store().snapshot()) == 1
+
+            # 2. Wire a router + a REAL liveness probe into the registry.
+            router_mock = MagicMock()
+            router_mock._providers = []
+            router_mock.add_provider = MagicMock()
+            router_mock.update_discovery_report = MagicMock()
+
+            ollama = MagicMock()
+            ollama.is_available = False
+            ollama.ping = AsyncMock(return_value=False)
+            ollama.list_models = AsyncMock(return_value=[])
+
+            probe = LLMLivenessProbe(
+                router=router_mock,
+                ollama_provider=ollama,
+                config=LLMTuningConfig(),
+                mind_config=app.state.mind_config,
+                boot_verdict=DiscoveryVerdict.NO_PROVIDER_CONFIGURED,
+            )
+
+            async def _resolve(interface):
+                return {LLMRouter: router_mock, LLMLivenessProbe: probe}[interface]
+
+            app.state.registry.is_registered = MagicMock(return_value=True)
+            app.state.registry.resolve = AsyncMock(side_effect=_resolve)
+
+            # 3. Avoid a live key-validation network call.
+            provider_instance = MagicMock()
+            provider_instance.name = "openai"
+            monkeypatch.setattr(
+                onboarding_mod, "_create_provider", lambda *a, **k: provider_instance
+            )
+
+            async def _ok(_provider):
+                return (True, "validated")
+
+            monkeypatch.setattr(onboarding_mod, "_test_provider", _ok)
+
+            # 4. Drive the real onboarding route.
+            resp = client.post(
+                "/api/onboarding/provider",
+                json={"provider": "openai", "api_key": "sk-test", "model": "gpt-4o"},
+            )
+            assert resp.status_code == 200  # noqa: PLR2004
+            assert resp.json()["ok"] is True
+
+            # 5. Synchronous clear-edge: refresh_now re-scanned os.environ (the
+            #    route hot-set OPENAI_API_KEY) → FULLY_AVAILABLE → clear_axis.
+            assert get_default_degraded_store().snapshot() == []
+            router_mock.add_provider.assert_called_once_with(provider_instance)
+        finally:
+            reset_default_degraded_store()
+            os.environ.pop("OPENAI_API_KEY", None)
+
+
 class TestConfigurePersonality:
     """POST /api/onboarding/personality."""
 
