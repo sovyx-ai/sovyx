@@ -1410,6 +1410,12 @@ export const VoiceQualitySnapshotResponseSchema = z.object({
   noise_floor: VoiceNoiseFloorBlockSchema,
   agc2: VoiceAgc2BlockSchema.nullable(),
   dnsmos_extras_installed: z.boolean(),
+  // LIVE-2 DNSMOS wire-up — quality mode + live DNSMOS overall MOS.
+  // ``.default(...)`` keeps payloads from older daemons (no field) parseable.
+  quality_mode: z
+    .enum(["dnsmos_unavailable", "dnsmos_inactive", "dnsmos_live"])
+    .default("dnsmos_unavailable"),
+  dnsmos_ovrl_mos: z.number().nullable().default(null),
 });
 
 /* ── Mind management runtime schemas ──

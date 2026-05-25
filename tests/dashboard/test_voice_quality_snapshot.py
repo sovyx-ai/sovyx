@@ -202,3 +202,107 @@ class TestDnsmosFlag:
         monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
         data = client.get("/api/voice/quality-snapshot").json()
         assert data["dnsmos_extras_installed"] is False
+
+
+class TestQualityMode:
+    """LIVE-2 DNSMOS wire-up — quality_mode is the SSoT the panel uses to
+    decide whether it may claim live DNN inference."""
+
+    @staticmethod
+    def _spec_for(*present: str):
+        def fake_find_spec(name: str, *args: object, **kwargs: object) -> object | None:
+            return object() if name in present else None
+
+        return fake_find_spec
+
+    def test_unavailable_when_speechmos_absent(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import importlib.util
+
+        monkeypatch.setattr(importlib.util, "find_spec", self._spec_for())
+        data = client.get("/api/voice/quality-snapshot").json()
+        assert data["quality_mode"] == "dnsmos_unavailable"
+        assert data["dnsmos_ovrl_mos"] is None
+        assert data["dnsmos_extras_installed"] is False
+
+    def test_inactive_when_installed_but_engine_off(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # speechmos present, but no engine_config / engine off → installed
+        # but NOT producing live scores. The panel must show the SNR proxy.
+        import importlib.util
+
+        monkeypatch.setattr(importlib.util, "find_spec", self._spec_for("speechmos"))
+        data = client.get("/api/voice/quality-snapshot").json()
+        assert data["quality_mode"] == "dnsmos_inactive"
+        assert data["dnsmos_ovrl_mos"] is None
+        assert data["dnsmos_extras_installed"] is True
+
+    def test_live_when_engine_on_and_estimator_scores(
+        self, app, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import importlib.util
+        from types import SimpleNamespace
+
+        import numpy as np
+
+        from sovyx.voice._capture_task import AudioCaptureTask
+        from sovyx.voice._quality_metrics import QualityScore
+
+        monkeypatch.setattr(importlib.util, "find_spec", self._spec_for("speechmos"))
+        # Opt-in gate ON (default is OFF — staged adoption).
+        app.state.engine_config = SimpleNamespace(
+            tuning=SimpleNamespace(
+                voice=SimpleNamespace(
+                    voice_quality_metrics_enabled=True,
+                    voice_quality_engine="dnsmos",
+                ),
+            ),
+        )
+        # Capture task registered with recent audio; ``_normalizer=None`` so
+        # the AGC2 block stays null and doesn't touch a MagicMock.
+        capture_task = MagicMock()
+        capture_task._normalizer = None
+        capture_task.tap_recent_frames = AsyncMock(
+            return_value=np.zeros(16_000, dtype=np.int16),
+        )
+        # Pre-seed a ready estimator so the background build is skipped.
+        estimator = MagicMock()
+        estimator.score = MagicMock(return_value=QualityScore(ovrl=4.1))
+        app.state.voice_dnsmos_estimator = estimator
+        app.state.registry.is_registered = lambda cls: cls is AudioCaptureTask
+        app.state.registry.resolve = AsyncMock(return_value=capture_task)
+
+        data = client.get("/api/voice/quality-snapshot").json()
+        assert data["quality_mode"] == "dnsmos_live"
+        assert data["dnsmos_ovrl_mos"] == 4.1  # noqa: PLR2004
+
+    def test_live_falls_back_to_inactive_when_estimator_not_ready(
+        self, app, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Engine on + extras present but the estimator is still building
+        # (background) → inactive this poll, NOT a fabricated live score.
+        import importlib.util
+        from types import SimpleNamespace
+
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        monkeypatch.setattr(importlib.util, "find_spec", self._spec_for("speechmos"))
+        app.state.engine_config = SimpleNamespace(
+            tuning=SimpleNamespace(
+                voice=SimpleNamespace(
+                    voice_quality_metrics_enabled=True,
+                    voice_quality_engine="dnsmos",
+                ),
+            ),
+        )
+        capture_task = MagicMock()
+        capture_task._normalizer = None
+        app.state.registry.is_registered = lambda cls: cls is AudioCaptureTask
+        app.state.registry.resolve = AsyncMock(return_value=capture_task)
+        # No app.state.voice_dnsmos_estimator → build kicked off, None returned.
+
+        data = client.get("/api/voice/quality-snapshot").json()
+        assert data["quality_mode"] == "dnsmos_inactive"
+        assert data["dnsmos_ovrl_mos"] is None

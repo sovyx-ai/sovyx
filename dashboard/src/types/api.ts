@@ -1683,6 +1683,9 @@ export interface VoiceQualitySnapshotResponse {
   noise_floor: VoiceNoiseFloorBlock;
   agc2: VoiceAgc2Block | null;
   dnsmos_extras_installed: boolean;
+  // LIVE-2 DNSMOS wire-up — quality mode + live DNSMOS overall MOS.
+  quality_mode: "dnsmos_unavailable" | "dnsmos_inactive" | "dnsmos_live";
+  dnsmos_ovrl_mos: number | null;
 }
 
 /* ── Mind management — POST /api/mind/{mind_id}/forget ──

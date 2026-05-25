@@ -726,9 +726,11 @@
       "proxyDisclaimerTitle": "SNR-proxy mode (DNSMOS extras not installed)",
       "proxyDisclaimerBody": "Sovyx ships without the optional ``dnsmos`` extras because the package is large + Windows-build-flaky. Until you install them, the MOS reading above is an SNR-derived estimate, NOT a real DNSMOS DNN inference. To enable true DNSMOS:",
       "proxyDisclaimerStep1": "<0>pip install \"sovyx[voice-quality]\"</0> (or your package manager equivalent).",
-      "proxyDisclaimerStep2": "Restart the daemon. The endpoint flips ``dnsmos_extras_installed`` to ``true`` on the next poll and this disclaimer disappears.",
+      "proxyDisclaimerStep2": "Restart the daemon and enable the DNSMOS engine (set ``voice_quality_metrics_enabled=true`` + ``voice_quality_engine=dnsmos``). Until live scoring runs the panel shows \"installed but inactive\".",
       "proxyDisclaimerStep3": "The DNSMOS T4.23-T4.30 wire-up sequence (heartbeat p50/p95, alert thresholds 3.5 / 3.0, bucketing, drift) is operator-gated to keep the SNR-proxy path simple for users who don't care about DNN-based MOS.",
-      "dnsmosLiveBadge": "DNSMOS extras detected — reading is live DNN inference."
+      "dnsmosLiveBadge": "DNSMOS active — reading is live DNN inference.",
+      "dnsmosInactiveTitle": "DNSMOS installed but inactive",
+      "dnsmosInactiveBody": "The speechmos extras are installed, but live DNSMOS scoring isn't running yet (the quality engine is off, the model is still warming up, or there's no recent audio). The MOS above is still an SNR-derived proxy — NOT a DNN inference."
     },
     "drift": {
       "title": "Noise-floor drift baseline",

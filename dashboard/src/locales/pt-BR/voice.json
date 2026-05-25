@@ -728,7 +728,9 @@
       "proxyDisclaimerStep1": "<0>pip install \"sovyx[voice-quality]\"</0> (ou equivalente do seu gerenciador de pacotes).",
       "proxyDisclaimerStep2": "Reinicie o daemon. O endpoint vira ``dnsmos_extras_installed`` para ``true`` no próximo poll e este aviso desaparece.",
       "proxyDisclaimerStep3": "A sequência de wire-up DNSMOS T4.23-T4.30 (heartbeat p50/p95, limites de alerta 3.5 / 3.0, bucketing, drift) é gateada pelo operador para manter o caminho SNR-proxy simples para quem não se importa com MOS baseado em DNN.",
-      "dnsmosLiveBadge": "Extras DNSMOS detectados — leitura é inferência DNN ao vivo."
+      "dnsmosLiveBadge": "DNSMOS ativo — a leitura é inferência DNN ao vivo.",
+      "dnsmosInactiveTitle": "DNSMOS instalado mas inativo",
+      "dnsmosInactiveBody": "Os extras do speechmos estão instalados, mas a pontuação DNSMOS ao vivo ainda não está em execução (o motor de qualidade está desligado, o modelo está aquecendo ou não há áudio recente). O MOS acima ainda é uma estimativa derivada de SNR — NÃO uma inferência DNN."
     },
     "drift": {
       "title": "Linha-base de drift do piso de ruído",

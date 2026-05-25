@@ -464,6 +464,17 @@ class VoiceQualitySnapshotResponse(BaseModel):
     noise_floor: VoiceQualityNoiseFloor
     agc2: VoiceQualityAGC2 | None = None
     dnsmos_extras_installed: bool = False
+    # LIVE-2 DNSMOS wire-up — SSoT for which MOS the panel may claim:
+    # * ``dnsmos_unavailable`` — speechmos extras not installed.
+    # * ``dnsmos_inactive``    — installed but not producing live scores
+    #   (engine off, estimator still building, or no recent audio); the
+    #   panel shows the SNR-derived proxy.
+    # * ``dnsmos_live``        — a real DNSMOS overall MOS is in
+    #   ``dnsmos_ovrl_mos``; only THEN may the panel claim live inference.
+    quality_mode: Literal["dnsmos_unavailable", "dnsmos_inactive", "dnsmos_live"] = (
+        "dnsmos_unavailable"
+    )
+    dnsmos_ovrl_mos: float | None = None
 
 
 # ── Phase 5.D group B — Typed responses for ``/models`` family ──────
@@ -841,6 +852,69 @@ def _resolve_data_dir_for_health(request: Request) -> Path:
     if engine_config is not None:
         return engine_config.database.data_dir
     return Path.home() / ".sovyx"
+
+
+# ── LIVE-2 DNSMOS live-scoring (opt-in, gated, non-blocking) ──────────
+#
+# Seconds of recent capture audio scored per poll. DNSMOS is calibrated
+# for 5-10 s windows; shorter windows give noisy estimates.
+_DNSMOS_WINDOW_S = 6.0
+# Require >=1 s of 16 kHz audio before scoring (a cold ring isn't worth it).
+_DNSMOS_MIN_SAMPLES = 16_000
+
+
+async def _build_dnsmos_estimator_bg(app_state: Any) -> None:  # noqa: ANN401
+    """One-time background build of the DNSMOS estimator.
+
+    The ``speechmos`` import (librosa + numba, ~100 MB) and ONNX model
+    load are heavy, so the build runs in a thread (anti-pattern #14) and
+    NEVER on the request path. The result — or a ``False`` failure
+    sentinel — is cached on app state so the cost is paid once.
+    """
+    try:
+        from sovyx.voice._quality_metrics import DnsmosQualityEstimator
+
+        estimator = await asyncio.to_thread(DnsmosQualityEstimator)
+        app_state.voice_dnsmos_estimator = estimator
+    except Exception:  # noqa: BLE001 — opt-in path must never crash the daemon
+        app_state.voice_dnsmos_estimator = False  # failure sentinel (no retry-thrash)
+        logger.debug("voice_dnsmos_estimator_build_failed")
+
+
+async def _resolve_live_dnsmos_ovrl(
+    app_state: Any,  # noqa: ANN401
+    capture_task: Any,  # noqa: ANN401
+) -> float | None:
+    """Return a live DNSMOS overall MOS, or ``None`` when not (yet) available.
+
+    Non-blocking: the heavy estimator build runs once in the background;
+    until it's ready (or if it failed) this returns ``None`` → the caller
+    reports ``dnsmos_inactive``. Once ready, taps the most recent capture
+    window (read-only — no capture-pipeline change) and scores it in a
+    thread. Returns ``None`` on too-little audio or a NaN score.
+    """
+    import math
+
+    estimator = getattr(app_state, "voice_dnsmos_estimator", None)
+    if estimator is False:
+        return None  # prior build failed — stay inactive
+    if estimator is None:
+        if getattr(app_state, "voice_dnsmos_build_task", None) is None:
+            app_state.voice_dnsmos_build_task = asyncio.create_task(
+                _build_dnsmos_estimator_bg(app_state),
+            )
+        return None  # building — inactive this poll
+    frames_i16 = await capture_task.tap_recent_frames(_DNSMOS_WINDOW_S)
+    if getattr(frames_i16, "shape", (0,))[0] < _DNSMOS_MIN_SAMPLES:
+        return None  # not enough recent audio for a meaningful score
+    import numpy as np
+
+    frames_f32 = frames_i16.astype(np.float32) / 32768.0
+    score = await asyncio.to_thread(
+        lambda: estimator.score(frames_f32, sample_rate=16_000),
+    )
+    ovrl = float(score.ovrl)
+    return None if math.isnan(ovrl) else ovrl
 
 
 def _voice_pipeline_registered(request: Request) -> bool:
@@ -1404,22 +1478,44 @@ async def get_voice_quality_snapshot(
                     "speech_level_dbfs": round(float(agc2.speech_level_dbfs), 2),
                 }
 
-    # DNSMOS extras presence — probe the lazy loader without
-    # raising. The extras flag drives the dashboard's "MOS shown
-    # is SNR-proxy" disclaimer.
-    #
-    # LIVE-2 P1-4: the importable package is ``speechmos`` (the
-    # estimator does ``from speechmos import dnsmos``), shipped via the
-    # ``voice-quality`` extra. The prior ``find_spec("dnsmos")`` looked
-    # for a non-existent top-level package, so the flag was permanently
-    # False even with the extras installed.
-    dnsmos_installed = False
+    # DNSMOS quality mode — truthfully classify which MOS the panel may
+    # claim (LIVE-2 DNSMOS wire-up). Three mutually-exclusive states:
+    #   * dnsmos_unavailable — ``speechmos`` extras not installed (P1-4:
+    #     probe the real package name, not the non-existent top-level
+    #     ``dnsmos`` module).
+    #   * dnsmos_inactive    — installed but not producing live scores
+    #     (engine off / estimator still building / too little audio).
+    #   * dnsmos_live         — a real DNSMOS overall MOS was produced.
+    # Live scoring is opt-in (``tuning.voice.voice_quality_metrics_enabled``
+    # + ``voice_quality_engine == "dnsmos"``, both default-OFF per
+    # feedback_staged_adoption) so the default install does no heavy import
+    # and no inference — the SNR-proxy path is unchanged.
+    quality_mode = "dnsmos_unavailable"
+    dnsmos_ovrl_mos: float | None = None
+    speechmos_installed = False
     try:
         import importlib.util
 
-        dnsmos_installed = importlib.util.find_spec("speechmos") is not None
+        speechmos_installed = importlib.util.find_spec("speechmos") is not None
     except Exception:  # noqa: BLE001 — probe is observability-only
-        dnsmos_installed = False
+        speechmos_installed = False
+
+    if speechmos_installed:
+        quality_mode = "dnsmos_inactive"
+        cfg = _resolve_engine_config(request)
+        live_enabled = bool(
+            cfg is not None
+            and cfg.tuning.voice.voice_quality_metrics_enabled
+            and cfg.tuning.voice.voice_quality_engine == "dnsmos"
+        )
+        if live_enabled and capture_task is not None:
+            try:
+                ovrl = await _resolve_live_dnsmos_ovrl(request.app.state, capture_task)
+                if ovrl is not None:
+                    dnsmos_ovrl_mos = round(ovrl, 2)
+                    quality_mode = "dnsmos_live"
+            except Exception:  # noqa: BLE001 — never let live scoring break the panel
+                logger.debug("voice_quality_dnsmos_live_failed")
 
     return VoiceQualitySnapshotResponse.model_validate(
         {
@@ -1428,7 +1524,9 @@ async def get_voice_quality_snapshot(
             "snr_verdict": snr_verdict,
             "noise_floor": noise_floor,
             "agc2": agc2_payload,
-            "dnsmos_extras_installed": dnsmos_installed,
+            "dnsmos_extras_installed": speechmos_installed,
+            "quality_mode": quality_mode,
+            "dnsmos_ovrl_mos": dnsmos_ovrl_mos,
         }
     )
 

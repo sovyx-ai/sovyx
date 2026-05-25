@@ -45,6 +45,8 @@ function snapshot(
       speech_level_dbfs: -20.5,
     },
     dnsmos_extras_installed: false,
+    quality_mode: "dnsmos_unavailable",
+    dnsmos_ovrl_mos: null,
     ...overrides,
   };
 }
@@ -127,30 +129,67 @@ describe("VoiceQualityPanel", () => {
     });
   });
 
-  it("shows DNSMOS proxy disclaimer when extras absent", async () => {
+  it("shows the install disclaimer when DNSMOS is unavailable (not installed)", async () => {
     mockFetch.mockResolvedValue(
-      jsonResponse(snapshot({ dnsmos_extras_installed: false })),
+      jsonResponse(
+        snapshot({
+          dnsmos_extras_installed: false,
+          quality_mode: "dnsmos_unavailable",
+        }),
+      ),
     );
     render(<VoiceQualityPanel />);
     await waitFor(() => {
-      expect(screen.getByText(/SNR-proxy mode/i)).toBeInTheDocument();
+      expect(screen.getByTestId("dnsmos-proxy-disclaimer")).toBeInTheDocument();
     });
-    // LIVE-2 P1-5: the install hint must name the real extra
-    // (``voice-quality``), not the non-existent ``dnsmos`` extra.
+    // LIVE-2 P1-5: the install hint names the real extra (``voice-quality``).
     expect(screen.getByText(/sovyx\[voice-quality\]/i)).toBeInTheDocument();
+    // The live-inference badge must NOT appear.
+    expect(screen.queryByTestId("dnsmos-live-badge")).not.toBeInTheDocument();
   });
 
-  it("shows DNSMOS direct-mode badge when extras installed", async () => {
+  it("shows installed-but-inactive (NOT a live badge) when extras present but not live", async () => {
+    // LIVE-2 DNSMOS wire-up regression: extras installed alone must NOT
+    // claim live DNN inference — the prior test enshrined that lie.
     mockFetch.mockResolvedValue(
-      jsonResponse(snapshot({ dnsmos_extras_installed: true })),
+      jsonResponse(
+        snapshot({
+          dnsmos_extras_installed: true,
+          quality_mode: "dnsmos_inactive",
+          dnsmos_ovrl_mos: null,
+        }),
+      ),
     );
     render(<VoiceQualityPanel />);
     await waitFor(() => {
-      expect(
-        screen.getByText(/DNSMOS extras detected/i),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("dnsmos-inactive-note")).toBeInTheDocument();
     });
-    expect(screen.queryByText(/SNR-proxy mode/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dnsmos-live-badge")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/live DNN inference/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the live DNN badge + real DNSMOS MOS only when quality_mode is live", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse(
+        snapshot({
+          dnsmos_extras_installed: true,
+          quality_mode: "dnsmos_live",
+          dnsmos_ovrl_mos: 4.2,
+          // Distinct SNR so we can prove the displayed MOS is the real
+          // DNSMOS value (4.20), NOT the SNR proxy (1 + 5/7 ≈ 1.71).
+          snr_p50_db: 5,
+        }),
+      ),
+    );
+    render(<VoiceQualityPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("dnsmos-live-badge")).toBeInTheDocument();
+    });
+    expect(screen.getByText("4.20")).toBeInTheDocument();
+    expect(screen.queryByTestId("dnsmos-proxy-disclaimer")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dnsmos-inactive-note")).not.toBeInTheDocument();
   });
 
   it("shows AGC2 disabled state when agc2 block is null", async () => {

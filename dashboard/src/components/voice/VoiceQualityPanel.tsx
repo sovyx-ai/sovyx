@@ -236,17 +236,24 @@ export function VoiceQualityPanel() {
     </div>
   );
 
-  const showProxy = !snapshot.dnsmos_extras_installed;
+  // LIVE-2 DNSMOS wire-up — the panel may only claim a live DNSMOS reading
+  // when the backend actually produced one (quality_mode === "dnsmos_live"
+  // with a real overall MOS). Otherwise the MOS shown is the SNR-derived
+  // proxy, regardless of whether the extras are merely installed — this is
+  // what stops the "live DNN inference" badge from lying over a proxy.
+  const isLive =
+    snapshot.quality_mode === "dnsmos_live" && snapshot.dnsmos_ovrl_mos != null;
+  const showProxy = !isLive;
   let mosLabel = "—";
   let mosDetail = t("qualityPanel.mos.awaitingSamples");
-  if (snapshot.snr_p50_db !== null) {
-    const mos = snrToMosProxy(snapshot.snr_p50_db);
-    mosLabel = mos.toFixed(2);
-    mosDetail = showProxy
-      ? t("qualityPanel.mos.snrProxyDetail", {
-          snr: snapshot.snr_p50_db.toFixed(1),
-        })
-      : t("qualityPanel.mos.dnsmosDetail", { mos: mosLabel });
+  if (isLive) {
+    mosLabel = (snapshot.dnsmos_ovrl_mos as number).toFixed(2);
+    mosDetail = t("qualityPanel.mos.dnsmosDetail", { mos: mosLabel });
+  } else if (snapshot.snr_p50_db !== null) {
+    mosLabel = snrToMosProxy(snapshot.snr_p50_db).toFixed(2);
+    mosDetail = t("qualityPanel.mos.snrProxyDetail", {
+      snr: snapshot.snr_p50_db.toFixed(1),
+    });
   }
 
   const mosPanel = (
@@ -268,8 +275,12 @@ export function VoiceQualityPanel() {
       <p className="mt-3 text-sm text-muted-foreground">
         {t("qualityPanel.mos.scaleHint")}
       </p>
-      {showProxy && (
-        <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-50/50 p-3 text-xs dark:bg-amber-500/10">
+      {/* DNSMOS extras not installed → SNR-proxy + install instructions. */}
+      {showProxy && snapshot.quality_mode === "dnsmos_unavailable" && (
+        <div
+          className="mt-3 rounded-md border border-amber-500/30 bg-amber-50/50 p-3 text-xs dark:bg-amber-500/10"
+          data-testid="dnsmos-proxy-disclaimer"
+        >
           <div className="mb-1 flex items-center gap-2 font-semibold text-amber-700 dark:text-amber-400">
             <InfoIcon className="h-3.5 w-3.5" />
             {t("qualityPanel.mos.proxyDisclaimerTitle")}
@@ -292,8 +303,30 @@ export function VoiceQualityPanel() {
           </ol>
         </div>
       )}
-      {!showProxy && (
-        <div className="mt-3 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-400">
+      {/* LIVE-2 DNSMOS wire-up — installed but NOT producing live scores.
+          Truthfully says the reading is still the SNR proxy; never claims
+          live inference. */}
+      {showProxy && snapshot.quality_mode === "dnsmos_inactive" && (
+        <div
+          className="mt-3 rounded-md border border-amber-500/30 bg-amber-50/50 p-3 text-xs dark:bg-amber-500/10"
+          data-testid="dnsmos-inactive-note"
+        >
+          <div className="mb-1 flex items-center gap-2 font-semibold text-amber-700 dark:text-amber-400">
+            <InfoIcon className="h-3.5 w-3.5" />
+            {t("qualityPanel.mos.dnsmosInactiveTitle")}
+          </div>
+          <p className="text-muted-foreground">
+            {t("qualityPanel.mos.dnsmosInactiveBody")}
+          </p>
+        </div>
+      )}
+      {/* Live DNSMOS DNN inference — rendered ONLY when the backend
+          actually produced a DNSMOS overall MOS (never over an SNR proxy). */}
+      {isLive && (
+        <div
+          className="mt-3 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-400"
+          data-testid="dnsmos-live-badge"
+        >
           <PackageIcon className="h-3.5 w-3.5" />
           {t("qualityPanel.mos.dnsmosLiveBadge")}
         </div>
