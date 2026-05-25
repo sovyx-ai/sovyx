@@ -5822,6 +5822,9 @@ class TestFalseWakeRecovery:
         pipeline, _ = _make_pipeline(
             vad_speech=True, ww_detected=True, stt_text="hello", on_perception=cb
         )
+        # LIVE-2 P1-3 — no utterance has completed yet, so the dashboard
+        # latency accessor is honestly None (not 0 / a stale value).
+        assert pipeline.last_stt_latency_ms is None
         # Override stt confidence to 0.01 — would be rejected by any
         # non-zero threshold, must pass with the default 0.0.
         await pipeline.start()
@@ -5840,6 +5843,11 @@ class TestFalseWakeRecovery:
             await pipeline.feed_frame(_silence_frame())
         cb.assert_called_once_with("hello", "test-mind")
         assert pipeline.false_wake_rejected_count == 0
+        # LIVE-2 P1-3 — the STT-complete boundary now persists the decode
+        # latency so /api/voice/status can report a real "Pipeline latency"
+        # instead of a permanent "—".
+        assert pipeline.last_stt_latency_ms is not None
+        assert pipeline.last_stt_latency_ms >= 0.0
 
     @pytest.mark.asyncio
     async def test_below_threshold_rejected_no_perception(

@@ -17,7 +17,7 @@ Coverage:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from starlette.testclient import TestClient
@@ -134,10 +134,12 @@ class TestAgc2Block:
         assert data["agc2"] is None
 
     def test_agc2_payload_when_normalizer_wired(self, app, client: TestClient) -> None:
-        # Synthesise a capture-task with an AGC2-equipped normalizer
-        # so the endpoint returns the payload shape downstream
-        # consumers depend on. Real integration coverage lives in
-        # the AGC2 unit tests; this only checks the route surface.
+        # LIVE-2 P1-6: AGC2 stats are read by resolving the REGISTERED
+        # AudioCaptureTask service (not a ``registry.voice_capture_task``
+        # attribute, which was never set in production). Register the mock
+        # capture task the way the producer actually resolves it.
+        from sovyx.voice._capture_task import AudioCaptureTask
+
         capture_task = MagicMock()
         normalizer = MagicMock()
         agc2 = MagicMock()
@@ -148,7 +150,8 @@ class TestAgc2Block:
         agc2.speech_level_dbfs = -22.5
         normalizer.agc2 = agc2
         capture_task._normalizer = normalizer
-        app.state.registry.voice_capture_task = capture_task
+        app.state.registry.is_registered = lambda cls: cls is AudioCaptureTask
+        app.state.registry.resolve = AsyncMock(return_value=capture_task)
 
         data = client.get("/api/voice/quality-snapshot").json()
         assert data["agc2"] == {

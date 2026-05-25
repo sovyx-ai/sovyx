@@ -421,6 +421,42 @@ class TestGetVoiceStatus:
         assert status["vad"]["health"] == "degraded"
 
     @pytest.mark.asyncio()
+    async def test_pipeline_latency_surfaced_when_measured(self, mock_registry: MagicMock) -> None:
+        """LIVE-2 P1-3 — the pipeline's persisted last-utterance latency is
+        surfaced on ``pipeline.latency_ms`` (previously always None / "—")."""
+        from sovyx.voice.pipeline import VoicePipeline, VoicePipelineState
+
+        mock_pipeline = MagicMock(spec=VoicePipeline)
+        mock_pipeline.is_running = True
+        mock_pipeline.state = VoicePipelineState.IDLE
+        mock_pipeline.last_stt_latency_ms = 88.0
+        mock_registry.is_registered = self._only(VoicePipeline)
+        mock_registry.resolve = AsyncMock(return_value=mock_pipeline)
+
+        status = await get_voice_status(mock_registry)
+
+        assert status["pipeline"]["latency_ms"] == 88.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio()
+    async def test_pipeline_latency_none_before_first_utterance(
+        self, mock_registry: MagicMock
+    ) -> None:
+        """LIVE-2 P1-3 — None (not a fabricated number) until a turn
+        completes; the frontend renders an explanatory pending state."""
+        from sovyx.voice.pipeline import VoicePipeline, VoicePipelineState
+
+        mock_pipeline = MagicMock(spec=VoicePipeline)
+        mock_pipeline.is_running = True
+        mock_pipeline.state = VoicePipelineState.IDLE
+        mock_pipeline.last_stt_latency_ms = None
+        mock_registry.is_registered = self._only(VoicePipeline)
+        mock_registry.resolve = AsyncMock(return_value=mock_pipeline)
+
+        status = await get_voice_status(mock_registry)
+
+        assert status["pipeline"]["latency_ms"] is None
+
+    @pytest.mark.asyncio()
     async def test_health_values_are_within_the_ssot_vocabulary(
         self, mock_registry: MagicMock
     ) -> None:

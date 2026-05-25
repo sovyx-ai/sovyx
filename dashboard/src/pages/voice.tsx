@@ -670,14 +670,17 @@ export default function VoicePage() {
               {status.pipeline.running ? t("pipeline.running") : t("pipeline.stopped")}
             </span>
           </div>
+          {/* LIVE-2 P1-3 — show real per-turn latency once measured; when
+              null, explain WHY (no utterance processed yet) rather than a
+              bare "—" that reads like "0 / instant". */}
           <InfoRow
             label={t("pipeline.latency")}
             value={
               status.pipeline.latency_ms != null
                 ? t("pipeline.latencyMs", { ms: status.pipeline.latency_ms })
-                : t("pipeline.noLatency")
+                : t("pipeline.latencyPending")
             }
-            mono
+            mono={status.pipeline.latency_ms != null}
           />
         </Section>
 

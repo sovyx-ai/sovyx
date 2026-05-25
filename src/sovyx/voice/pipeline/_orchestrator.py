@@ -457,6 +457,13 @@ class VoicePipeline(
         self._first_token_event = asyncio.Event()
         self._running = False
 
+        # LIVE-2 Phase 3 (P1-3) — most-recent STT-decode latency in ms,
+        # surfaced read-only via PublicAccessorsMixin.last_stt_latency_ms so
+        # /api/voice/status can report a real "Pipeline latency" instead of
+        # a permanent "—". None until the first utterance completes; the
+        # value is measured at the STT-complete boundary (see _perceive).
+        self._last_stt_latency_ms: float | None = None
+
         # ── T1 atomic cancellation chain state ───────────────────────
         # In-flight TTS synthesis tasks tracked here so the barge-in
         # path can cancel them transactionally (not just stop the
@@ -1544,6 +1551,9 @@ class VoicePipeline(
             return {"state": "IDLE", "event": "stt_error", "error": str(exc)}
 
         latency_ms = (time.monotonic() - start) * 1000
+        # LIVE-2 P1-3 — persist the measured latency for the dashboard's
+        # "Pipeline latency" read (previously computed here and discarded).
+        self._last_stt_latency_ms = latency_ms
 
         logger.info(
             "voice_stt_completed",

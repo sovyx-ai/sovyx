@@ -58,7 +58,8 @@
     "stopped": "Detenido",
     "latency": "Latencia",
     "latencyMs": "{{ms}}ms",
-    "noLatency": "—"
+    "noLatency": "—",
+    "latencyPending": "Aún no se ha procesado ningún enunciado"
   },
   "stt": {
     "engine": "Engine",

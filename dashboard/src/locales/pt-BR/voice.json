@@ -58,7 +58,8 @@
     "stopped": "Parado",
     "latency": "Latência",
     "latencyMs": "{{ms}}ms",
-    "noLatency": "—"
+    "noLatency": "—",
+    "latencyPending": "Nenhuma fala processada ainda"
   },
   "stt": {
     "engine": "Engine",

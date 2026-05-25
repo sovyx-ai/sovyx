@@ -85,6 +85,7 @@ class PublicAccessorsMixin:
         _wake_word: WakeWordDetector
         _vad_inference_timeouts: int
         _false_wake_rejected_count: int
+        _last_stt_latency_ms: float | None
 
     @property
     def state(self) -> VoicePipelineState:
@@ -182,6 +183,18 @@ class PublicAccessorsMixin:
         session anomaly; pair with ``voice.vad.inference_timeout``
         WARN events for attribution."""
         return self._vad_inference_timeouts
+
+    @property
+    def last_stt_latency_ms(self) -> float | None:
+        """Most-recent STT-decode latency in milliseconds, or ``None``
+        before the first utterance completes.
+
+        LIVE-2 Phase 3 (P1-3) — the orchestrator measures this at the
+        STT-complete boundary; this accessor lets ``/api/voice/status``
+        report a real "Pipeline latency" instead of a permanent ``—``.
+        It is the last single-turn decode latency, not a rolling average.
+        """
+        return self._last_stt_latency_ms
 
     @property
     def false_wake_rejected_count(self) -> int:

@@ -223,6 +223,13 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
             pipeline = await registry.resolve(VoicePipeline)
             status["pipeline"]["running"] = pipeline.is_running and status["capture"]["running"]
             status["pipeline"]["state"] = pipeline.state.name.lower()
+            # LIVE-2 P1-3 — surface the most-recent STT-decode latency the
+            # orchestrator now persists. ``None`` (the default) until the
+            # first utterance completes; the isinstance guard keeps a non-
+            # numeric stub (older pipeline / test mock) from leaking.
+            last_latency = getattr(pipeline, "last_stt_latency_ms", None)
+            if isinstance(last_latency, (int, float)):
+                status["pipeline"]["latency_ms"] = round(float(last_latency), 1)
             # Mission C3 §T2.8 — populate the degraded-mode marker from
             # the pipeline's ladder-state flags. Both flags are
             # default-False (anti-pattern #35 sentinel); a pre-ladder

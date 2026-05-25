@@ -58,7 +58,8 @@
     "stopped": "Stopped",
     "latency": "Latency",
     "latencyMs": "{{ms}}ms",
-    "noLatency": "—"
+    "noLatency": "—",
+    "latencyPending": "No utterance processed yet"
   },
   "stt": {
     "engine": "Engine",

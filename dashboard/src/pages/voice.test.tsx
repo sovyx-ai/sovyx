@@ -398,6 +398,30 @@ describe("VoicePage", () => {
     expect(screen.queryByTestId("health-healthy")).not.toBeNull();
   });
 
+  // ── LIVE-2 Phase 2 (P1-3) — pipeline latency truth ──
+
+  it("renders measured pipeline latency when present", async () => {
+    setupMockWithStatus({
+      pipeline: { running: true, state: "idle", latency_ms: 137 },
+    });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("137ms")).toBeInTheDocument();
+    });
+  });
+
+  it("explains why latency is unavailable instead of a bare dash", async () => {
+    setupMockWithStatus({
+      pipeline: { running: true, state: "idle", latency_ms: null },
+    });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No utterance processed yet/i),
+      ).toBeInTheDocument();
+    });
+  });
+
   // ── v1.3 §4.3 L5a — LinuxMicGainCard surface on the Voice page ──
 
   it("renders LinuxMicGainCard with saturation alert when mixer is saturated", async () => {

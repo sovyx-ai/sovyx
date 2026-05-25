@@ -1376,11 +1376,21 @@ async def get_voice_quality_snapshot(
             "long_sample_count": drift.long_count,
         }
 
-    # AGC2 state — read from the active capture task's normalizer
-    # if one is wired. Best-effort: a registry without an active
-    # voice pipeline returns None for the agc2 section.
+    # AGC2 state — read from the active capture task's normalizer if one
+    # is wired. LIVE-2 P1-6: resolve the REGISTERED ``AudioCaptureTask``
+    # service (the prior ``registry.voice_capture_task`` attribute was
+    # never set in production, so this panel always reported "not active"
+    # even with AGC2 running). Best-effort: voice off / AGC2 disabled in
+    # config / no normalizer all yield ``None`` — a truthful "not active".
     agc2_payload: dict[str, Any] | None = None
-    capture_task = getattr(registry, "voice_capture_task", None)
+    capture_task: Any = None
+    try:
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        if registry.is_registered(AudioCaptureTask):
+            capture_task = await registry.resolve(AudioCaptureTask)
+    except Exception:  # noqa: BLE001 — best-effort observability read
+        capture_task = None
     if capture_task is not None:
         normalizer = getattr(capture_task, "_normalizer", None)
         if normalizer is not None:
