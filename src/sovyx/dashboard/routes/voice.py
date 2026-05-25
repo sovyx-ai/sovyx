@@ -239,6 +239,10 @@ class VoiceStatusVAD(BaseModel):
 class VoiceStatusWyoming(BaseModel):
     """Wyoming-server state for ``/api/voice/status``."""
 
+    # LIVE-2 P1-10: True only when a ``SovyxWyomingServer`` is registered.
+    # The dashboard hides the Wyoming card unless this is True, so the
+    # default (server never wired) never shows a misleading "Disconnected".
+    configured: bool = False
     connected: bool = False
     endpoint: str | None = None
 

@@ -56,7 +56,9 @@ const VOICE_STATUS = {
   },
   wake_word: { enabled: true, phrase: "hey sovyx", health: "healthy" },
   vad: { enabled: true, health: "healthy" },
-  wyoming: { connected: false, endpoint: null },
+  // LIVE-2 P1-10: configured (server registered) so the card renders; the
+  // unconfigured-hidden case is covered by a dedicated test below.
+  wyoming: { configured: true, connected: false, endpoint: null },
   hardware: { tier: "PI5", ram_mb: 4096 },
 };
 
@@ -253,12 +255,46 @@ describe("VoicePage", () => {
     });
   });
 
-  it("renders Wyoming disconnected status", async () => {
+  it("renders Wyoming disconnected status when configured but not connected", async () => {
+    // Fixture is configured:true, connected:false → card shows "Disconnected".
     setupMockSuccess();
     render(<VoicePage />);
     await waitFor(() => {
       expect(screen.getByText("Disconnected")).toBeInTheDocument();
     });
+  });
+
+  // ── LIVE-2 P1-10 — Wyoming truth ──
+
+  it("hides the Wyoming card entirely when not configured", async () => {
+    // The default daemon never wires a Wyoming server → configured false →
+    // the card is hidden instead of showing a misleading "Disconnected".
+    setupMockWithStatus({
+      wyoming: { configured: false, connected: false, endpoint: null },
+    });
+    render(<VoicePage />);
+    // Wait for the page to settle (STT engine present), then assert the
+    // Wyoming section is absent.
+    await waitFor(() => {
+      expect(screen.getByText("MoonshineSTT")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Wyoming Protocol")).not.toBeInTheDocument();
+    expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+  });
+
+  it("shows Wyoming connected + endpoint when configured and running", async () => {
+    setupMockWithStatus({
+      wyoming: {
+        configured: true,
+        connected: true,
+        endpoint: "127.0.0.1:10700",
+      },
+    });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("Connected")).toBeInTheDocument();
+    });
+    expect(screen.getByText("127.0.0.1:10700")).toBeInTheDocument();
   });
 
   it("renders hardware tier", async () => {

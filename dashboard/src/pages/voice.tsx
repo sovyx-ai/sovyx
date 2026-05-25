@@ -81,6 +81,10 @@ interface VADStatus {
 }
 
 interface WyomingStatus {
+  // LIVE-2 P1-10 — True only when a Wyoming server is registered. The card
+  // is hidden unless configured, so an unwired server never shows a
+  // misleading "Disconnected". Optional: older daemons don't emit it.
+  configured?: boolean;
   connected: boolean;
   endpoint: string | null;
 }
@@ -1007,19 +1011,25 @@ export default function VoicePage() {
           )}
         </Section>
 
-        {/* Wyoming */}
-        <Section icon={<WifiIcon className="size-4" />} title={t("sections.wyoming")}>
-          <div className="flex items-center justify-between py-1.5">
-            <span className="text-sm text-[var(--svx-color-text-secondary)]">{t("pipeline.state")}</span>
-            <span className="flex items-center gap-2 text-sm font-medium">
-              <StatusDot active={status.wyoming.connected} />
-              {status.wyoming.connected ? t("wyoming.connected") : t("wyoming.disconnected")}
-            </span>
-          </div>
-          {status.wyoming.endpoint && (
-            <InfoRow label={t("wyoming.endpoint")} value={status.wyoming.endpoint} mono />
-          )}
-        </Section>
+        {/* Wyoming — LIVE-2 P1-10: rendered ONLY when a Wyoming server is
+            registered (``configured``). The default daemon never wires
+            one, so this card stays hidden rather than showing a
+            permanently-"Disconnected" state that implies a recoverable
+            connection the operator has no way to establish. */}
+        {status.wyoming.configured && (
+          <Section icon={<WifiIcon className="size-4" />} title={t("sections.wyoming")}>
+            <div className="flex items-center justify-between py-1.5">
+              <span className="text-sm text-[var(--svx-color-text-secondary)]">{t("pipeline.state")}</span>
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <StatusDot active={status.wyoming.connected} />
+                {status.wyoming.connected ? t("wyoming.connected") : t("wyoming.disconnected")}
+              </span>
+            </div>
+            {status.wyoming.endpoint && (
+              <InfoRow label={t("wyoming.endpoint")} value={status.wyoming.endpoint} mono />
+            )}
+          </Section>
+        )}
       </div>
 
       {/* Hardware tier */}

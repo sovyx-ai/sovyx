@@ -118,6 +118,9 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
             "health": VOICE_HEALTH_UNAVAILABLE,
         },
         "wyoming": {
+            # LIVE-2 P1-10: default not-configured (server not registered).
+            # The dashboard hides the card unless ``configured`` is True.
+            "configured": False,
             "connected": False,
             "endpoint": None,
         },
@@ -378,11 +381,25 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
         from sovyx.voice.wyoming import SovyxWyomingServer
 
         if registry.is_registered(SovyxWyomingServer):
+            # LIVE-2 P1-10: ``configured`` is the registration fact — the
+            # dashboard hides the Wyoming card entirely when it's False so
+            # a permanently-"Disconnected" card (the server is never wired
+            # in the default daemon) never misleads the operator.
+            status["wyoming"]["configured"] = True
             wyoming = await registry.resolve(SovyxWyomingServer)
-            status["wyoming"]["connected"] = getattr(wyoming, "is_running", False)
+            # LIVE-2 P1-10 bug 1: the server's liveness property is
+            # ``running``, not ``is_running`` — the prior read always
+            # returned the False default even on a live server.
+            status["wyoming"]["connected"] = bool(getattr(wyoming, "running", False))
             if hasattr(wyoming, "config"):
                 cfg = wyoming.config
-                status["wyoming"]["endpoint"] = getattr(cfg, "endpoint", None)
+                # LIVE-2 P1-10 bug 2: ``WyomingConfig`` has no ``endpoint``
+                # field — it binds ``host``:``port``. Compose the endpoint
+                # from those so the row shows a real address when present.
+                host = getattr(cfg, "host", None)
+                port = getattr(cfg, "port", None)
+                if host is not None and port is not None:
+                    status["wyoming"]["endpoint"] = f"{host}:{port}"
     except Exception:  # noqa: BLE001
         logger.debug("voice_status_wyoming_failed")
 

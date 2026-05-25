@@ -44,6 +44,9 @@ class TestGetVoiceStatus:
         assert status["wake_word"]["enabled"] is False
         assert status["vad"]["enabled"] is False
         assert status["wyoming"]["connected"] is False
+        # LIVE-2 P1-10: nothing registered → Wyoming is not configured, so
+        # the dashboard hides the card instead of showing "Disconnected".
+        assert status["wyoming"]["configured"] is False
         assert status["hardware"]["tier"] is None
         # LIVE-2 P0-1: nothing registered → every subsystem is honestly
         # "unavailable" (NOT healthy, NOT unknown).
@@ -455,6 +458,46 @@ class TestGetVoiceStatus:
         status = await get_voice_status(mock_registry)
 
         assert status["pipeline"]["latency_ms"] is None
+
+    @pytest.mark.asyncio()
+    async def test_wyoming_configured_running_reads_running_and_host_port(
+        self, mock_registry: MagicMock
+    ) -> None:
+        """LIVE-2 P1-10 — reads the real ``running`` property (not the
+        non-existent ``is_running``) and composes the endpoint from
+        ``host``:``port`` (``WyomingConfig`` has no ``endpoint`` field).
+        Both were latent bugs that would keep a live server showing
+        "Disconnected" with no endpoint.
+        """
+        from sovyx.voice.wyoming import SovyxWyomingServer, WyomingConfig
+
+        mock_wy = MagicMock(spec=SovyxWyomingServer)
+        mock_wy.running = True
+        mock_wy.config = WyomingConfig()  # host=127.0.0.1, port=10700
+        mock_registry.is_registered = self._only(SovyxWyomingServer)
+        mock_registry.resolve = AsyncMock(return_value=mock_wy)
+
+        status = await get_voice_status(mock_registry)
+
+        assert status["wyoming"]["configured"] is True
+        assert status["wyoming"]["connected"] is True
+        assert status["wyoming"]["endpoint"] == "127.0.0.1:10700"
+
+    @pytest.mark.asyncio()
+    async def test_wyoming_configured_but_not_running(self, mock_registry: MagicMock) -> None:
+        from sovyx.voice.wyoming import SovyxWyomingServer, WyomingConfig
+
+        mock_wy = MagicMock(spec=SovyxWyomingServer)
+        mock_wy.running = False
+        mock_wy.config = WyomingConfig()
+        mock_registry.is_registered = self._only(SovyxWyomingServer)
+        mock_registry.resolve = AsyncMock(return_value=mock_wy)
+
+        status = await get_voice_status(mock_registry)
+
+        # Registered → card shows; not running → "Disconnected" truthfully.
+        assert status["wyoming"]["configured"] is True
+        assert status["wyoming"]["connected"] is False
 
     @pytest.mark.asyncio()
     async def test_health_values_are_within_the_ssot_vocabulary(

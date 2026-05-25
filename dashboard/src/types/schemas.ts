@@ -1883,6 +1883,8 @@ const VoiceStatusVADSchema = z.object({
 });
 
 const VoiceStatusWyomingSchema = z.object({
+  // LIVE-2 P1-10 — registration fact; the card is hidden unless configured.
+  configured: z.boolean().optional(),
   connected: z.boolean().optional(),
   endpoint: z.string().nullable().optional(),
 });
