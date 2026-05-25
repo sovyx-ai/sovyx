@@ -6,7 +6,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@/test/test-utils";
-import VoicePage from "./voice";
+import { fireEvent } from "@testing-library/react";
+import VoicePage, { computeVoiceFreshness } from "./voice";
 
 /* ── Mock API ── */
 
@@ -422,6 +423,83 @@ describe("VoicePage", () => {
     });
   });
 
+  // ── LIVE-2 P1-7 / P1-8 — data-freshness honesty ──
+
+  it("shows auto-refresh-paused when capture is not running (P1-7)", async () => {
+    // VOICE_STATUS has no capture block → captureRunning false → the
+    // circuit-breaker poller is disabled, so the snapshot is static.
+    setupMockSuccess();
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-freshness-paused"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("shows live freshness when capture is running", async () => {
+    setupMockWithStatus({
+      capture: {
+        running: true,
+        input_device: 1,
+        host_api: "WASAPI",
+        sample_rate: 16000,
+        frames_delivered: 5,
+        last_rms_db: -40,
+      },
+    });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-freshness-live")).toBeInTheDocument();
+    });
+  });
+
+  it("surfaces fetch-failed (showing stale data) when a refresh fails (P1-8)", async () => {
+    // First /status succeeds (snapshot lands, capture stopped so the
+    // poller stays disabled); the manual refresh's /status rejects. The
+    // page must keep the stale snapshot AND flip to fetch_failed rather
+    // than silently looking fresh (the audit's C-12 swallowed-error case).
+    let statusCalls = 0;
+    mockGet.mockImplementation((path: string) => {
+      if (path === "/api/voice/status") {
+        statusCalls += 1;
+        if (statusCalls >= 2) return Promise.reject(new Error("boom"));
+        return Promise.resolve(VOICE_STATUS);
+      }
+      if (path === "/api/voice/models") return Promise.resolve(VOICE_MODELS);
+      if (path === "/api/voice/linux-mixer-diagnostics")
+        return Promise.resolve({
+          platform_supported: false,
+          amixer_available: false,
+          snapshots: [],
+          aggregated_boost_db_ceiling: 18,
+          saturation_ratio_ceiling: 0.5,
+          reset_enabled_by_default: true,
+        });
+      if (path === "/api/voice/wake-word/status")
+        return Promise.resolve({ minds: [] });
+      return Promise.reject(new Error("unknown path"));
+    });
+
+    render(<VoicePage />);
+    // Initial snapshot lands → paused (capture stopped).
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-freshness-paused"),
+      ).toBeInTheDocument();
+    });
+
+    // Trigger a manual refresh whose /status call rejects.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("voice-freshness-fetch_failed"),
+      ).toBeInTheDocument();
+    });
+    // The stale snapshot is still rendered — we didn't blank the page.
+    expect(screen.getByText("MoonshineSTT")).toBeInTheDocument();
+  });
+
   // ── v1.3 §4.3 L5a — LinuxMicGainCard surface on the Voice page ──
 
   it("renders LinuxMicGainCard with saturation alert when mixer is saturated", async () => {
@@ -599,5 +677,71 @@ describe("VoicePage — per-mind wake-word section", () => {
     });
     // EXACT case is redundant with file name; disclosure should NOT render.
     expect(screen.queryByText(/Matched as/)).toBeNull();
+  });
+});
+
+/* ── LIVE-2 P1-7 / P1-8 — freshness classification (pure, no timers) ── */
+
+describe("computeVoiceFreshness", () => {
+  it("returns live when capture is running and polls succeed", () => {
+    expect(
+      computeVoiceFreshness({
+        fetchError: false,
+        captureRunning: true,
+        consecutive5xx: 0,
+      }),
+    ).toBe("live");
+  });
+
+  it("returns paused when capture is not running (poller disabled)", () => {
+    expect(
+      computeVoiceFreshness({
+        fetchError: false,
+        captureRunning: false,
+        consecutive5xx: 0,
+      }),
+    ).toBe("paused");
+  });
+
+  it("returns poll_stale when capture runs but polls are failing", () => {
+    expect(
+      computeVoiceFreshness({
+        fetchError: false,
+        captureRunning: true,
+        consecutive5xx: 3,
+      }),
+    ).toBe("poll_stale");
+  });
+
+  it("returns fetch_failed when the last full fetch errored", () => {
+    expect(
+      computeVoiceFreshness({
+        fetchError: true,
+        captureRunning: true,
+        consecutive5xx: 0,
+      }),
+    ).toBe("fetch_failed");
+  });
+
+  it("prioritises fetch_failed over paused and poll_stale", () => {
+    // A failed fetch is the most actionable signal — it wins even when
+    // capture is stopped and polls are also failing.
+    expect(
+      computeVoiceFreshness({
+        fetchError: true,
+        captureRunning: false,
+        consecutive5xx: 9,
+      }),
+    ).toBe("fetch_failed");
+  });
+
+  it("prioritises paused over poll_stale", () => {
+    expect(
+      computeVoiceFreshness({
+        fetchError: false,
+        captureRunning: false,
+        consecutive5xx: 9,
+      }),
+    ).toBe("paused");
   });
 });

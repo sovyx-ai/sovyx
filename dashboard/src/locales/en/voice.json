@@ -9,6 +9,12 @@
     "unavailable": "Not configured",
     "unknown": "Unknown"
   },
+  "freshness": {
+    "live": "Live — auto-refreshing",
+    "paused": "Auto-refresh paused (capture stopped) — static snapshot; use refresh to update",
+    "pollStale": "Live updates interrupted — showing last known data while retrying",
+    "fetchFailed": "Last refresh failed — showing last known data (may be stale)"
+  },
   "loading": "Loading voice status…",
   "error": "Failed to load voice status",
   "retry": "Retry",

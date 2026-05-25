@@ -182,6 +182,78 @@ function VuMeter({ db }: { db: number | null | undefined }) {
   );
 }
 
+/* ── Data-freshness honesty (LIVE-2 P1-7 / P1-8) ── */
+
+/**
+ * Classify how trustworthy the displayed status snapshot is, so the page
+ * never looks "fresh" when it isn't. Four mutually-exclusive states,
+ * highest-priority first:
+ *
+ * - ``fetch_failed`` — the last full fetch errored; we're showing the
+ *   prior (stale) snapshot. Covers a failed manual refresh AND the
+ *   audit's C-12 case (errors swallowed once a first snapshot landed).
+ * - ``paused`` — capture is stopped, so the circuit-breaker poller is
+ *   disabled (P1-7 / B-1): the snapshot is static and will NOT auto-update.
+ * - ``poll_stale`` — capture is running but the latest poll(s) failed
+ *   (P1-8 / B-3): we keep the last good data while retrying, so it's stale.
+ * - ``live`` — capture running, polling succeeding: the data is fresh.
+ *
+ * Pure + exported so the precedence is unit-tested without timer flakiness.
+ */
+export type VoiceFreshness = "live" | "paused" | "poll_stale" | "fetch_failed";
+
+export function computeVoiceFreshness(args: {
+  fetchError: boolean;
+  captureRunning: boolean;
+  consecutive5xx: number;
+}): VoiceFreshness {
+  if (args.fetchError) return "fetch_failed";
+  if (!args.captureRunning) return "paused";
+  if (args.consecutive5xx > 0) return "poll_stale";
+  return "live";
+}
+
+function FreshnessIndicator({
+  freshness,
+  t,
+}: {
+  freshness: VoiceFreshness;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+}) {
+  const tone: Record<VoiceFreshness, "ok" | "warn" | "danger"> = {
+    live: "ok",
+    paused: "warn",
+    poll_stale: "warn",
+    fetch_failed: "danger",
+  };
+  const toneClass = {
+    ok: "text-[var(--svx-color-status-green)]",
+    warn: "text-[var(--svx-color-status-amber)]",
+    danger: "text-[var(--svx-color-status-red)]",
+  }[tone[freshness]];
+  const key = {
+    live: "freshness.live",
+    paused: "freshness.paused",
+    poll_stale: "freshness.pollStale",
+    fetch_failed: "freshness.fetchFailed",
+  }[freshness];
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      data-testid={`voice-freshness-${freshness}`}
+      className={`inline-flex items-center gap-1.5 text-xs ${toneClass}`}
+    >
+      {freshness === "live" ? (
+        <span className="inline-block size-2 rounded-full bg-[var(--svx-color-status-green)]" />
+      ) : (
+        <AlertTriangleIcon className="size-3.5" />
+      )}
+      {t(key)}
+    </span>
+  );
+}
+
 /* ── Status dot ── */
 
 function StatusDot({ active }: { active: boolean }) {
@@ -551,8 +623,19 @@ export default function VoicePage() {
   useEffect(() => {
     if (poller.status !== null) {
       setStatus(poller.status as unknown as VoiceStatus);
+      // LIVE-2 P1-8 — a successful poll supersedes any prior fetch error,
+      // so the freshness indicator returns to "live" instead of being
+      // pinned at "fetch_failed" by a stale manual-refresh failure.
+      setError(null);
     }
   }, [poller.status]);
+
+  // LIVE-2 P1-7 / P1-8 — honest freshness of the displayed snapshot.
+  const freshness = computeVoiceFreshness({
+    fetchError: error !== null,
+    captureRunning,
+    consecutive5xx: poller.consecutive5xx,
+  });
 
   /* ── Loading state ── */
   if (loading && !status) {
@@ -595,6 +678,12 @@ export default function VoicePage() {
         <div>
           <h1 className="text-2xl font-bold">{t("title")}</h1>
           <p className="text-sm text-[var(--svx-color-text-secondary)]">{t("subtitle")}</p>
+          {/* LIVE-2 P1-7 / P1-8 — honest freshness affordance: never let
+              the page look fresh when it's a stale snapshot, a failed
+              fetch, or paused because capture is stopped. */}
+          <div className="mt-1.5">
+            <FreshnessIndicator freshness={freshness} t={t} />
+          </div>
         </div>
         <button
           onClick={() => void fetchData()}

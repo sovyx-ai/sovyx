@@ -9,6 +9,12 @@
     "unavailable": "Sin configurar",
     "unknown": "Desconocido"
   },
+  "freshness": {
+    "live": "En vivo — actualización automática",
+    "paused": "Actualización automática en pausa (captura detenida) — instantánea estática; usa actualizar",
+    "pollStale": "Actualizaciones en vivo interrumpidas — mostrando los últimos datos conocidos mientras se reintenta",
+    "fetchFailed": "Falló la última actualización — mostrando los últimos datos conocidos (pueden estar obsoletos)"
+  },
   "loading": "Cargando estado de voz…",
   "error": "Falló al cargar el estado de voz",
   "retry": "Reintentar",
