@@ -79,7 +79,8 @@ src/sovyx/
 ├── tiers.py, license.py  # ServiceTier enum + Ed25519 offline license validator
 ├── voice/         # STT/TTS/VAD/wake/Wyoming. Per-mind via MindConfig.
 │   ├── capture/   # Ring buffer + lifecycle + loop + restart mixins
-│   └── pipeline/  # State machine + output queue + barge-in
+│   ├── pipeline/  # State machine + output queue + barge-in
+│   └── health/    # Capture-health lifecycle, quarantine reasons, cascade (AP #46/#47)
 ├── plugins/       # Loader + sandbox + SDK. Use SandboxedHttpClient.
 ├── upgrade/       # Doctor, importer, blue-green, backup manager
 └── benchmarks/    # Budget baselines
