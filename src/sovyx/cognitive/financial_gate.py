@@ -269,9 +269,11 @@ class FinancialGate:
     Reads SafetyConfig dynamically — when ``financial_confirmation``
     is False, all methods are no-ops with zero overhead.
 
-    Classification cascade (for non-button channels):
-    1. **LLM intent classification** — works in any language.
-    2. **Regex fallback** — PT+EN only, used when LLM unavailable.
+    Classification cascade (for non-button channels), see
+    ``handle_user_response_async``:
+    1. **Regex** — instant, PT+EN; if it matches, done.
+    2. **LLM intent classification** — any language; fallback when regex
+       returns "unclear" and a router is available.
     """
 
     def __init__(self, safety_config: SafetyConfig) -> None:

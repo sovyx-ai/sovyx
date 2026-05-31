@@ -60,7 +60,7 @@ async def compute_novelty_embedding(
 
     Calibrated mapping:
         sim >= 0.85   -> novelty 0.05 (near-duplicate)
-        sim ~  0.60   -> novelty 0.50 (moderately novel)
+        sim ~  0.575  -> novelty 0.50 (moderately novel; linear midpoint)
         sim <= 0.30   -> novelty 0.95 (very novel)
     """
     from sovyx.brain.embedding import EmbeddingEngine

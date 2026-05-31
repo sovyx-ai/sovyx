@@ -300,8 +300,10 @@ class ConceptRepository:
     async def find_merge_candidates(self, mind_id: MindId) -> list[tuple[Concept, Concept]]:
         """Find pairs of concepts that are merge candidates.
 
-        Criteria: same mind, same category, and one name is a substring
-        of the other (e.g. "PostgreSQL" and "PostgreSQL Preference").
+        Criteria: same mind, same category, and EITHER one name is a
+        substring of the other (e.g. "PostgreSQL" and "PostgreSQL
+        Preference") OR the names are within Levenshtein distance ≤ 3
+        (see ``_is_merge_candidate``).
 
         Returns:
             List of (survivor, to_merge) tuples. Survivor has higher

@@ -1,8 +1,10 @@
 """Sovyx PII/Privacy Output Guard — redacts personal data from LLM responses.
 
 Only applies to OUTPUT (LLM responses). User input is theirs — no filtering.
-Detects: emails, phone numbers (US/BR/intl), CPFs, API keys, credit cards,
-SSNs, IP addresses, and generic key=value secrets.
+Detects: emails, phone numbers (US/BR/intl), credit cards, API keys
+(prefixed sk-/pk-/token-...), IP addresses, and a broad set of national
+identifiers (CPF, CNPJ, RG, SSN, IBAN, SWIFT, and other country-specific
+formats). See ``PII_PATTERNS`` for the full pattern set.
 
 Design:
 - Compiled regex patterns for O(n) single-pass scanning

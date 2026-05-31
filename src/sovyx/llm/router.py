@@ -105,9 +105,12 @@ _COMPLEX_MODELS: set[str] = {
 def classify_complexity(signals: ComplexitySignals) -> ComplexityLevel:
     """Classify message complexity based on heuristic signals.
 
-    The classifier uses a simple scoring system:
-        - Short messages (< 500 chars) with few turns → SIMPLE
-        - Long messages (> 2000 chars), many turns, or code/tools → COMPLEX
+    The classifier uses a simple scoring system (length thresholds are
+    config-tunable via ``EngineConfig.tuning.llm``; defaults shown):
+        - Short messages (below ``simple_max_length``, default 500 chars)
+          with few turns → SIMPLE
+        - Long messages (above ``complex_min_length``, default 2000 chars),
+          many turns, or code/tools → COMPLEX
         - Everything else → MODERATE
 
     Args:

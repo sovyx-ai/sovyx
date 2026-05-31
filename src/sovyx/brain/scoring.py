@@ -295,10 +295,11 @@ class ImportanceScorer:
         return degree_norm * 0.7 + _clamp01(avg_weight) * 0.3
 
     def score_recency(self, days_since_access: float) -> float:
-        """Recency score with 30-day half-life exponential decay.
+        """Recency score with 30-day e-folding (1/e) exponential decay.
 
-        Recently accessed concepts score near 1.0.
-        After 30 days without access: ~0.37.
+        Decay constant tau = 30 days (NOT a half-life; the half-life is
+        30·ln2 ≈ 20.8 days). Recently accessed concepts score near 1.0.
+        After 30 days without access: ~0.37 (= 1/e).
         After 90 days: ~0.05.
 
         Args:
