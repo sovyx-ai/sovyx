@@ -424,10 +424,30 @@ class PluginManager:
             event_bus=events_access,
         )
 
-        # Setup with ImportGuard active
+        # Setup with ImportGuard active.
+        #
+        # ISovyxPlugin.teardown contract: teardown() runs even when setup()
+        # raises, so a plugin can release resources it acquired before failing
+        # (C-Σ-004). Mirror unload(): clean the event bridge, then teardown —
+        # both best-effort, logged, and NEVER masking the original setup error
+        # (the bare ``raise`` re-raises it).
         guard = ImportGuard(name)
-        with guard:
-            await plugin.setup(ctx)
+        try:
+            with guard:
+                await plugin.setup(ctx)
+        except Exception:
+            if events_access is not None:
+                try:
+                    events_access.cleanup()
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    logger.error(
+                        "plugin_setup_cleanup_failed", plugin=name, error=str(cleanup_exc)
+                    )
+            try:
+                await plugin.teardown()
+            except Exception as teardown_exc:  # noqa: BLE001
+                logger.error("plugin_teardown_failed", plugin=name, error=str(teardown_exc))
+            raise
 
         # Collect tools (already namespaced by get_tools: "plugin.tool")
         tools = plugin.get_tools()

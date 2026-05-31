@@ -241,6 +241,47 @@ class TestPluginLoading:
         assert loaded == []
         assert mgr.plugin_count == 0
 
+    @pytest.mark.anyio()
+    async def test_teardown_called_when_setup_raises(self, tmp_path: Path) -> None:
+        """C-Σ-004: teardown() runs even when setup() raises.
+
+        Honors the ISovyxPlugin.teardown contract so a plugin releases
+        resources acquired before failing. The original setup error still
+        propagates and the plugin is not registered.
+        """
+
+        class _SetupFailsTracksTeardown(ISovyxPlugin):
+            def __init__(self) -> None:
+                self.teardown_called = False
+
+            @property
+            def name(self) -> str:
+                return "setup-fails-track"
+
+            @property
+            def version(self) -> str:
+                return "1.0.0"
+
+            @property
+            def description(self) -> str:
+                return "setup raises; records teardown"
+
+            async def setup(self, ctx: object) -> None:
+                msg = "boom in setup"
+                raise RuntimeError(msg)
+
+            async def teardown(self) -> None:
+                self.teardown_called = True
+
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
+        plugin = _SetupFailsTracksTeardown()
+        # Anti-pattern #8: catch Exception, assert by message/class name.
+        with pytest.raises(Exception) as exc_info:  # noqa: PT011
+            await mgr.load_single(plugin)
+        assert "boom in setup" in str(exc_info.value)
+        assert plugin.teardown_called is True  # teardown ran despite setup failure
+        assert mgr.plugin_count == 0  # not registered
+
 
 # ── Tool Execution ──────────────────────────────────────────────────
 
