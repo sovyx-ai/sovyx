@@ -67,8 +67,8 @@ Plus `uv lock --check` on version bumps. Always grep gate summary line — never
 ```
 src/sovyx/
 ├── engine/        # Config, bootstrap, lifecycle, events, registry, RPC (LRULockDict)
-├── cognitive/     # Perceive → Attend → Think → Act → Reflect (safety/, reflect/ subpkgs)
-├── brain/         # Concepts, episodes, relations, embedding, scoring, retrieval
+├── cognitive/     # Cognitive loop — 5 request-driven phases: Perceive → Attend → Think → Act → Reflect (safety/, reflect/ subpkgs). Phases 6-7 (Consolidate, Dream) are scheduled in brain/. Canonical: docs-internal/architecture/cognitive-loop.md
+├── brain/         # Concepts, episodes, relations, embedding, scoring, retrieval; Consolidate (6h) + Dream (nightly) schedulers = cognitive phases 6-7
 ├── bridge/channels/  # telegram.py, signal.py
 ├── persistence/   # SQLite pool (WAL, round-robin readers), migrations
 ├── observability/ # Logging (structlog), health, alerts, SLOs, tracing
