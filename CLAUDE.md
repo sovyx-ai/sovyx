@@ -28,7 +28,7 @@ Sovereign Minds Engine — persistent AI companion with real memory, cognitive l
 - **CI:** GitHub Actions on self-hosted `sovyx-4core` → ruff + mypy + bandit + pytest (3.11/3.12) + vitest + tsc + Docker + PyPI.
 - **CLI:** `sovyx` entry (`sovyx.cli.main:app`), plugin entry points under `sovyx.plugins`.
 
-## Quality Gates (MANDATORY before any commit)
+## Quality Gates (MANDATORY before `git push`)
 
 Mechanical forcing function — `git push` is REJECTED without proof:
 
@@ -39,6 +39,8 @@ git push                      # hook validates marker fresh + HEAD-matched, else
 ```
 
 Hook at `.githooks/pre-push` validates marker within 30min (override: `SOVYX_GATES_MAX_AGE_SEC`). Escape `--no-verify` requires operator approval + commit-body rationale.
+
+**Scope — when a gate run is actually needed (read this before burning 10 min):** the marker gates `git push` and is **HEAD-matched**, so run `verify_gates.sh` *after* your final commit of a series, not before each one. A commit touching **only** gitignored surfaces (`docs-internal/`, the auto-memory store) or **only** prose/comment/docstring text has no gate dependency — it can't move gates 1–7 and (for gitignored paths) is never even pushed. The full suite matters when `src/`, `dashboard/src/`, `scripts/`, or config changed and you intend to push. A commit alone (no push) never requires gates; only a `vX.Y.Z` **tag** triggers `publish.yml`.
 
 Gates (in order):
 
@@ -119,7 +121,8 @@ docs-internal/     # Internal missions/ADRs (gitignored)
 - **Commits:** Conventional (`feat:`, `fix:`, `refactor:`, `test:`, `chore:`, `perf:`, `docs:`).
 - **Tags:** `vX.Y.Z` triggers `publish.yml` → PyPI (OIDC) + Docker + Release. Tag matches `pyproject.toml` version.
 - **Dashboard:** stage alongside backend in same commit when related.
-- **Branch:** Always `main`. No feature branches.
+- **Branch:** Always `main`. No feature branches. (Overrides the harness "branch first on default branch" default.)
+- **Local-only surfaces — NEVER `git add`:** `docs-internal/` (`.gitignore:65`), the auto-memory store (`~/.claude/.../memory/`, outside the repo), and `.signing-keys/` are gitignored/external. Edits there are real but **local** — they will never appear in a commit or reach PyPI/GitHub. So: (a) doc/mission/ADR work under `docs-internal/` is local-only by design; (b) a source file (READMEs in `src/`, docstrings) that *links into* `docs-internal/` ships a dead link to PyPI consumers — prefer a `docs/` public target. When unsure if a path is tracked: `git check-ignore -v <path>` (`feedback_verify_gitignore_before_url`).
 
 ## Anti-Patterns (bugs that already happened)
 

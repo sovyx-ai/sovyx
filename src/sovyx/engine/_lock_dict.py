@@ -18,7 +18,9 @@ by short-lived locks. The legacy ``__getitem__`` / ``setdefault``
 returns the bare lock unchanged so existing ``async with locks[key]:``
 sites keep working without modification, just without latency
 telemetry until they opt in to ``acquire()``. ``setdefault`` emits a
-``lock.evicted`` record whenever the LRU policy drops a key.
+``lock.evicted`` record (INFO) when the LRU drops an unheld key, or
+``lock.evicted_all_held`` (WARNING) when every entry is held and the
+oldest is force-dropped. Grep BOTH event names to count all evictions.
 """
 
 from __future__ import annotations

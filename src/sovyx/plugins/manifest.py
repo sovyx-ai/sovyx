@@ -194,7 +194,7 @@ class PluginManifest(BaseModel):
     @field_validator("version")
     @classmethod
     def validate_version(cls, v: str) -> str:
-        """Basic semver format check (X.Y.Z)."""
+        """Basic version format check — requires at least MAJOR.MINOR (e.g. '1.2' or '1.2.3')."""
         parts = v.split(".")
         if len(parts) < 2:  # noqa: PLR2004
             msg = f"Version must be semver format (X.Y.Z), got '{v}'"

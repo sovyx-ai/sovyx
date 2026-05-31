@@ -24,8 +24,8 @@ ChannelId = NewType("ChannelId", str)
 def generate_id() -> str:
     """Generate a time-sortable unique ID.
 
-    Format: "{timestamp_ms_hex}_{uuid4}"
-    Example: "018e3a1b_550e8400-e29b-41d4-a716-446655440000"
+    Format: "{timestamp_ms_hex}_{uuid4}"  (timestamp is 12 hex digits, zero-padded)
+    Example: "018e3a1b2c3d_550e8400-e29b-41d4-a716-446655440000"
 
     Sortable by creation time while remaining globally unique.
     """

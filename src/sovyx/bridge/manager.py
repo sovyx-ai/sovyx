@@ -487,7 +487,8 @@ class BridgeManager:
         # Resolve in FinancialGate state
         if self._financial_gate:
             if is_confirm:
-                # Confirm all pending tool calls
+                # Confirm the single most-recent pending tool call
+                # (get_pending() returns one; cancel branch below cancels all)
                 pending = self._financial_gate.state.get_pending()
                 if pending:
                     self._financial_gate.state.confirm(pending.tool_call.id)

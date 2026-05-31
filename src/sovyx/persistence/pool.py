@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# ── Default pragmas (ADR-004 §2.3 — all 9 non-negotiable) ──────────────────
+# ── Default pragmas (ADR-004 §2.3 — 7 non-negotiable; cache_size/mmap_size are caller-injected) ──
 
 _DEFAULT_PRAGMAS: dict[str, str | int] = {
     "journal_mode": "WAL",

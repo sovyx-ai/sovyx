@@ -39,7 +39,9 @@ _MAX_BACKOFF = 60
 class TelegramChannel:
     """Telegram channel adapter.
 
-    v0.1: text + reply only. No media, inline keyboards, or complex groups.
+    Supports text, inline keyboards (``buttons`` → ``_build_inline_keyboard``),
+    and message edits. Formatting is via telegramify-markdown MessageEntity,
+    not ``parse_mode``. No media or complex group management yet.
     """
 
     def __init__(self, token: str, bridge_manager: BridgeManager) -> None:
