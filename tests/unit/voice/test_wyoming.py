@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from sovyx.engine.errors import VoiceError
 from sovyx.voice.wyoming import (
     SOVYX_ATTRIBUTION,
     WYOMING_SERVICE_TYPE,
@@ -573,6 +574,29 @@ class TestHandlerSTT:
         audio_arg = stt.transcribe.call_args[0][0]
         assert len(audio_arg) == 160  # Only new chunk
 
+    @pytest.mark.asyncio
+    async def test_transcribe_engine_error_emits_empty_transcript(self) -> None:
+        """W2.2 / G-P1-5 — a raising STT engine completes the HA turn with an
+        empty transcript instead of propagating out of run() and crashing the
+        connection handler (run() only catches Connection/Cancelled)."""
+        stt = AsyncMock()
+        stt.transcribe = AsyncMock(side_effect=RuntimeError("onnx exploded"))
+        pcm = bytes(640)
+        handler, _, writer = _make_handler(
+            events=[
+                WyomingEvent(type="transcribe", data={"language": "en"}),
+                WyomingEvent(type="audio-start", data={"rate": 16000}),
+                WyomingEvent(type="audio-chunk", data={"rate": 16000}, payload=pcm),
+                WyomingEvent(type="audio-stop"),
+            ],
+            stt_engine=stt,
+        )
+        # MUST NOT raise — the engine error is handled gracefully.
+        await handler.run()
+        transcript = [e for e in writer.get_events() if e.type == "transcript"]
+        assert len(transcript) == 1
+        assert transcript[0].data["text"] == ""
+
 
 # ---------------------------------------------------------------------------
 # Client handler — TTS
@@ -625,6 +649,22 @@ class TestHandlerTTS:
         assert start.data["rate"] == 22050
         assert start.data["width"] == 2
         assert start.data["channels"] == 1
+
+    @pytest.mark.asyncio
+    async def test_synthesize_engine_error_emits_audio_stop(self) -> None:
+        """W2.2 / G-P1-5 — a raising TTS engine closes the turn with a bare
+        audio-stop instead of crashing the connection handler. The error fires
+        before any audio-start, so a lone audio-stop is the correct framing."""
+        tts = AsyncMock()
+        tts.synthesize = AsyncMock(side_effect=VoiceError("tts backend down"))
+        handler, _, writer = _make_handler(
+            events=[WyomingEvent(type="synthesize", data={"text": "hello"})],
+            tts_engine=tts,
+        )
+        # MUST NOT raise.
+        await handler.run()
+        types = [e.type for e in writer.get_events()]
+        assert types == ["audio-stop"]
 
     @pytest.mark.asyncio
     async def test_synthesize_empty_text(self) -> None:

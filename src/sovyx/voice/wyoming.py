@@ -21,6 +21,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -579,8 +580,20 @@ class WyomingClientHandler:
         # Convert PCM to float32 ndarray
         audio_np = pcm_bytes_to_ndarray(bytes(audio_buffer), self._config.mic_width)
 
-        # Transcribe
-        result = await self._stt.transcribe(audio_np, self._config.mic_rate)
+        # Transcribe. W2.2 / G-P1-5 — a transient STT engine error (timeout,
+        # ONNX failure, I/O) must complete the HA turn with an EMPTY transcript
+        # — the same graceful framing as the not-available path above — instead
+        # of propagating out of run() (whose try only catches Connection/
+        # Cancelled) and crashing the connection handler. Mirrors the
+        # orchestrator's (VoiceError, RuntimeError, OSError) STT catch.
+        try:
+            result = await self._stt.transcribe(audio_np, self._config.mic_rate)
+        except (VoiceError, RuntimeError, OSError) as exc:
+            logger.warning("wyoming_stt_failed", error=str(exc), exc_info=True)
+            await self._write_event(
+                WyomingEvent(type="transcript", data={"text": "", "language": language}),
+            )
+            return
 
         # Extract text (handle both string and object results)
         text = result.text if hasattr(result, "text") else str(result)
@@ -601,8 +614,17 @@ class WyomingClientHandler:
             await self._write_event(WyomingEvent(type="audio-stop"))
             return
 
-        # Synthesize
-        chunk = await self._tts.synthesize(text)
+        # Synthesize. W2.2 / G-P1-5 — a transient TTS engine error must close
+        # the turn with a bare audio-stop (graceful, like the not-available
+        # path above) rather than crash the connection handler. The error
+        # fires BEFORE any audio-start, so a lone audio-stop is the correct
+        # zero-audio framing for the HA client.
+        try:
+            chunk = await self._tts.synthesize(text)
+        except (VoiceError, RuntimeError, OSError) as exc:
+            logger.warning("wyoming_tts_failed", error=str(exc), exc_info=True)
+            await self._write_event(WyomingEvent(type="audio-stop"))
+            return
 
         # Extract audio bytes from result
         audio_bytes = ndarray_to_pcm_bytes(chunk.audio)
