@@ -12,8 +12,9 @@ and only downmixed (``indata[:, 0]``). That silently worked when the WASAPI
 mixer format already matched (16 kHz / 1 ch) but broke whenever the opener
 pyramid fell back to 48 kHz / 2 ch — common on Windows shared-mode mics
 (Razer BlackShark, most USB headsets). See the root-cause writeup in
-``docs-internal/audits/voice-silent-vad.md`` (local) for the full debug
-trace.
+``docs-internal/missions/MISSION-voice-linux-silent-mic-remediation-2026-05-04.md``
+(canonical; supersedes the original voice-silent-vad audit) for the full
+debug trace.
 
 This module owns the four transformations that have to happen between
 the PortAudio callback and :meth:`feed_frame`:

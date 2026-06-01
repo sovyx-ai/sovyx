@@ -31,8 +31,9 @@ reopen. The capture stream keeps running untouched — so the strategy
 is strictly safer than the Windows exclusive-mode path, which tears
 down and rebuilds the stream.
 
-See ``docs-internal/plans/linux-alsa-mixer-saturation-fix.md`` §2.3
-for the derivation.
+See ``docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md``
+for the derivation (canonical; supersedes the original
+linux-alsa-mixer-saturation-fix plan).
 """
 
 from __future__ import annotations

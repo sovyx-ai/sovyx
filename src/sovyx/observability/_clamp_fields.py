@@ -23,7 +23,7 @@ downstream snapshotter (Phase 6) can emit aggregated
 ``logging.field_truncated`` events on a periodic cadence — emitting
 inline would recurse through the processor chain.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §22.1.
+Aligned with IMPL-OBSERVABILITY-001 §22.1.
 """
 
 from __future__ import annotations

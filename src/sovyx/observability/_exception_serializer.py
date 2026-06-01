@@ -24,7 +24,7 @@ A cycle guard (``id`` set) prevents infinite recursion when
 A depth cap keeps the serialized payload bounded so a 1000-deep
 chain can't OOM the writer thread.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §22.2.
+Aligned with IMPL-OBSERVABILITY-001 §22.2.
 """
 
 from __future__ import annotations

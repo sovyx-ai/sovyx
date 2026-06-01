@@ -45,7 +45,7 @@ else
 fi
 
 GATE_NUM=0
-GATE_TOTAL=18
+GATE_TOTAL=19
 FAILURES=()
 
 ok() {
@@ -447,6 +447,32 @@ if uv run python scripts/dev/check_boundary_helper_real.py >"$LOG" 2>&1; then
 else
     printf '%s⚠%s gate %d/%d — boundary helper realism LENIENT warn (Mission C v0.49.38; STRICT at v0.53.x); log: %s\n' \
         "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$LOG"
+fi
+
+# ── Gate 19: name-lock integrity (Mission Ω-3, anti-pattern #68 DRAFT) ─────
+# Mission Ω-3 Phase T0 LENIENT — warn-only locally; STRICT at v0.52.0.
+# Asserts every docs-internal/* path reference in src/sovyx docstrings
+# resolves to an existing file. A dead link ships to PyPI as a public
+# dead doc link (CLAUDE.md Git section). Past archive moves silently
+# rotted 34 such links (Mission Ω-3 T0 repair); baseline after repair: 0.
+# Bare spec-ID citations (no docs-internal/ prefix) are provenance, not
+# path links, and are deliberately not flagged.
+GATE_NUM=19
+LOG="$LOG_DIR/19-name-lock-integrity.log"
+if uv run python scripts/dev/check_name_lock_integrity.py >"$LOG" 2>&1; then
+    if grep -q "name-lock integrity: PASS" "$LOG"; then
+        ok "name-lock integrity — PASS"
+    else
+        # exit 0 but no PASS line — unexpected shape, warn
+        printf '%s⚠%s gate %d/%d — name-lock integrity LENIENT warn: exit 0 without PASS line; log: %s\n' \
+            "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$LOG"
+    fi
+else
+    # Non-zero exit — LENIENT phase, warn only; do NOT fail verify_gates.sh.
+    # v0.52.0 STRICT promotion will replace this branch with `bad ...`.
+    VIOLATIONS=$(grep -oE "[0-9]+ violation\(s\)" "$LOG" | head -1 || echo "0 violations")
+    printf '%s⚠%s gate %d/%d — name-lock integrity LENIENT warn: %s (Mission Ω-3 v0.49.x; STRICT at v0.52.0); log: %s\n' \
+        "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$VIOLATIONS" "$LOG"
 fi
 
 # ── Final verdict ────────────────────────────────────────────────────

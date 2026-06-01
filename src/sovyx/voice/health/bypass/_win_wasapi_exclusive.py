@@ -13,8 +13,9 @@ The strategy is a thin orchestrator over
 — exclusive-mode negotiation, shared-mode fallback detection, verdict
 classification — lives in the capture task.
 
-See ``docs-internal/plans/voice-apo-os-agnostic-fix.md`` §4.1 for the
-full derivation.
+See ``docs-internal/ADR-voice-bypass-tier-system.md`` for the
+full derivation (canonical; supersedes the original
+voice-apo-os-agnostic-fix plan).
 """
 
 from __future__ import annotations

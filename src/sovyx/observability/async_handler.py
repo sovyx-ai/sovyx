@@ -19,7 +19,7 @@ blocking application code. Drops are observable via
 :meth:`AsyncQueueHandler.dropped_count` so the operator can size
 ``async_queue_size`` to the workload.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §7 Task 1.6
+Aligned with IMPL-OBSERVABILITY-001 §7 Task 1.6
 and §23 (perf budgets).
 """
 

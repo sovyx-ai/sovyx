@@ -29,8 +29,9 @@ Thin orchestrator over
 capture task owns the enumeration + opener fallback; the strategy
 only sequences the verdict classification.
 
-See ``docs-internal/plans/linux-alsa-mixer-saturation-fix.md`` §2.4
-for the derivation.
+See ``docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md``
+for the derivation (canonical; supersedes the original
+linux-alsa-mixer-saturation-fix plan).
 """
 
 from __future__ import annotations

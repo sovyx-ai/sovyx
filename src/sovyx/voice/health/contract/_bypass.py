@@ -15,8 +15,9 @@ an OS-agnostic detection layer paired with a platform-specific strategy
 pattern (``PlatformBypassStrategy`` Protocol in
 :mod:`sovyx.voice.health.bypass._strategy`).
 
-See ``docs-internal/plans/voice-apo-os-agnostic-fix.md`` §2.3 for the
-derivation of each field + threshold.
+See ``docs-internal/ADR-voice-bypass-tier-system.md`` for the
+derivation of each field + threshold (canonical; supersedes the
+original voice-apo-os-agnostic-fix plan).
 
 All public names re-exported from :mod:`sovyx.voice.health.contract`.
 """

@@ -17,7 +17,7 @@ when rendering each entry. ``bind_contextvars`` returns
 This makes nesting safe: opening saga B inside saga A cleanly returns
 to A's ``saga_id`` when B exits.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §8 (Phase 2).
+Aligned with IMPL-OBSERVABILITY-001 §8 (Phase 2).
 """
 
 from __future__ import annotations

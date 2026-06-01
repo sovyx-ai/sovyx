@@ -109,8 +109,9 @@ class Eligibility:
 # (writes + snapshot-driven rollback), and serialised onto the dashboard
 # via ``GET /api/voice/linux-mixer-diagnostics``.
 #
-# See ``docs-internal/plans/linux-alsa-mixer-saturation-fix.md`` §2.3.2
-# for the derivation of each field + the classification rules.
+# See ``docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md``
+# for the derivation of each field + the classification rules
+# (canonical; supersedes the original linux-alsa-mixer-saturation-fix plan).
 
 
 @dataclass(frozen=True, slots=True)

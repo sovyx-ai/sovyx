@@ -23,8 +23,9 @@ misbehaving codec driver never blocks the event loop. Argv is fixed
 (no shell) and ``amixer`` is resolved via :func:`shutil.which` so we
 fail fast rather than inheriting ``PATH``.
 
-See ``docs-internal/plans/linux-alsa-mixer-saturation-fix.md`` §2.3.4
-for the derivation of the reset fractions and the rollback invariant.
+See ``docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md``
+for the derivation of the reset fractions and the rollback invariant
+(canonical; supersedes the original linux-alsa-mixer-saturation-fix plan).
 """
 
 from __future__ import annotations
@@ -91,7 +92,8 @@ _CAPTURE_RESET_FRACTION: float = 0.5
 """Fraction of raw range applied by :func:`apply_mixer_reset` to
 capture-path controls. Midpoint reset is the empirically-derived
 operating point for Silero VAD across the validated codec matrix
-(see ``docs-internal/plans/linux-alsa-mixer-saturation-fix.md`` §2.3.4)."""
+(see ``docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md``;
+    canonical, supersedes the original linux-alsa-mixer-saturation-fix plan)."""
 
 _BOOST_ATTENUATION_FIX_FRACTION: float = 0.33
 """Fraction of raw range applied by :func:`apply_mixer_boost_up` to

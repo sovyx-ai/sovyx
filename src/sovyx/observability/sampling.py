@@ -18,7 +18,7 @@ All other events pass through untouched: sampling is opt-in, not
 opt-out, so a new event accidentally added to a hot path is logged at
 full rate until someone explicitly registers it here.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §7 Task 1.5.
+Aligned with IMPL-OBSERVABILITY-001 §7 Task 1.5.
 """
 
 from __future__ import annotations

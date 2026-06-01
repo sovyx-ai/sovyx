@@ -26,7 +26,7 @@ don't care about the result should call :func:`mark_consumed` to
 suppress the signal. Failed tasks are not flagged as orphans because
 the failure log itself already records the unhandled outcome.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §6 Task 6.2.
+Aligned with IMPL-OBSERVABILITY-001 §6 Task 6.2.
 """
 
 from __future__ import annotations

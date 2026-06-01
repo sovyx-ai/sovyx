@@ -173,7 +173,7 @@ class WindowsRawCommunicationsBypass:
         * ``docs-internal/ADR-voice-bypass-tier-system.md`` (full ADR)
         * ``docs-internal/ROADMAP-POST-V0.31.0.md::A5`` (deprecation
           status + decision matrix)
-        * ``docs-internal/missions/MISSION-v0.30.0-single-mind-ga-2026-05-03.md``
+        * ``docs-internal/archive/missions-completed/MISSION-v0.30.0-single-mind-ga-2026-05-03.md``
           §T3 (the deprecation decision audit)
         * Mission ``MISSION-voice-windows-paranoid-2026-04-26.md`` §T27
           (the original implementation deferral)

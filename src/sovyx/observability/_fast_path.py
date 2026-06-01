@@ -27,7 +27,7 @@ Wire-up convention in :func:`setup_logging`:
   :class:`NonFastPathFilter` so fast-path records aren't
   double-emitted through both routes.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §22.8.
+Aligned with IMPL-OBSERVABILITY-001 §22.8.
 """
 
 from __future__ import annotations

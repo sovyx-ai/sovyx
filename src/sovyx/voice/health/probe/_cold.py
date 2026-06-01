@@ -113,8 +113,9 @@ _FORMAT_MISMATCH_KEYWORDS = (
     "invalid number of channels",
     "unsupported",
 )
-# Kernel-invalidated IAudioClient state — see ADR §4.4.7 + the
-# forensic report in ``docs-internal/voice-capture-kernel-invalidated.md``.
+# Kernel-invalidated IAudioClient state — see
+# ``docs-internal/ADR-voice-capture-health-lifecycle.md`` (canonical;
+# supersedes the original voice-capture-kernel-invalidated forensic report).
 # PortAudio surfaces this as ``paInvalidDevice`` (-9996) because
 # ``IAudioClient::Initialize`` returns one of the AUDCLNT_E_DEVICE_*
 # HRESULTs, and sounddevice re-wraps that as "Invalid device". The PnP

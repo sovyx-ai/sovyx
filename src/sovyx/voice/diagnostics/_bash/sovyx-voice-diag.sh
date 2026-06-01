@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sovyx-voice-diag — bateria completa de diagnóstico de voz/áudio Sovyx (Linux).
 #
-# Fase 2 do plano docs-internal/diagnostics/voice-linux-mint-2026-04-22-plan.md (v2).
+# Fase 2 do plano docs-internal/archive/missions-completed/voice-linux-mint-2026-04-22-plan.md (v2).
 # Ver README-DIAG.md para uso.
 #
 # Licença: interno.

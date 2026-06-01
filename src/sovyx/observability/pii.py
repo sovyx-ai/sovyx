@@ -25,7 +25,7 @@ Two layers of defence run on every record:
 The sweep is idempotent: ``[redacted-email]`` does not match
 ``EMAIL_RE``, so a record processed twice produces the same output.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §7 Task 1.4
+Aligned with IMPL-OBSERVABILITY-001 §7 Task 1.4
 and §22.3 (no real PII in fixtures — enforced by the CI gate added
 under P11+.4).
 """

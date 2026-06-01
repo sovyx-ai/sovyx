@@ -19,7 +19,7 @@ and :func:`atexit.register`. Each hook chains to the previous one
 (rather than replacing it), so a downstream tool's excepthook is not
 clobbered.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §7 Task 1.7.
+Aligned with IMPL-OBSERVABILITY-001 §7 Task 1.7.
 """
 
 from __future__ import annotations

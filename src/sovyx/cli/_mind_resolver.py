@@ -20,7 +20,7 @@ silently fall through to the auto-detect branch (anti-pattern #35 closure).
 
 History: introduced 2026-05-13 to close the 6th surface of anti-pattern
 #35 (cross-layer sentinel defaults) in the Sovyx voice/CLI flow. Mission:
-``docs-internal/missions/MISSION-voice-config-calibrate-enterprise-2026-05-13.md``
+``docs-internal/archive/missions-completed/MISSION-voice-config-calibrate-enterprise-2026-05-13.md``
 §4 Phase 1 (T1.1).
 """
 

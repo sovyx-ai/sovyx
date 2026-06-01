@@ -23,8 +23,9 @@ malformed output, or a card with no mixer controls silently return
 empty snapshots — the higher-level coordinator treats this as "no
 Linux strategy applicable" and advances.
 
-See ``docs-internal/plans/linux-alsa-mixer-saturation-fix.md`` §2.3.3
-for the derivation.
+See ``docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md``
+for the derivation (canonical; supersedes the original
+linux-alsa-mixer-saturation-fix plan).
 """
 
 from __future__ import annotations

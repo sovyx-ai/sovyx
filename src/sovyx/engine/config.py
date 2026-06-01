@@ -1796,8 +1796,10 @@ class VoiceTuningConfig(BaseSettings):
     bypass_fingerprint_min_confidence: float = 0.7
 
     # ── Linux ALSA bypass strategies (Phase 3) ─────────────────────────
-    # See docs-internal/plans/linux-alsa-mixer-saturation-fix.md for the
-    # full derivation. Covers two orthogonal Linux failure modes that
+    # See docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md for the
+    # full derivation (canonical; supersedes the original
+    # linux-alsa-mixer-saturation-fix plan). Covers two orthogonal Linux
+    # failure modes that
     # both surface as ``IntegrityVerdict.APO_DEGRADED``: analog mixer
     # saturation (Internal Mic Boost / Capture driven above the ADC's
     # safe range) and session-manager DSP (PulseAudio

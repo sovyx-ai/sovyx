@@ -107,7 +107,7 @@ from sovyx.voice.capture._contention import (
 # working without an import-path migration.
 # T1.4 step 6 — first mixin landed. Subsequent steps add more
 # mixins to the composition root per
-# ``docs-internal/T1.4-step-6-mixin-surgery-plan.md``.
+# ``docs-internal/archive/plans-shipped/T1.4-step-6-mixin-surgery-plan.md``.
 from sovyx.voice.capture._epoch import EpochMixin
 
 # T1.4 step 2 — exception class hierarchy extracted to
@@ -247,7 +247,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
       ``(epoch, samples_written)`` decomposition.
     * Future steps land additional mixins (``RingMixin``,
       ``RestartMixin``, ``LoopMixin``) per
-      ``docs-internal/T1.4-step-6-mixin-surgery-plan.md``.
+      ``docs-internal/archive/plans-shipped/T1.4-step-6-mixin-surgery-plan.md``.
 
     Owns a ``sounddevice.InputStream`` running at 16 kHz / int16 /
     512-sample blocks — the exact frame shape the pipeline expects.

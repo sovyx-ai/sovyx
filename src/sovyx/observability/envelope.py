@@ -23,7 +23,7 @@ hot-path emit overhead is four dict assignments + one
 per record (sub-microsecond), keeping the §23 performance budget
 intact.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §7 Task 1.3
+Aligned with IMPL-OBSERVABILITY-001 §7 Task 1.3
 and §8 Task 2.2.
 """
 
