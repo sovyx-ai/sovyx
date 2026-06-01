@@ -57,6 +57,13 @@ bad() {
     FAILURES+=("$1")
 }
 
+# Neutral outcome — a gate that is correctly not-applicable on THIS box
+# (e.g. a dashboard-bundle check on a checkout with no local build). Does
+# NOT count as a failure; the gate is enforced elsewhere (publish.yml).
+skip() {
+    printf '%s○%s gate %d/%d — SKIP: %s\n' "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$1"
+}
+
 # ── Gate 1: ruff lint ────────────────────────────────────────────────
 GATE_NUM=1
 LOG="$LOG_DIR/01-ruff-lint.log"
@@ -258,24 +265,27 @@ else
 fi
 
 # ── Gate 11: dashboard bundle integrity (Mission C5 §T1.3) ───────────
-# Mission C5 Phase 1.A LENIENT — warn-only locally; STRICT in publish.yml's
-# post-build verify (Mission C5 §T1.4). STRICT in verify_gates.sh is pending
-# the V-C5-7 operator stamp (still LENIENT at v0.49.53), per ADR-D12.
+# STRICT-when-applicable (W0.1 — MISSION-VOICE-DEEP-INVESTIGATION-2026-06-01).
+# The hashed-chunk bundle only exists on disk after `npm run build`, so a
+# checkout with NO local build legitimately has nothing to verify — that
+# `static_dir_missing` case SKIPS (the gate is enforced STRICT in
+# publish.yml against the built wheel, where the bundle always exists).
+# But a bundle that IS present and PARTIAL / index-missing / no-assets now
+# FAILS locally too (anti-pattern #43). This closes the prior "LENIENT
+# warn forever" gap — Gate 11's STRICT target was v0.48.0 but the flip was
+# never executed (V-C5-7 stamp lag) — without breaking devs who haven't
+# built the dashboard. `--json` makes the verdict machine-parseable so the
+# skip vs fail branch is deterministic, not a string heuristic.
 GATE_NUM=11
 LOG="$LOG_DIR/11-dashboard-bundle-integrity.log"
-if uv run python scripts/dev/check_dashboard_bundle_integrity.py >"$LOG" 2>&1; then
-    if grep -q "FULLY_PRESENT" "$LOG"; then
-        ok "dashboard bundle integrity — FULLY_PRESENT"
-    else
-        # exit 0 but no summary — gate ran without classifier, treat as warn
-        printf '%s⚠%s gate %d/%d — dashboard bundle integrity LENIENT warn: exit 0 without FULLY_PRESENT line; log: %s\n' \
-            "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$LOG"
-    fi
+if uv run python scripts/dev/check_dashboard_bundle_integrity.py --json >"$LOG" 2>&1; then
+    ok "dashboard bundle integrity — FULLY_PRESENT"
 else
-    # Non-zero exit — LENIENT phase, warn only; do NOT fail verify_gates.sh.
-    # Phase 3 STRICT promotion will replace this branch with `bad ...`.
-    printf '%s⚠%s gate %d/%d — dashboard bundle integrity LENIENT warn (Phase 1.A v0.47.0; STRICT pending V-C5-7 stamp); log: %s\n' \
-        "$YELLOW" "$RESET" "$GATE_NUM" "$GATE_TOTAL" "$LOG"
+    if grep -q '"verdict": "static_dir_missing"' "$LOG"; then
+        skip "dashboard bundle integrity — no local dashboard build (enforced STRICT in publish.yml)"
+    else
+        bad "dashboard bundle integrity — anti-pattern #43: bundle present but incomplete; log: $LOG"
+    fi
 fi
 
 # ── Gate 12: LLM provider wire-discipline (Mission C6 §T1.4) ─────────

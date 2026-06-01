@@ -48,7 +48,7 @@ Gates (in order):
 # 1-5 backend: ruff check / ruff format --check / mypy (strict) / bandit / pytest --timeout=30 -q
 # 6-7 dashboard: npx tsc -b tsconfig.app.json / npx vitest run --reporter=dot
 # 8-10 STRICT: boundary_round_trip (C2) / ladder_iteration (C3) / degraded_signal_surface (C4)
-# 11 dashboard_bundle_integrity      — LENIENT v0.47.x..v0.49.x; STRICT pending V-C5-7 operator stamp  (C5)
+# 11 dashboard_bundle_integrity      — STRICT-when-applicable v0.49.x (verify_gates.sh: enforce if bundle present, SKIP if no local build; full STRICT in publish.yml)  (C5, W0.1)
 # 12 llm_provider_discipline         — LENIENT v0.49.x; STRICT v0.50.0    (C6, V-C6-11)
 # 13 platform_neutral_event_names    — LENIENT v0.49.x; STRICT v0.51.0    (H2, V-H2-11)
 # 14 quarantine_reason_discipline    — LENIENT v0.49.10..v0.52.x; STRICT v0.53.0 (H3, V-H3-11)
