@@ -183,6 +183,7 @@ class KokoroTTS(TTSEngine):
         self._model_dir = Path(model_dir)
         self._kokoro: Any | None = None
         self._initialized = False
+        self._heal_attempted = False
         self._chunk_counter = 0
         # TS3 chaos injector — opt-in zero-energy injection at the
         # TTS_ZERO_ENERGY site. Disabled by default; chaos test
@@ -254,6 +255,30 @@ class KokoroTTS(TTSEngine):
             register_onnx_session(label="voice.tts.kokoro", session=session)
             self._kokoro = Kokoro.from_session(session, str(voices_path))
         except Exception as exc:  # noqa: BLE001
+            # G-P2-4 — one-shot SHA-verified self-heal at LOAD time. The
+            # download-path self-heal (ModelDownloader SHA re-download) only
+            # runs at factory/preflight; a model that corrupts AFTER preflight
+            # (partial write, disk bit-rot) fails to load HERE and would crash
+            # the daemon. Re-download (SHA-verified) + retry once before giving
+            # up, so the daemon recovers without operator action. Gated on the
+            # production "kokoro" dir convention (ensure_kokoro_tts resolves
+            # ``<parent>/kokoro``) + a one-shot guard so a genuinely-broken
+            # download can't loop. A real incident (E2E 2026-06-01) hit exactly
+            # this corrupt-cache case.
+            if not self._heal_attempted and self._model_dir.name == "kokoro":
+                self._heal_attempted = True
+                logger.warning("kokoro_load_failed_attempting_self_heal", error=str(exc))
+                try:
+                    from sovyx.voice.model_registry import (  # noqa: PLC0415
+                        ensure_kokoro_tts,
+                    )
+
+                    await ensure_kokoro_tts(self._model_dir.parent)
+                except Exception:  # noqa: BLE001 — heal best-effort; fall through to raise
+                    logger.warning("kokoro_self_heal_download_failed", exc_info=True)
+                else:
+                    await self.initialize()  # retry once; _heal_attempted guards the loop
+                    return
             msg = f"Failed to initialize Kokoro: {exc}"
             raise RuntimeError(msg) from exc
 

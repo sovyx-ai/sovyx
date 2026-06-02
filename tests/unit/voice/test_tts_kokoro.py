@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -1172,3 +1172,76 @@ class TestKokoroChaosWireUp:
         await kokoro.synthesize("hello world")
 
         assert (VoiceStage.TTS, StageEventKind.DROP, "zero_energy") in recorded
+
+
+# ---------------------------------------------------------------------------
+# G-P2-4 — load-time SHA self-heal
+# ---------------------------------------------------------------------------
+
+
+class TestKokoroLoadSelfHeal:
+    """A model that corrupts AFTER preflight fails to load; initialize()
+    self-heals (SHA-verified re-download) + retries once, gated on the
+    production 'kokoro' dir convention."""
+
+    @pytest.mark.asyncio
+    async def test_load_failure_self_heals_and_retries(self, tmp_path: Path) -> None:
+        model_dir = tmp_path / "kokoro"
+        model_dir.mkdir()
+        _setup_model_dir(model_dir)
+        tts = KokoroTTS(model_dir)
+
+        mock_module = MagicMock(
+            Kokoro=MagicMock(from_session=MagicMock(return_value=_make_mock_kokoro()))
+        )
+        with (
+            patch.dict("sys.modules", {"kokoro_onnx": mock_module}),
+            patch.object(
+                onnxruntime,
+                "InferenceSession",
+                side_effect=[OSError("corrupt model"), MagicMock()],
+            ),
+            patch(
+                "sovyx.voice.model_registry.ensure_kokoro_tts",
+                new=AsyncMock(),
+            ) as ensure_mock,
+        ):
+            await tts.initialize()
+
+        assert tts._initialized is True
+        ensure_mock.assert_awaited_once()  # re-download was attempted
+
+    @pytest.mark.asyncio
+    async def test_persistent_corruption_raises_after_one_heal(self, tmp_path: Path) -> None:
+        model_dir = tmp_path / "kokoro"
+        model_dir.mkdir()
+        _setup_model_dir(model_dir)
+        tts = KokoroTTS(model_dir)
+
+        mock_module = MagicMock(Kokoro=MagicMock(from_session=MagicMock()))
+        with (
+            patch.dict("sys.modules", {"kokoro_onnx": mock_module}),
+            patch.object(onnxruntime, "InferenceSession", side_effect=OSError("always corrupt")),
+            patch("sovyx.voice.model_registry.ensure_kokoro_tts", new=AsyncMock()) as ensure_mock,
+            pytest.raises(RuntimeError),
+        ):
+            await tts.initialize()
+        # Healed exactly once (the guard prevents a re-download loop).
+        ensure_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_non_kokoro_dir_skips_self_heal(self, tmp_path: Path) -> None:
+        model_dir = tmp_path / "custom-models"
+        model_dir.mkdir()
+        _setup_model_dir(model_dir)
+        tts = KokoroTTS(model_dir)
+
+        mock_module = MagicMock(Kokoro=MagicMock(from_session=MagicMock()))
+        with (
+            patch.dict("sys.modules", {"kokoro_onnx": mock_module}),
+            patch.object(onnxruntime, "InferenceSession", side_effect=OSError("corrupt")),
+            patch("sovyx.voice.model_registry.ensure_kokoro_tts", new=AsyncMock()) as ensure_mock,
+            pytest.raises(RuntimeError),
+        ):
+            await tts.initialize()
+        ensure_mock.assert_not_awaited()  # non-production dir → no heal
