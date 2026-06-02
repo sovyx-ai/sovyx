@@ -243,19 +243,18 @@ describe("RollbackButton", () => {
     // dependence on wall-clock scheduling.
     vi.useFakeTimers();
     try {
-      // Flake fix (was a known intermittent: "expected 1 to be null" at the
-      // post-initial-load assertion below). The prior `mockRejectedValueOnce`
-      // + `mockResolvedValueOnce` queue is ORDER-dependent: under full-suite
-      // cross-file ordering, a stray fetch (the `useResolvedMindId` module
-      // singleton re-subscribing) consumed the queued reject, so the mount
-      // load got the RESOLVE (count=1) and the retry never armed. Route by
-      // URL instead so only the backups endpoint is reject-then-resolve and
-      // any other fetch is a benign 200 — deterministic regardless of order.
-      let backupsCalls = 0;
+      // Flake fix (known intermittent "expected 1 to be null"). Root cause:
+      // under full-suite cross-file ordering the `useResolvedMindId` module
+      // singleton can re-subscribe and trigger a VARIABLE NUMBER of mount
+      // `loadBackups` calls. A count-based mock ("call #1 rejects, #2
+      // resolves") then lets an EXTRA mount call resolve → count=1 before the
+      // post-mount assertion. Fix: gate on a flag, not a call count — EVERY
+      // mount load rejects (however many) until we explicitly allow success
+      // before firing the retry timer. Immune to the mount-call count + order.
+      let allowSuccess = false;
       mockFetch.mockImplementation((input: RequestInfo | URL) => {
         if (String(input).includes("/api/voice/calibration/backups")) {
-          backupsCalls += 1;
-          if (backupsCalls === 1) {
+          if (!allowSuccess) {
             return Promise.reject(new Error("network blip"));
           }
           return Promise.resolve(
@@ -267,17 +266,16 @@ describe("RollbackButton", () => {
 
       render(<RollbackButton />);
 
-      // Let the initial (rejected) load settle: count stays null, which
-      // arms the retry ``setTimeout``. Wrap in ``act`` so the resulting
-      // re-render is flushed inside React's batching window.
+      // Settle: EVERY mount load rejects, so count stays null and the retry
+      // ``setTimeout`` is armed. Wrap in ``act`` to flush the re-render.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
       expect(useDashboardStore.getState().calibrationBackupCount).toBeNull();
 
-      // Fire the retry timer and flush its async ``loadBackups`` — the
-      // second (resolved) response now lands → count becomes 1. The
-      // settle-induced re-render is wrapped in ``act``.
+      // Now allow success, fire the retry timer → its loadBackups resolves →
+      // count becomes 1.
+      allowSuccess = true;
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1500);
       });
