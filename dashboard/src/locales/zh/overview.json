@@ -1,0 +1,164 @@
+{
+  "title": "概览",
+  "subtitle": "你的思维一目了然",
+  "subtitleFresh": "你的思维已唤醒。开始对话让它活起来。",
+  "subtitleProgress": "快好了 — 完成你的思维设置。",
+  "cards": {
+    "engineStatus": "思维状态",
+    "uptime": "运行时间：{{duration}}",
+    "justBooted": "刚刚苏醒 — 准备好思考了",
+    "messages": "消息数",
+    "messagesFresh": "—",
+    "messagesHint": "等待第一条消息",
+    "activeCount": "{{count}} 活跃",
+    "brainConcepts": "大脑",
+    "episodeCount": "{{count}} 个记忆片段",
+    "brainFresh": "空",
+    "brainHint": "从对话中学习",
+    "llmCost": "LLM 费用",
+    "costFresh": "—",
+    "costHint": "今日尚未调用",
+    "costSubtitle": "{{calls}} 次调用 · {{tokens}} 个 token"
+  },
+  "health": {
+    "title": "健康检查"
+  },
+  "chart": {
+    "costTitle": "LLM 费用（24 小时）",
+    "costLabel": "费用",
+    "noData": "暂无费用数据"
+  },
+  "phaseBreakdown": {
+    "title": "各认知阶段费用",
+    "description": "今日各认知阶段的花费分布。",
+    "phase": {
+      "think": "思考",
+      "reflect": "反思",
+      "dream": "梦境",
+      "act": "行动（工具）",
+      "safety": "安全分类器",
+      "pii_guard": "PII 保护",
+      "financial_gate": "金融风控",
+      "contradiction": "矛盾检查",
+      "conv_import": "对话导入",
+      "unknown": "其他",
+      "other": "其他（未知阶段）"
+    }
+  },
+  "events": {
+    "PerceptionReceived": "感知",
+    "ThinkCompleted": "思考",
+    "ResponseSent": "回复",
+    "ConceptCreated": "概念",
+    "EpisodeEncoded": "记忆片段",
+    "ServiceHealthChanged": "健康",
+    "ConsolidationCompleted": "整合",
+    "DreamCompleted": "梦境",
+    "EngineStarted": "引擎启动",
+    "EngineStopping": "引擎停止",
+    "ChannelConnected": "渠道",
+    "ChannelDisconnected": "渠道",
+    "ChatMessage": "聊天",
+    "unknown": "事件"
+  },
+  "eventSummary": {
+    "PerceptionReceived": "来自 {{source}}（{{person}}）",
+    "ThinkCompleted": "{{model}} — {{tokensIn}}+{{tokensOut}} 个 token — ${{cost}}",
+    "ResponseSent": "通过 {{channel}}（{{latency}}ms）",
+    "ConceptCreated": "已创建：{{title}}",
+    "EpisodeEncoded": "重要性：{{importance}}",
+    "ServiceHealthChanged": "{{service}}：{{status}}",
+    "ConsolidationCompleted": "合并：{{merged}}，修剪：{{pruned}}，强化：{{strengthened}}",
+    "DreamCompleted": "发现 {{patterns}} 个模式，衍生 {{concepts}} 个概念，强化 {{relations}} 个关系",
+    "EngineStarted": "引擎已启动",
+    "EngineStopping": "正在停止：{{reason}}",
+    "ChannelConnected": "{{channel}} 已连接",
+    "ChannelDisconnected": "{{channel}} 已断开：{{reason}}",
+    "ChatMessage": "{{defaultValue}}"
+  },
+  "feed": {
+    "title": "实时动态",
+    "empty": "正在监听事件…",
+    "emptyHint": "你的思维思考时，事件会实时显示在这里。"
+  },
+  "timeline": {
+    "title": "认知时间线",
+    "empty": "暂无认知活动",
+    "emptyHint": "开始对话，观察你的思维如何思考。",
+    "groupJustNow": "刚刚",
+    "groupEarlierToday": "今天早些时候",
+    "groupYesterday": "昨天",
+    "conceptsLearned": "学习了 {{count}} 个概念",
+    "episodeEncoded": "记忆片段已编码（重要性：{{importance}}）",
+    "conversation": "{{channel}} 对话（{{messages}} 条消息）",
+    "message": "已交换消息",
+    "consolidation": "整合：合并 {{merged}}，修剪 {{pruned}}，强化 {{strengthened}}"
+  },
+  "welcome": {
+    "title": "欢迎使用 Sovyx",
+    "subtitle": "你的思维引擎已就绪。按照以下步骤开始使用。",
+    "progress": "{{completed}}/{{total}}",
+    "progressDone": "全部完成 ✓",
+    "stepDone": "完成",
+    "dismissLabel": "关闭设置向导",
+    "step1Title": "配置 LLM 密钥",
+    "step1Desc": "在设置中添加 OpenAI、Anthropic 或其他 LLM 的 API 密钥。",
+    "step2Title": "发送你的第一条消息",
+    "step2Desc": "打开聊天页面，与你的思维开始对话。它从每次互动中学习。",
+    "step3Title": "观察你的思维成长",
+    "step3Desc": "随着聊天进行，你的思维会构建概念、形成记忆、发展个性。",
+    "goSettings": "前往设置",
+    "goChat": "打开聊天",
+    "stepLabel": "第 {{step}} 步"
+  },
+  "usage": {
+    "title": "本月用量",
+    "total": "总计：{{cost}}，共 {{days}} 天",
+    "noHistory": "暂无使用记录",
+    "messages": "条消息"
+  },
+  "alive": {
+    "title": "你的思维是活的。",
+    "concepts": "个概念",
+    "memories": "段记忆",
+    "messages": "条消息",
+    "activeFor": "已运行 {{duration}}",
+    "exploreBrain": "探索大脑",
+    "openChat": "打开聊天",
+    "dismiss": "关闭",
+    "conversations": "个对话"
+  },
+  "channelSetup": {
+    "getToken": "从以下地址获取机器人令牌",
+    "pasteToken": "在下方粘贴你的令牌",
+    "connect": "连接",
+    "connecting": "连接中…",
+    "connected": "已连接",
+    "failed": "连接失败",
+    "invalidToken": "无效令牌",
+    "networkError": "无法连接 — 请检查网络",
+    "signalRequires": "Signal 需要单独运行 Docker 容器",
+    "signalConfigure": "在 mind.yaml 中配置电话号码和 API URL，然后重启 Sovyx。",
+    "done": "完成",
+    "connectedTo": "已连接到 @{{username}}",
+    "restartToActivate": "重启 Sovyx 以激活该渠道。",
+    "activeNow": "已连接并激活，无需重启。",
+    "tokenLabel": "机器人令牌"
+  },
+  "channels": {
+    "title": "连接渠道",
+    "connected": "已连接",
+    "setUp": "设置"
+  },
+  "connectionError": {
+    "title": "无法连接",
+    "subtitle": "仪表盘无法连接到 Sovyx 引擎。请确保引擎正在运行。",
+    "retry": "重试连接"
+  },
+  "voice_warning": {
+    "title": "语音设置未完成",
+    "body": "你在初始化时启用了语音，但语音管线尚未运行。你的思维仍处于活跃状态——你仍可以聊天和使用其他功能。打开语音页面排查问题。",
+    "troubleshoot_cta": "打开语音故障排查",
+    "dismiss": "忽略警告"
+  }
+}

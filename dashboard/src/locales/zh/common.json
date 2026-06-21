@@ -1,0 +1,127 @@
+{
+  "app": {
+    "name": "Sovyx 仪表盘",
+    "version": "v{{version}}"
+  },
+  "nav": {
+    "overview": "概览",
+    "conversations": "对话",
+    "brain": "大脑探索",
+    "logs": "日志",
+    "settings": "设置",
+    "about": "关于",
+    "chat": "聊天",
+    "voice": "语音",
+    "voiceHealth": "采集健康",
+    "voicePlatformDiagnostics": "平台诊断",
+    "plugins": "插件",
+    "emotions": "情绪",
+    "productivity": "生产力"
+  },
+  "status": {
+    "online": "在线",
+    "offline": "离线",
+    "degraded": "降级",
+    "loading": "加载中…",
+    "error": "错误",
+    "connected": "已连接",
+    "disconnected": "已断开",
+    "reconnecting": "重连中…",
+    "idle": "空闲",
+    "thinking": "思考中",
+    "dreaming": "梦境中"
+  },
+  "actions": {
+    "save": "保存",
+    "cancel": "取消",
+    "reset": "重置",
+    "retry": "重试",
+    "close": "关闭",
+    "expand": "展开",
+    "collapse": "收起",
+    "loadMore": "加载更多",
+    "search": "搜索…",
+    "export": "导出",
+    "copy": "复制",
+    "awaken": "唤醒",
+    "configure": "配置",
+    "clear": "清空",
+    "dismiss": "忽略"
+  },
+  "time": {
+    "justNow": "刚刚",
+    "minutesAgo_one": "{{count}} 分钟前",
+    "minutesAgo_other": "{{count}} 分钟前",
+    "hoursAgo_one": "{{count}} 小时前",
+    "hoursAgo_other": "{{count}} 小时前",
+    "daysAgo_one": "{{count}} 天前",
+    "daysAgo_other": "{{count}} 天前"
+  },
+  "health": {
+    "healthy": "健康",
+    "warning": "警告",
+    "critical": "严重",
+    "allGreen": "所有系统运行正常",
+    "checksPass": "{{passed}}/{{total}} 通过"
+  },
+  "auth": {
+    "description": "粘贴你的仪表盘令牌以继续。运行以下命令获取：",
+    "command": "sovyx token",
+    "placeholder": "在此粘贴令牌…",
+    "connect": "连接",
+    "connected": "已连接"
+  },
+  "trend": {
+    "up": "上涨 {{value}}% {{label}}",
+    "down": "下降 {{value}}% {{label}}"
+  },
+  "errors": {
+    "generic": "出错了",
+    "unexpected": "发生了意外错误。",
+    "network": "思维引擎无法连接。请检查你的网络连接。",
+    "notFound": "该路径在思维中不存在",
+    "notFoundPage": "该页面在你的思维记忆中不存在。",
+    "unauthorized": "身份验证已过期。请重新输入令牌。",
+    "tryAgain": "重试",
+    "sectionFailed": "此区域无法加载",
+    "backToOverview": "返回概览"
+  },
+  "command": {
+    "placeholder": "输入命令或搜索…",
+    "empty": "未找到结果。",
+    "navigation": "导航",
+    "actions": "操作",
+    "clearLogs": "清空日志",
+    "refreshData": "刷新数据"
+  },
+  "sidebar": {
+    "collapse": "切换侧边栏",
+    "health": "健康",
+    "cmdK": "Cmd+K",
+    "core": "核心",
+    "connecting": "连接中…",
+    "uptime": "已运行 {{duration}}",
+    "skipToContent": "跳转到主内容",
+    "notifications": "通知",
+    "cmdKLabel": "按 Command+K 打开命令面板"
+  },
+  "comingSoon": {
+    "badge": "即将推出"
+  },
+  "emotions": {
+    "title": "情绪",
+    "description": "追踪对话中的情绪模式。效价与唤醒度历史、杏仁核警报、情绪与决策质量的相关性，以及行为洞察——全部来自你的思维如何处理情绪上下文。"
+  },
+  "productivity": {
+    "title": "生产力",
+    "description": "了解你的工作模式。专注时间追踪、任务完成节奏、决策疲劳检测、日记影响分析以及周趋势——来自你的实际行为，而非自我报告估算。"
+  },
+  "aria": {
+    "mindAvatar": "Sovyx 思维",
+    "mainNavigation": "主导航",
+    "breadcrumb": "导航路径",
+    "liveFeed": "实时动态",
+    "cognitiveTimeline": "认知时间线",
+    "loading": "加载中"
+  }
+}

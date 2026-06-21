@@ -1,0 +1,308 @@
+{
+  "title": "设置",
+  "tabs": {
+    "general": "通用",
+    "mind": "思维",
+    "providers": "LLM 服务商",
+    "exportImport": "导出 / 导入",
+    "displayLanguage": "显示与语言"
+  },
+  "general": {
+    "logLevel": "日志级别",
+    "dataDir": "数据目录",
+    "saved": "设置已保存。",
+    "saveFailed": "保存设置失败。",
+    "loadFailed": "加载设置失败。",
+    "engineConfig": "引擎配置",
+    "engineConfigDesc": "只读。编辑 system.yaml 以更改这些值。",
+    "runtimeSettings": "运行时可变设置。更改即时生效。",
+    "logFormat": "日志格式",
+    "logFile": "日志文件",
+    "telemetryLabel": "遥测",
+    "apiEndpoint": "API",
+    "relayLabel": "中继",
+    "enabled": "已启用",
+    "disabled": "已禁用"
+  },
+  "providers": {
+    "title": "LLM 服务商",
+    "description": "配置驱动你思维的 AI 服务商。",
+    "cloudProviders": "云端服务商",
+    "localProvider": "本地服务商",
+    "configured": "已配置",
+    "notConfigured": "未配置",
+    "running": "运行中",
+    "notRunning": "未运行",
+    "models": "个模型",
+    "selectModel": "模型",
+    "chooseModel": "选择一个模型…",
+    "active": "活跃",
+    "noneSelected": "未选择",
+    "refresh": "刷新",
+    "save": "保存更改",
+    "saved": "服务商更新成功。",
+    "saveFailed": "更新服务商失败。",
+    "loadFailed": "加载服务商失败。",
+    "retry": "重试",
+    "ollamaInstructions": "从 ollama.com 安装 Ollama，然后运行：ollama serve",
+    "noProviderTitle": "未配置服务商",
+    "cloudSetup": "云端（需要 API 密钥）：",
+    "cloudInstructions": "将其设置为环境变量并重启：",
+    "localSetup": "本地（免费）：",
+    "ollamaStep1": "从 ollama.com 安装 Ollama",
+    "ollamaStep3": "点击下方「刷新」",
+    "testConnection": "测试连接",
+    "testing": "测试中…",
+    "testFailed": "测试失败",
+    "testKeyPrompt": "输入 {{provider}} API 密钥进行测试（不会被保存）："
+  },
+  "pricing": {
+    "fallbackProviderDefault": "费用估算使用该模型在服务商侧的默认费率。",
+    "fallbackGlobalDefault": "费用估算使用该模型的全局默认费率。",
+    "fallbackBody": "报告显示每 100 万个 token ${{input}} / ${{output}}——此为估算值，并非来自服务商的官方费率。请将模型添加到定价表以获得精确追踪。"
+  },
+  "tts": {
+    "title": "TTS 引擎",
+    "description": "选择用于生成语音的引擎。「自动」在两者都可用时优先使用 Piper。",
+    "save": "保存偏好",
+    "saved": "TTS 引擎偏好已保存。",
+    "saveFailed": "保存 TTS 引擎偏好失败。",
+    "engine": {
+      "auto": "自动（推荐）",
+      "piper": "Piper",
+      "kokoro": "Kokoro"
+    }
+  },
+  "mind": {
+    "identity": "思维身份",
+    "name": "名称",
+    "language": "语言",
+    "timezone": "时区",
+    "loadingConfig": "正在加载思维配置…",
+    "noMindLoaded": "未加载思维",
+    "noMindDescription": "个性与 OCEAN 配置将在思维激活后显示。"
+  },
+  "personality": {
+    "title": "个性",
+    "description": "对话风格和行为特征。更改即时应用于新对话。",
+    "tone": "语调",
+    "savePersonality": "保存个性",
+    "traits": {
+      "formality": "正式度",
+      "humor": "幽默感",
+      "assertiveness": "果断度",
+      "curiosity": "好奇心",
+      "empathy": "同理心",
+      "verbosity": "详细度"
+    },
+    "traitLow": {
+      "formality": "随意",
+      "humor": "严肃",
+      "assertiveness": "顺从",
+      "curiosity": "专注",
+      "empathy": "分析型",
+      "verbosity": "简洁"
+    },
+    "traitHigh": {
+      "formality": "正式",
+      "humor": "风趣",
+      "assertiveness": "果断",
+      "curiosity": "好奇",
+      "empathy": "共情",
+      "verbosity": "详尽"
+    },
+    "tones": {
+      "warm": "温暖",
+      "neutral": "中性",
+      "direct": "直接",
+      "playful": "俏皮"
+    }
+  },
+  "ocean": {
+    "title": "OCEAN — 大五人格",
+    "description": "塑造思维思考与交流方式的核心人格模型。",
+    "traits": {
+      "openness": "开放性",
+      "conscientiousness": "尽责性",
+      "extraversion": "外向性",
+      "agreeableness": "宜人性",
+      "neuroticism": "神经质"
+    },
+    "traitLow": {
+      "openness": "务实",
+      "conscientiousness": "灵活",
+      "extraversion": "内省",
+      "agreeableness": "挑战",
+      "neuroticism": "冷静"
+    },
+    "traitHigh": {
+      "openness": "创意",
+      "conscientiousness": "有序",
+      "extraversion": "活力",
+      "agreeableness": "和谐",
+      "neuroticism": "敏感"
+    }
+  },
+  "safety": {
+    "title": "安全护栏",
+    "description": "内容过滤、PII 保护和自定义规则。",
+    "contentFilter": "内容过滤",
+    "contentFilterDesc": "控制哪些输入和输出模式被屏蔽。",
+    "childSafeMode": "儿童安全模式",
+    "childSafeModeDesc": "所有内容必须适合 10 岁以下儿童",
+    "childSafeWarning": "儿童安全模式已激活。内容过滤、PII 保护和财务确认已自动启用。",
+    "childSafeEnforced": "儿童安全模式强制启用",
+    "financialConfirmation": "财务确认",
+    "financialConfirmationDesc": "执行财务操作（支付、转账、交易）前需明确确认",
+    "confirmationMethod": "确认方式",
+    "confirmationMethodInlineButtons": "内联按钮",
+    "confirmationMethodTextClassification": "文本分类",
+    "confirmationMethodDisabled": "已禁用",
+    "classificationFallback": "分类回退",
+    "classificationFallbackLlm": "LLM（任何语言）",
+    "classificationFallbackRegex": "正则（仅 PT/EN）",
+    "confirmationChannels": "渠道支持",
+    "channelSupportsButtons": "按钮",
+    "channelTextOnly": "仅文本",
+    "piiProtection": "PII 保护",
+    "piiProtectionDesc": "自动从 AI 回复中遮盖个人数据（邮箱、电话、CPF、API 密钥）",
+    "guardrails": "自定义规则",
+    "guardrailsDesc": "注入系统提示词的绝对规则。内置规则不可删除。",
+    "guardrailBuiltin": "内置",
+    "guardrailCustom": "自定义",
+    "guardrailAdd": "添加规则",
+    "guardrailPlaceholder": "输入护栏规则…",
+    "guardrailSeverity": "严重级别",
+    "guardrailCritical": "严重",
+    "guardrailWarning": "警告",
+    "patternCount": "{{count}} 个模式已激活",
+    "filters": {
+      "none": "无",
+      "standard": "标准",
+      "strict": "严格"
+    },
+    "filterTooltips": {
+      "none": "无内容过滤。所有消息通过时不经过滤。",
+      "standard": "屏蔽有害内容：暴力、武器、自残、黑客、非法活动。",
+      "strict": "屏蔽有害 + 成人内容、药物、赌博、仇恨言论、操控诱导。"
+    }
+  },
+  "llmBrain": {
+    "title": "LLM 参数与大脑",
+    "description": "模型参数和记忆系统配置（只读）。",
+    "temperature": "温度",
+    "dailyBudget": "每日预算",
+    "perConvBudget": "每对话预算",
+    "brainMaxConcepts": "大脑最大概念数",
+    "consolidation": "整合频率",
+    "consolidationValue": "每 {{hours}} 小时"
+  },
+  "recalibrate": {
+    "title": "重新运行语音校准",
+    "description": "对运行中的守护进程触发一次新的校准。向导将在初始化流程中显示进度；你可以切换到该标签页查看。",
+    "button": "重新校准",
+    "confirmButton": "是，开始校准",
+    "cancelButton": "取消",
+    "note": "首次校准需要 8-12 分钟；对同一硬件再次运行时，快速路径会在约 5 秒内重放缓存的配置文件。",
+    "flagOffNote": "请先启用上方的校准向导再运行校准。禁用是因为仪表盘向导是唯一能显示校准进度的界面；在无向导的情况下运行校准你将无法观察进度。",
+    "flagOffTooltip": "请先启用校准向导。",
+    "platformUnsupportedTooltip": "自动修复校准仅支持此主机的 Linux 系统。",
+    "platformUnsupportedNote": "自动修复校准仅支持 Linux。8-12 分钟的硬件调优需要使用 Linux 专属的音频诊断工具，而这些工具在你的平台上不可用。请改用人门引导中的简易设备测试向导。",
+    "startSuccess": "校准已开始。在初始化向导中查看进度。",
+    "startFailed": "无法开始校准。"
+  },
+  "rollback": {
+    "title": "恢复之前的校准",
+    "description": "回退到最近一次运行之前的校准配置。Sovyx 最多保留 3 个历史配置，因此可以在不回退到原始状态的情况下逐步回滚。",
+    "button": "回退一步",
+    "confirmButton": "是，恢复上一个",
+    "cancelButton": "取消",
+    "loadingNote": "正在检查可用的回退步数…",
+    "countNote_one": "有 {{count}} 个之前的校准可供恢复。",
+    "countNote_other": "有 {{count}} 个之前的校准可供恢复。",
+    "countNote_zero": "没有之前的校准可供恢复。请先运行校准。",
+    "emptyChainTooltip": "没有之前的校准可供恢复。请先运行校准。",
+    "platformUnsupportedTooltip": "校准回退仅支持 Linux。该平台不支持回退操作。",
+    "success": "已恢复。还有 {{remaining}} 个之前的校准可供回退。",
+    "failed": "无法回校准。备份可能已损坏——请查看守护进程日志。"
+  },
+  "signingKey": {
+    "title": "语音校准签名密钥",
+    "description": "生成用于守护进程签名校准配置文件的 Ed25519 密钥对。使用此密钥签名的配置文件将在即将推出的 STRICT 加载模式（v0.33.0+）下被接受；LENIENT 模式（当前默认）接受未签名配置文件并发出警告。",
+    "statusLoading": "加载中…",
+    "statusGenerated": "已生成",
+    "statusNotGenerated": "尚未生成",
+    "generateButton": "生成签名密钥",
+    "regenerateButton": "重新生成",
+    "confirmRegenerateButton": "是，重新生成",
+    "cancelButton": "取消",
+    "regenerateWarning": "重新生成将覆盖现有密钥对。之前密钥签名的所有校准配置文件在 STRICT 模式下将无法通过签名验证，需要重新签名。",
+    "publicKeyPathLabel": "公钥：",
+    "note": "私钥保存在磁盘上，权限仅限所有者。仪表盘永远不会接收私钥数据。",
+    "generateSuccess": "签名密钥已生成（指纹：{{fingerprint}}）。",
+    "generateFailed": "无法生成签名密钥。",
+    "error": {
+      "generateFailed": "无法生成签名密钥。"
+    }
+  },
+  "calibrationWizard": {
+    "title": "语音校准初始化步骤",
+    "description": "在语音设置过程中挂载多阶段硬件感知校准向导。默认禁用；开启以启用此部署。",
+    "statusEnabled": "已启用",
+    "statusDisabled": "已禁用",
+    "statusPlatformUnsupported": "仅 Linux（当前不可用）",
+    "platformUnsupportedTooltip": "自动修复校准仅支持此主机的 Linux 系统。",
+    "platformUnsupportedNote": "自动修复校准仅支持 Linux——你的平台上没有 bash 诊断工具包。请改用人门引导中的简易设备测试向导。在此切换此标志对 Windows 或 macOS 无效。",
+    "enableButton": "启用向导",
+    "disableButton": "禁用向导",
+    "runtimeOverride": "运行时覆盖已激活（守护进程重启后丢失）",
+    "persistenceNote": "在此切换将修改运行中守护进程的内存副本。要跨重启持久化，请在环境变量中设置 SOVYX_VOICE__CALIBRATION_WIZARD_ENABLED 或在 system.yaml 中设置 voice.calibration_wizard_enabled。",
+    "enabledToast": "校准向导已启用。",
+    "disabledToast": "校准向导已禁用。",
+    "toggleError": "无法更新校准向导标志。"
+  },
+  "voiceClarity": {
+    "title": "麦克风输入质量",
+    "alertTitle": "检测到 Windows Voice Clarity",
+    "alertBody": "Windows 正在「{{device}}」上运行可能阻止语音检测的降噪 APO。启用 WASAPI 独占模式以绕过它。",
+    "enableExclusive": "启用独占模式",
+    "disableExclusive": "禁用独占模式",
+    "alreadyExclusive": "独占模式已激活 — APO 链已绕过。",
+    "checking": "正在检查麦克风…",
+    "noIssues": "此系统未检测到采集 APO 问题。",
+    "enableSuccess": "独占模式已启用并即时生效。",
+    "enableSuccessRestart": "独占模式已保存。重启管线以应用。",
+    "disableSuccess": "独占模式已禁用。重启以返回共享模式。",
+    "failed": "无法更新采集模式：{{error}}",
+    "knownApos": "检测到 APO：{{list}}",
+    "activeDevice": "当前麦克风：{{device}}"
+  },
+  "displayLanguage": {
+    "title": "显示与语言",
+    "description": "选择仪表盘使用的语言。你的选择将保存在本地，每次访问时生效。",
+    "selectorLabel": "仪表盘语言",
+    "options": {
+      "en": "English（英语）",
+      "zh": "中文",
+      "pt-BR": "Português（葡萄牙语-巴西）",
+      "es": "Español（西班牙语）"
+    },
+    "autoDetected": "已根据浏览器设置切换到 {{name}}。",
+    "autoDetectedUndo": "使用 English"
+  },
+  "exportImport": {
+    "title": "导出 / 导入",
+    "description": "下载或恢复你的思维数据。你的数据，你掌控。",
+    "exportButton": "导出思维",
+    "importButton": "导入思维",
+    "exportSuccess": "思维导出成功。",
+    "exportFailed": "导出失败：{{error}}",
+    "importSuccess": "已导入 {{concepts}} 个概念和 {{episodes}} 个记忆片段。",
+    "importFailed": "导入失败：{{error}}",
+    "invalidFile": "请选择一个 .sovyx-mind 文件。",
+    "confirmTitle": "导入思维数据",
+    "confirmDescription": "这将从「{{filename}}」导入数据。现有思维数据可能会受到影响。此操作不可撤销。",
+    "confirmImport": "导入",
+    "gdprNote": "符合 GDPR 第 20 条——你的数据以可移植、机器可读的格式提供。"
+  }
+}

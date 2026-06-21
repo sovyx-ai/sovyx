@@ -1,0 +1,108 @@
+{
+  "page": {
+    "step": "第 {{step}} 步，共 {{total}} 步",
+    "skipAll": "我稍后手动配置"
+  },
+  "voice": {
+    "title": "设置语音",
+    "subtitle": "可选 — 启用本地语音转文字和文字转语音功能。",
+    "skipForNow": "稍后再说",
+    "enableButton": "启用语音",
+    "enablingButton": "启用中…",
+    "continueButton": "继续",
+    "successMessage": "语音管线已启用。你可以与伴侣对话了。",
+    "missingDepsTitle": "未安装语音依赖包",
+    "missingDepsHint": "在终端中运行以下命令，然后重启 Sovyx：",
+    "copyCommandAria": "复制命令",
+    "errors": {
+      "tooManyRequests": "请求过于频繁 — 请稍等后再试。",
+      "noAudio": "未检测到音频硬件。请连接麦克风和扬声器。",
+      "enableFailed": "启用语音失败",
+      "pipelineFailed": "启用语音管线失败"
+    },
+    "verify": {
+      "not_running": "语音已启用但管线尚未运行。打开语音设置重试。",
+      "auth_failure": "启用语音时会话已过期。请重新登录以完成设置。",
+      "endpoint_missing": "此 Sovyx 守护进程不支持语音路由。请升级 Sovyx 或联系管理员。",
+      "transient_failure": "无法连接语音服务以验证设置。请检查网络后重试。"
+    }
+  },
+  "providers": {
+    "title": "选择你的大脑",
+    "subtitle": "选择 LLM 服务商来驱动你的伴侣。",
+    "detected": "已检测",
+    "local": "本地",
+    "cloud": "云端",
+    "modelLabel": "模型",
+    "auto": "自动",
+    "modelLine": "模型：{{model}}",
+    "ollamaModelLabel": "模型",
+    "ollamaNotRunning": "Ollama 未运行。请安装并启动后刷新。",
+    "ollamaDownload": "下载",
+    "apiKeyLabel": "API 密钥",
+    "apiKeyPlaceholder": "粘贴你的 API 密钥",
+    "getKey": "获取密钥",
+    "testButton": "测试连接",
+    "testingButton": "测试中…",
+    "continueButton": "继续",
+    "connectedMessage": "已连接 — {{model}}"
+  },
+  "personality": {
+    "titleWithName": "认识 {{name}}",
+    "subtitle": "你希望伴侣如何与你交流？",
+    "presets": {
+      "warm": {
+        "name": "温暖友好",
+        "description": "像一个总有时间陪你的贴心朋友"
+      },
+      "direct": {
+        "name": "直接简洁",
+        "description": "直截了当。没有废话。信息密度最大化。"
+      },
+      "playful": {
+        "name": "风趣创意",
+        "description": "机智幽默、充满好奇，喜欢一起探索各种想法"
+      },
+      "professional": {
+        "name": "专业正式",
+        "description": "正式、精确、适合商务场景"
+      }
+    },
+    "companionNameLabel": "伴侣名称",
+    "languageLabel": "语言",
+    "sttFallbackTitle": "语音识别暂不支持 {{language}}",
+    "sttFallbackBody": "你的伴侣可以用 {{language}} 聊天和说话，但语音输入将使用英语识别——语音识别引擎暂不支持 {{language}} 模型。文字聊天和语音播报不受影响。",
+    "userNameLabel": "你的名字（可选）",
+    "userNamePlaceholder": "希望它怎么称呼你？",
+    "skipForNow": "稍后再说",
+    "continueButton": "继续"
+  },
+  "channels": {
+    "title": "连接渠道",
+    "subtitle": "可选 — 现在设置消息渠道，或稍后在设置中配置。",
+    "telegramTitle": "Telegram",
+    "telegramInstructionsLead": "通过 Telegram 与 {{mindName}} 聊天。先通过",
+    "telegramInstructionsTail": "创建一个机器人，然后将令牌粘贴到下方。",
+    "telegramTokenLabel": "机器人令牌",
+    "telegramTokenPlaceholder": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+    "telegramConnectButton": "测试并连接",
+    "telegramConnectingButton": "连接中…",
+    "telegramConnectedSuffixActive": " — 当前已激活",
+    "telegramConnectedSuffixDeferred": " — 下次启动时激活",
+    "telegramConnectionFailed": "连接失败",
+    "telegramConnectedTo": "已连接到 @{{username}}",
+    "signalTitle": "Signal",
+    "signalComingSoon": "即将推出",
+    "skipForNow": "稍后再说",
+    "continueButton": "继续"
+  },
+  "firstChat": {
+    "title": "打个招呼",
+    "subtitle": "这是一次真实的对话，由 {{provider}}（{{model}}）驱动。所有数据都保留在这台机器上。",
+    "thinking": "{{name}} 正在思考…",
+    "inputPlaceholder": "输入你的第一条消息…",
+    "exploreButton": "探索仪表盘",
+    "skipButton": "跳过，进入仪表盘",
+    "errorReply": "我现在无法回复。你可以重试或浏览仪表盘。"
+  }
+}

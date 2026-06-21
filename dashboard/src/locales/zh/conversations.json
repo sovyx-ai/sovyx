@@ -1,0 +1,35 @@
+{
+  "title": "对话",
+  "subtitle": "浏览对话历史。点击任意对话查看完整内容。",
+  "stats": {
+    "total": "对话总数",
+    "activeThisWeek": "本周活跃",
+    "avgMessages": "平均消息数"
+  },
+  "search": {
+    "placeholder": "搜索对话…"
+  },
+  "empty": {
+    "title": "暂无对话",
+    "subtitle": "开始对话后，思维会从中学习并形成记忆。"
+  },
+  "list": {
+    "today": "今天",
+    "yesterday": "昨天",
+    "last7Days": "最近 7 天",
+    "last30Days": "最近 30 天",
+    "earlier": "更早",
+    "messages_one": "{{count}} 条消息",
+    "messages_other": "{{count}} 条消息"
+  },
+  "detail": {
+    "back": "返回对话列表",
+    "deleteTitle": "删除对话",
+    "deleteConfirm": "确定要删除此对话吗？此操作不可撤销。",
+    "deleteSuccess": "对话已删除。",
+    "deleteFailed": "删除对话失败。",
+    "exportTitle": "导出对话",
+    "exportSuccess": "对话已导出。",
+    "exportFailed": "导出对话失败。"
+  }
+}

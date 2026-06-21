@@ -283,6 +283,7 @@
     "selectorLabel": "Dashboard language",
     "options": {
       "en": "English",
+       "zh": "中文",
       "pt-BR": "Português (Brasil)",
       "es": "Español"
     },

@@ -1,0 +1,23 @@
+{
+  "title": "关于",
+  "tagline": "自主AI伴侣引擎",
+  "versionLicense": "版本与许可",
+  "version": "版本",
+  "license": "许可证",
+  "licenseValue": "AGPL-3.0",
+  "dashboard": "仪表盘",
+  "dashboardValue": "React {{version}}",
+  "engineUptime": "引擎运行时间",
+  "system": "系统",
+  "mind": "思维",
+  "concepts": "概念数",
+  "episodes": "记忆片段数",
+  "llmCallsToday": "今日 LLM 调用次数",
+  "links": "链接",
+  "github": "GitHub",
+  "builtWith": "构建技术",
+  "builtBy": "作者：Sovyx AI",
+  "sovereignty": "你掌控自己的思维和数据。",
+  "website": "官网",
+  "pypi": "PyPI"
+}

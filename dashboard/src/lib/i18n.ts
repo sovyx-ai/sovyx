@@ -59,8 +59,20 @@ import chatEs from "@/locales/es/chat.json";
 import pluginsEs from "@/locales/es/plugins.json";
 import onboardingEs from "@/locales/es/onboarding.json";
 
+import commonZh from "@/locales/zh/common.json";
+import overviewZh from "@/locales/zh/overview.json";
+import conversationsZh from "@/locales/zh/conversations.json";
+import brainZh from "@/locales/zh/brain.json";
+import logsZh from "@/locales/zh/logs.json";
+import settingsZh from "@/locales/zh/settings.json";
+import voiceZh from "@/locales/zh/voice.json";
+import aboutZh from "@/locales/zh/about.json";
+import chatZh from "@/locales/zh/chat.json";
+import pluginsZh from "@/locales/zh/plugins.json";
+import onboardingZh from "@/locales/zh/onboarding.json";
+
 /** Supported locales — keep in sync with locale-switcher dropdown + completeness gate. */
-export const SUPPORTED_LOCALES = ["en", "pt-BR", "es"] as const;
+export const SUPPORTED_LOCALES = ["en", "pt-BR", "es", "zh"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 void i18n.use(initReactI18next).init({
@@ -103,6 +115,19 @@ void i18n.use(initReactI18next).init({
       chat: chatEs,
       plugins: pluginsEs,
       onboarding: onboardingEs,
+    },
+    zh: {
+      common: commonZh,
+      overview: overviewZh,
+      conversations: conversationsZh,
+      brain: brainZh,
+      logs: logsZh,
+      settings: settingsZh,
+      voice: voiceZh,
+      about: aboutZh,
+      chat: chatZh,
+      plugins: pluginsZh,
+      onboarding: onboardingZh,
     },
   },
   lng: "en",

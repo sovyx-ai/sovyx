@@ -1,0 +1,58 @@
+{
+  "title": "大脑探索",
+  "subtitle": "探索思维内部：概念、关系和记忆片段。",
+  "tabs": {
+    "concepts": "概念",
+    "episodes": "记忆片段",
+    "graph": "知识图谱",
+    "clusters": "聚类"
+  },
+  "concepts": {
+    "search": "搜索概念…",
+    "count": "{{count}} 个概念",
+    "empty": "暂无概念",
+    "emptyHint": "对话后思维会自动从对话中学习概念。",
+    "detail": {
+      "title": "概念详情",
+      "name": "名称",
+      "type": "类型",
+      "observation": "观察内容",
+      "relatedConcepts": "相关概念",
+      "relatedEpisodes": "相关记忆片段",
+      "strength": "强度",
+      "lastAccessed": "最后访问",
+      "created": "创建时间"
+    }
+  },
+  "episodes": {
+    "search": "搜索记忆片段…",
+    "count": "{{count}} 个记忆片段",
+    "empty": "暂无记忆片段",
+    "emptyHint": "重要对话会被编码为记忆片段。",
+    "detail": {
+      "title": "记忆片段详情",
+      "description": "描述",
+      "importance": "重要性",
+      "relatedConcepts": "相关概念",
+      "timestamp": "时间戳",
+      "emotionalValence": "情绪效价",
+      "context": "上下文"
+    }
+  },
+  "graph": {
+    "title": "知识图谱",
+    "empty": "暂无图谱数据",
+    "emptyHint": "随着概念和关系的积累，知识图谱会逐渐丰富。"
+  },
+  "clusters": {
+    "title": "概念聚类",
+    "empty": "暂无聚类",
+    "emptyHint": "足够的概念形成后会自动聚类。"
+  },
+  "actions": {
+    "refreshBrain": "刷新大脑数据",
+    "brainReady": "大脑已就绪",
+    "brainRefreshed": "大脑数据已刷新。",
+    "brainRefreshFailed": "刷新大脑数据失败。"
+  }
+}

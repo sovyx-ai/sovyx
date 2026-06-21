@@ -1,0 +1,125 @@
+{
+  "title": "插件",
+  "subtitle": "用插件扩展你的思维",
+  "stats": {
+    "total": "插件总数",
+    "active": "已启用",
+    "disabled": "已禁用",
+    "totalTools": "工具总数"
+  },
+  "filter": {
+    "all": "全部",
+    "active": "已启用",
+    "disabled": "已禁用",
+    "error": "异常"
+  },
+  "sort": {
+    "name": "名称",
+    "status": "状态",
+    "tools": "工具数"
+  },
+  "search": {
+    "placeholder": "搜索插件…"
+  },
+  "card": {
+    "tools_one": "{{count}} 个工具",
+    "tools_other": "{{count}} 个工具",
+    "viewDetails": "查看详情",
+    "noDescription": "暂无描述"
+  },
+  "status": {
+    "active": "已启用",
+    "disabled": "已禁用",
+    "error": "异常"
+  },
+  "detail": {
+    "title": "插件详情",
+    "version": "版本",
+    "author": "作者",
+    "license": "许可证",
+    "homepage": "主页",
+    "tools": "工具",
+    "permissions": "权限",
+    "health": "健康",
+    "manifest": "清单",
+    "events": "事件",
+    "dependencies": "依赖",
+    "noTools": "未注册工具",
+    "noPermissions": "无需权限",
+    "noEvents": "未声明事件",
+    "noDependencies": "无依赖",
+    "emits": "发出",
+    "subscribes": "订阅",
+    "requiresConfirmation": "需确认",
+    "optional": "可选",
+    "notFound": "未找到插件",
+    "viewAudit": "查看详细审计"
+  },
+  "health": {
+    "failures": "连续失败次数",
+    "lastError": "上次错误",
+    "activeTasks": "活跃任务",
+    "autoDisableWarning": "有自动禁用风险（{{count}}/{{max}} 次失败）"
+  },
+  "actions": {
+    "enable": "启用",
+    "disable": "禁用",
+    "reload": "重载",
+    "disableConfirmTitle": "禁用插件",
+    "disableConfirmDesc": "这将停止该插件及其所有工具。你可以稍后重新启用。",
+    "reloadConfirmTitle": "重载插件",
+    "reloadConfirmDesc": "这将重启该插件。活跃任务可能会被中断。",
+    "confirm": "确认",
+    "enabled": "插件已启用",
+    "disabled": "插件已禁用",
+    "reloaded": "插件已重载",
+    "enableFailed": "启用插件失败",
+    "disableFailed": "禁用插件失败",
+    "reloadFailed": "重载插件失败",
+    "close": "关闭"
+  },
+  "permission": {
+    "risk": {
+      "low": "低风险",
+      "medium": "中风险",
+      "high": "高风险"
+    },
+    "count_one": "{{count}} 项权限",
+    "count_other": "{{count}} 项权限",
+    "highCount": "（{{count}} 项高风险）",
+    "mediumCount": "（{{count}} 项中风险）",
+    "reviewInstall": "请检查此插件所需的权限后再安装。",
+    "reviewAudit": "已授予此插件的权限。",
+    "allowedDomains": "允许的域名：",
+    "approveInstall": "批准并安装",
+    "highRiskWarning": {
+      "network:internet": "此插件可以向外部服务器发起 HTTP 请求。请检查清单中的 allowed_domains。",
+      "brain:write": "此插件可以创建、修改或删除思维记忆中的概念。",
+      "brain:delete": "此插件可以永久删除记忆和学习到的概念。",
+      "config:write": "此插件可以修改思维的配置和个性设置。"
+    }
+  },
+  "pricing": {
+    "free": "免费",
+    "paid": "付费",
+    "freemium": "免费增值"
+  },
+  "empty": {
+    "title": "未安装插件",
+    "subtitle": "用插件扩展你的思维",
+    "cta": "通过 CLI 安装",
+    "cliHint": "sovyx plugin install <名称>",
+    "noMatch": "没有匹配的插件",
+    "clearFilter": "清除筛选"
+  },
+  "engineOff": {
+    "title": "引擎未运行",
+    "subtitle": "启动 Sovyx 引擎来管理插件",
+    "hint": "sovyx start"
+  },
+  "aria": {
+    "cardActions": "插件操作",
+    "filter": "插件筛选",
+    "sort": "插件排序"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "title": "日志",
+  "subtitle": "查看引擎日志。",
+  "search": {
+    "placeholder": "搜索日志…"
+  },
+  "filters": {
+    "all": "全部级别",
+    "debug": "调试",
+    "info": "信息",
+    "warn": "警告",
+    "error": "错误"
+  },
+  "stats": {
+    "total": "日志总数",
+    "errors": "错误",
+    "warnings": "警告"
+  },
+  "actions": {
+    "clear": "清空日志",
+    "refresh": "刷新",
+    "autoScroll": "自动滚动"
+  },
+  "clearConfirm": {
+    "title": "清空日志",
+    "description": "确定要清空所有日志吗？此操作不可撤销。",
+    "confirm": "清空",
+    "cancel": "取消"
+  },
+  "empty": {
+    "title": "暂无日志",
+    "subtitle": "引擎运行时会在此处显示日志。"
+  },
+  "loading": "加载日志中…",
+  "loadFailed": "加载日志失败",
+  "cleared": "日志已清空。",
+  "clearFailed": "清空日志失败。",
+  "copy": "复制",
+  "copied": "已复制"
+}
