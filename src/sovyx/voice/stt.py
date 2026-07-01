@@ -736,12 +736,43 @@ class MoonshineSTT(STTEngine):
 
         self._state = STTState.TRANSCRIBING
 
+        # Capture the loop that owns ``queue`` BEFORE the native session
+        # starts — mirrors ``_transcribe_oneshot`` (which routes its
+        # future resolution through ``loop.call_soon_threadsafe``).
+        # moonshine_voice invokes listener callbacks from its native C++
+        # worker thread, and ``asyncio.Queue`` is NOT thread-safe: a
+        # cross-thread ``put_nowait`` can lose the waiter wakeup or
+        # corrupt internal state. Every queue mutation from the listener
+        # therefore hops onto the owning loop via
+        # ``call_soon_threadsafe``.
+        loop = asyncio.get_running_loop()
         queue: asyncio.Queue[PartialTranscription] = asyncio.Queue()
+
+        def _enqueue_threadsafe(item: PartialTranscription) -> None:
+            """Schedule a queue put on the owning loop from any thread.
+
+            Defensive on shutdown: if the loop is already closed
+            (``RuntimeError``), drop the event with a debug log instead
+            of raising into the native thread — an exception escaping a
+            moonshine callback would propagate into the C++ core, whose
+            behavior on foreign exceptions is undefined.
+            """
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, item)
+            except RuntimeError:
+                logger.debug(
+                    "voice.stt.streaming_event_dropped",
+                    **{
+                        "voice.reason": "event_loop_closed",
+                        "voice.is_final": item.is_final,
+                        "voice.text_chars": len(item.text),
+                    },
+                )
 
         class _StreamingListener(TranscriptEventListener):  # type: ignore[misc]
             def on_line_started(self, event: object) -> None:
                 """Called when a new transcription line begins."""
-                queue.put_nowait(
+                _enqueue_threadsafe(
                     PartialTranscription(
                         text=event.line.text,  # type: ignore[attr-defined]
                         is_final=False,
@@ -751,7 +782,7 @@ class MoonshineSTT(STTEngine):
 
             def on_line_text_changed(self, event: object) -> None:
                 """Called when transcription text updates."""
-                queue.put_nowait(
+                _enqueue_threadsafe(
                     PartialTranscription(
                         text=event.line.text,  # type: ignore[attr-defined]
                         is_final=False,
@@ -761,7 +792,7 @@ class MoonshineSTT(STTEngine):
 
             def on_line_completed(self, event: object) -> None:
                 """Called when a transcription line is finalized."""
-                queue.put_nowait(
+                _enqueue_threadsafe(
                     PartialTranscription(
                         text=event.line.text,  # type: ignore[attr-defined]
                         is_final=True,

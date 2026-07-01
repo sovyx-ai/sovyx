@@ -609,6 +609,122 @@ class TestMoonshineSTTStreaming:
                 pass
 
 
+class TestStreamingListenerThreadSafety:
+    """Listener callbacks fire from moonshine's native C++ thread.
+
+    ``asyncio.Queue`` is not thread-safe, so the streaming listener must
+    route every queue mutation through ``loop.call_soon_threadsafe``
+    (same pattern as ``_transcribe_oneshot``). These tests fire the
+    callbacks from a REAL foreign ``threading.Thread`` — not the event
+    loop thread, not the ``to_thread`` executor thread — and assert
+    events still arrive without error.
+    """
+
+    @staticmethod
+    def _make_foreign_thread_transcriber(
+        partial_text: str,
+        final_text: str,
+    ) -> MagicMock:
+        """Build a mock Transcriber that fires listener callbacks from a dedicated thread."""
+        import threading
+
+        transcriber = MagicMock()
+
+        def _create_stream(update_interval: float = 0.3) -> MagicMock:  # noqa: ARG001
+            stream = MagicMock()
+            listeners: list[Any] = []
+
+            def _fire_in_thread(fire: Any) -> None:
+                thread = threading.Thread(target=fire, name="mock-moonshine-native")
+                thread.start()
+                thread.join(timeout=5.0)
+                # xdist-safe: hard requirement that the foreign thread
+                # actually completed (a raise inside `fire` would leave
+                # it dead but joined; assertion errors propagate via
+                # the queue-content asserts below).
+                assert not thread.is_alive()
+
+            def _add_audio(audio: object, sample_rate: int) -> None:  # noqa: ARG001
+                def _fire() -> None:
+                    for lis in listeners:
+                        started = MagicMock()
+                        started.line.text = ""
+                        lis.on_line_started(started)
+                        changed = MagicMock()
+                        changed.line.text = partial_text
+                        lis.on_line_text_changed(changed)
+
+                _fire_in_thread(_fire)
+
+            def _stop() -> None:
+                def _fire() -> None:
+                    for lis in listeners:
+                        completed = MagicMock()
+                        completed.line.text = final_text
+                        lis.on_line_completed(completed)
+
+                _fire_in_thread(_fire)
+
+            stream.add_listener = listeners.append
+            stream.add_audio = _add_audio
+            stream.stop = _stop
+            stream.start = MagicMock()
+            stream.close = MagicMock()
+            return stream
+
+        transcriber.create_stream = _create_stream
+        return transcriber
+
+    @pytest.mark.asyncio
+    async def test_callbacks_from_foreign_thread_deliver_events(self) -> None:
+        transcriber = self._make_foreign_thread_transcriber(
+            partial_text="hello wor",
+            final_text="hello world",
+        )
+        mock_mv = _make_mock_moonshine_voice(transcriber)
+        stt = MoonshineSTT()
+
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+
+            chunks = [np.zeros(3200, dtype=np.float32)]
+            results: list[PartialTranscription] = []
+            async for partial in stt.transcribe_streaming(_audio_stream(chunks)):
+                results.append(partial)
+
+        # All three callback flavors crossed the thread boundary intact.
+        finals = [r for r in results if r.is_final]
+        assert len(finals) == 1
+        assert finals[0].text == "hello world"
+        assert finals[0].confidence == 0.95
+        non_finals = [r for r in results if not r.is_final]
+        assert len(non_finals) == 2
+        assert non_finals[-1].text == "hello wor"
+
+    @pytest.mark.asyncio
+    async def test_foreign_thread_events_across_multiple_chunks(self) -> None:
+        transcriber = self._make_foreign_thread_transcriber(
+            partial_text="partial",
+            final_text="final text",
+        )
+        mock_mv = _make_mock_moonshine_voice(transcriber)
+        stt = MoonshineSTT()
+
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+
+            chunks = [np.zeros(3200, dtype=np.float32) for _ in range(3)]
+            results: list[PartialTranscription] = []
+            async for partial in stt.transcribe_streaming(_audio_stream(chunks)):
+                results.append(partial)
+
+        # 3 chunks x (started + changed) + 1 final on stop — no event
+        # lost to a missed cross-thread wakeup.
+        assert len(results) == 7
+        assert sum(1 for r in results if r.is_final) == 1
+        assert stt.state == STTState.READY
+
+
 # ---------------------------------------------------------------------------
 # Preprocessing / audio format tests
 # ---------------------------------------------------------------------------
