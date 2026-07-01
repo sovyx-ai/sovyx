@@ -42,6 +42,16 @@ _INPUT_CHUNK_BYTES = _MIC_RATE * _MIC_WIDTH * _MIC_CHANNELS * _INPUT_CHUNK_MS //
 _OUTPUT_CHUNK_MS = 100
 _OUTPUT_CHUNK_BYTES = _SND_RATE * _SND_WIDTH * _SND_CHANNELS * _OUTPUT_CHUNK_MS // 1000  # 4410
 
+_MAX_TRANSCRIBE_AUDIO_BYTES = 64 * 1024 * 1024
+"""Hard cap on TOTAL audio accumulated per STT transcribe turn (64 MiB).
+
+At the 16 kHz / 16-bit / mono mic format this is ~35 minutes of audio —
+far beyond any legitimate Home Assistant voice turn. Bounds the
+``_handle_transcribe`` accumulation buffer so a hostile client cannot
+exhaust memory by streaming audio-chunk events indefinitely, each one
+individually within ``WyomingConfig.max_event_payload_bytes``.
+"""
+
 SOVYX_ATTRIBUTION = {"name": "Sovyx", "url": "https://sovyx.dev"}
 WYOMING_SERVICE_TYPE = "_wyoming._tcp.local."
 
@@ -547,6 +557,33 @@ class WyomingClientHandler:
         if not self._closed:
             await write_event(self._writer, event)
 
+    async def _read_substream_event(self) -> WyomingEvent | None:
+        """Read one event inside an audio sub-loop (transcribe/detect stream).
+
+        Applies the SAME per-event payload cap and idle timeout as the main
+        ``run()`` loop — the audio sub-loops previously bypassed both,
+        letting a hostile client allocate an arbitrarily large payload
+        (readexactly on an unchecked ``payload_length``) or hold the handler
+        slot forever by going silent mid-stream.
+
+        Returns None on EOF, read error, size-cap violation, or idle
+        timeout; callers must stop reading and end the turn.
+        """
+        try:
+            return await asyncio.wait_for(
+                WyomingEvent.read_from(
+                    self._reader,
+                    max_payload_bytes=self._config.max_event_payload_bytes,
+                ),
+                timeout=self._config.idle_timeout_seconds,
+            )
+        except TimeoutError:
+            logger.warning(
+                "wyoming_stream_idle_timeout",
+                timeout_seconds=self._config.idle_timeout_seconds,
+            )
+            return None
+
     async def _handle_describe(self) -> None:
         """Respond to ``describe`` with service info."""
         info = build_service_info(self._config)
@@ -564,15 +601,32 @@ class WyomingClientHandler:
         language = event.data.get("language", "en")
         audio_buffer = bytearray()
 
-        # Read audio stream until audio-stop
+        # Read audio stream until audio-stop — same payload cap + idle
+        # timeout as the main loop (see _read_substream_event), plus a
+        # total-accumulation cap: per-event limits alone don't stop a
+        # client from streaming in-cap chunks indefinitely.
         while True:
-            chunk_event = await WyomingEvent.read_from(self._reader)
+            chunk_event = await self._read_substream_event()
             if chunk_event is None:
-                return  # Client disconnected
+                return  # Disconnect, oversized event, or idle timeout
 
             if chunk_event.type == "audio-start":
                 audio_buffer.clear()
             elif chunk_event.type == "audio-chunk":
+                if len(audio_buffer) + len(chunk_event.payload) > _MAX_TRANSCRIBE_AUDIO_BYTES:
+                    logger.warning(
+                        "wyoming_transcribe_audio_cap_exceeded",
+                        accumulated_bytes=len(audio_buffer),
+                        chunk_bytes=len(chunk_event.payload),
+                        max_bytes=_MAX_TRANSCRIBE_AUDIO_BYTES,
+                    )
+                    await self._write_event(
+                        WyomingEvent(
+                            type="transcript",
+                            data={"text": "", "language": language},
+                        ),
+                    )
+                    return
                 audio_buffer.extend(chunk_event.payload)
             elif chunk_event.type == "audio-stop":
                 break
@@ -673,8 +727,11 @@ class WyomingClientHandler:
             await self._write_event(WyomingEvent(type="not-detected"))
             return
 
+        # Frame-by-frame processing (no accumulation) — but the read still
+        # needs the shared payload cap + idle timeout (see
+        # _read_substream_event); this loop previously bypassed both.
         while True:
-            chunk_event = await WyomingEvent.read_from(self._reader)
+            chunk_event = await self._read_substream_event()
             if chunk_event is None:
                 return
 

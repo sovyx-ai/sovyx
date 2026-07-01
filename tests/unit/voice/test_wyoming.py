@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from sovyx.engine.errors import VoiceError
+from sovyx.voice import wyoming as wyoming_module
 from sovyx.voice.wyoming import (
     SOVYX_ATTRIBUTION,
     WYOMING_SERVICE_TYPE,
@@ -1627,3 +1628,186 @@ class TestWyomingHandlerIntentRoute:
         out_events = writer.get_events()
         event_types = [e.type for e in out_events]
         assert "handled" in event_types
+
+
+# ---------------------------------------------------------------------------
+# DoS hardening — sub-loop payload cap, idle timeout, accumulation cap
+# ---------------------------------------------------------------------------
+
+
+class CapSentinelReader(MockStreamReader):
+    """MockStreamReader that fails the test on an oversized readexactly.
+
+    Guards the "no giant allocation" invariant: when the per-event payload
+    cap is enforced, ``readexactly`` is never asked for more than the cap —
+    ``WyomingEvent.read_from`` must reject the declared ``payload_length``
+    BEFORE attempting to read (and allocate) it.
+    """
+
+    def __init__(self, events: list[WyomingEvent] | None, cap: int) -> None:
+        super().__init__(events)
+        self._cap = cap
+
+    async def readexactly(self, n: int) -> bytes:
+        assert n <= self._cap, f"oversized allocation attempted: {n} bytes > cap {self._cap}"
+        return await super().readexactly(n)
+
+
+class HangingReader(MockStreamReader):
+    """MockStreamReader that hangs forever once its queued events run out.
+
+    Models a client that opens an audio stream and then goes silent —
+    without an idle timeout on the sub-loop read, the handler slot is held
+    indefinitely.
+    """
+
+    async def readline(self) -> bytes:
+        if self._index >= len(self._events):
+            await asyncio.Event().wait()  # never set — hang until cancelled
+        return await super().readline()
+
+
+class TestSubLoopDosHardening:
+    """Sub-loop reads must enforce the same cap/timeout as the main loop."""
+
+    @pytest.mark.asyncio
+    async def test_transcribe_oversized_chunk_rejected_without_allocation(self) -> None:
+        """An audio-chunk declaring a payload over the cap is rejected in the
+        transcribe sub-loop BEFORE readexactly allocates it; the connection
+        ends gracefully and STT is never invoked."""
+        cap = 1024
+        stt = AsyncMock()
+        reader = CapSentinelReader(
+            events=[
+                WyomingEvent(type="transcribe", data={"language": "en"}),
+                WyomingEvent(type="audio-start", data={"rate": 16000}),
+                WyomingEvent(type="audio-chunk", payload=bytes(cap * 2)),
+            ],
+            cap=cap,
+        )
+        writer = MockStreamWriter()
+        handler = WyomingClientHandler(
+            reader=reader,
+            writer=writer,
+            config=WyomingConfig(max_event_payload_bytes=cap),
+            stt_engine=stt,
+        )
+        await asyncio.wait_for(handler.run(), timeout=5.0)
+
+        stt.transcribe.assert_not_called()
+        assert handler.closed is True
+
+    @pytest.mark.asyncio
+    async def test_detect_oversized_chunk_rejected_without_allocation(self) -> None:
+        """Same cap enforcement in the detect (wake word) sub-loop."""
+        cap = 1024
+        wake = MagicMock()
+        wake.process_frame = MagicMock(return_value=MockWakeResult(detected=False))
+        reader = CapSentinelReader(
+            events=[
+                WyomingEvent(type="detect"),
+                WyomingEvent(type="audio-chunk", payload=bytes(cap * 2)),
+            ],
+            cap=cap,
+        )
+        writer = MockStreamWriter()
+        handler = WyomingClientHandler(
+            reader=reader,
+            writer=writer,
+            config=WyomingConfig(max_event_payload_bytes=cap),
+            wake_engine=wake,
+        )
+        await asyncio.wait_for(handler.run(), timeout=5.0)
+
+        wake.process_frame.assert_not_called()
+        assert handler.closed is True
+
+    @pytest.mark.asyncio
+    async def test_transcribe_idle_client_times_out(self) -> None:
+        """A client that goes silent mid-transcribe hits the idle timeout in
+        the sub-loop and the handler returns instead of hanging forever."""
+        stt = AsyncMock()
+        reader = HangingReader(
+            [
+                WyomingEvent(type="transcribe", data={"language": "en"}),
+                WyomingEvent(type="audio-start", data={"rate": 16000}),
+            ]
+        )
+        writer = MockStreamWriter()
+        handler = WyomingClientHandler(
+            reader=reader,
+            writer=writer,
+            config=WyomingConfig(idle_timeout_seconds=0.05),
+            stt_engine=stt,
+        )
+        # Guard: pre-fix the sub-loop read blocks forever and this trips.
+        await asyncio.wait_for(handler.run(), timeout=5.0)
+
+        stt.transcribe.assert_not_called()
+        assert handler.closed is True
+
+    @pytest.mark.asyncio
+    async def test_detect_idle_client_times_out(self) -> None:
+        """Same idle-timeout enforcement in the detect sub-loop."""
+        wake = MagicMock()
+        wake.process_frame = MagicMock(return_value=MockWakeResult(detected=False))
+        reader = HangingReader([WyomingEvent(type="detect")])
+        writer = MockStreamWriter()
+        handler = WyomingClientHandler(
+            reader=reader,
+            writer=writer,
+            config=WyomingConfig(idle_timeout_seconds=0.05),
+            wake_engine=wake,
+        )
+        await asyncio.wait_for(handler.run(), timeout=5.0)
+
+        wake.process_frame.assert_not_called()
+        assert handler.closed is True
+
+    @pytest.mark.asyncio
+    async def test_transcribe_accumulation_cap_trips_empty_transcript(self) -> None:
+        """Exceeding the total-audio accumulation cap stops reading and
+        completes the turn with an empty transcript (same graceful framing
+        as the STT-unavailable path); STT is never invoked."""
+        stt = AsyncMock()
+        pcm = bytes(640)
+        with patch.object(wyoming_module, "_MAX_TRANSCRIBE_AUDIO_BYTES", 1000):
+            handler, _, writer = _make_handler(
+                events=[
+                    WyomingEvent(type="transcribe", data={"language": "en"}),
+                    WyomingEvent(type="audio-start", data={"rate": 16000}),
+                    WyomingEvent(type="audio-chunk", payload=pcm),  # 640 ≤ 1000 OK
+                    WyomingEvent(type="audio-chunk", payload=pcm),  # 1280 > 1000 trips
+                    WyomingEvent(type="audio-stop"),
+                ],
+                stt_engine=stt,
+            )
+            await asyncio.wait_for(handler.run(), timeout=5.0)
+
+        transcripts = [e for e in writer.get_events() if e.type == "transcript"]
+        assert len(transcripts) == 1
+        assert transcripts[0].data["text"] == ""
+        assert transcripts[0].data["language"] == "en"
+        stt.transcribe.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_transcribe_under_accumulation_cap_still_works(self) -> None:
+        """Audio within the accumulation cap transcribes normally."""
+        stt = AsyncMock()
+        stt.transcribe = AsyncMock(return_value=MockTranscriptionResult(text="ok"))
+        pcm = bytes(640)
+        with patch.object(wyoming_module, "_MAX_TRANSCRIBE_AUDIO_BYTES", 1000):
+            handler, _, writer = _make_handler(
+                events=[
+                    WyomingEvent(type="transcribe", data={"language": "en"}),
+                    WyomingEvent(type="audio-start", data={"rate": 16000}),
+                    WyomingEvent(type="audio-chunk", payload=pcm),
+                    WyomingEvent(type="audio-stop"),
+                ],
+                stt_engine=stt,
+            )
+            await asyncio.wait_for(handler.run(), timeout=5.0)
+
+        transcripts = [e for e in writer.get_events() if e.type == "transcript"]
+        assert len(transcripts) == 1
+        assert transcripts[0].data["text"] == "ok"
