@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
+from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 from sovyx.voice._stage_metrics import (
     StageEventKind,
@@ -41,6 +43,12 @@ logger = get_logger(__name__)
 
 _DEFAULT_SAMPLE_RATE = 22050
 _MAX_PHONEME_IDS = 50_000  # Safety limit for phoneme ID sequences
+
+_TTS_SYNTHESIS_TIMEOUT_S = _VoiceTuning().tts_synthesis_timeout_seconds
+"""Per-call deadline for one Piper VITS ONNX inference (one sentence)
+dispatched via ``asyncio.to_thread``. ``0.0`` disables the deadline. See
+``VoiceTuningConfig.tts_synthesis_timeout_seconds``
+(``SOVYX_TUNING__VOICE__TTS_SYNTHESIS_TIMEOUT_SECONDS``)."""
 _BOS = "^"  # Beginning of sequence
 _EOS = "$"  # End of sequence
 _PAD = "_"  # Padding (between phonemes — critical for VITS alignment)
@@ -522,12 +530,51 @@ class PiperTTS(TTSEngine):
                 # Piper ONNX inference is CPU-bound — offload to a
                 # worker thread so concurrent dashboard / HTTP /
                 # pipeline tasks stay responsive while a sentence is
-                # being synthesized.
-                audio = await asyncio.to_thread(
-                    self._synthesize_ids,
-                    ids,
-                    speaker_id=self._config.speaker_id,
-                )
+                # being synthesized. The `wait_for` deadline (per
+                # sentence) bounds how long THIS turn waits on a wedged
+                # ONNX session. HONESTY NOTE: `asyncio.to_thread` work
+                # is NOT actually cancelled by `wait_for`; the worker
+                # thread keeps running and its result is discarded. The
+                # point is to unblock the pipeline turn; repeated
+                # timeouts feed the pipeline's consecutive-failure
+                # abort (T1.21). The exception flows through
+                # measure_stage_duration's BaseException handler, so
+                # the stage is recorded ERROR/VoiceError.
+                try:
+                    audio = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self._synthesize_ids,
+                            ids,
+                            speaker_id=self._config.speaker_id,
+                        ),
+                        timeout=(
+                            _TTS_SYNTHESIS_TIMEOUT_S if _TTS_SYNTHESIS_TIMEOUT_S > 0 else None
+                        ),
+                    )
+                except TimeoutError as exc:
+                    msg = (
+                        f"Piper TTS synthesis exceeded the "
+                        f"{_TTS_SYNTHESIS_TIMEOUT_S:.1f}s per-sentence "
+                        f"deadline (phoneme_ids={len(ids)}, "
+                        f"voice={self._config.voice}). The ONNX worker "
+                        "thread is still running and cannot be cancelled "
+                        "— this turn is aborted so the pipeline stays "
+                        "responsive. action_required: if this recurs, "
+                        "the ONNX session is likely wedged — restart the "
+                        "daemon; for legitimately long synth workloads "
+                        "raise SOVYX_TUNING__VOICE__"
+                        "TTS_SYNTHESIS_TIMEOUT_SECONDS (0 disables)."
+                    )
+                    raise VoiceError(
+                        msg,
+                        context={
+                            "timeout_seconds": _TTS_SYNTHESIS_TIMEOUT_S,
+                            "phoneme_ids": len(ids),
+                            "text_chars": len(text),
+                            "voice": self._config.voice,
+                            "engine": "piper",
+                        },
+                    ) from exc
                 all_audio.append(audio)
                 all_audio.append(silence)
             generation_ms = (time.monotonic() - gen_start) * 1000

@@ -991,6 +991,34 @@ class VoiceTuningConfig(BaseSettings):
     fired-late watchdog from a completed invocation cannot
     accidentally clear the flag of a SUBSEQUENT invocation."""
 
+    pipeline_dwell_watchdog_seconds: float = Field(default=120.0, ge=0.0, le=3600.0)
+    """Dwell-watchdog ceiling for transient pipeline states
+    (WAKE_DETECTED / RECORDING / TRANSCRIBING / THINKING). When the
+    authoritative state outlives this budget the heartbeat loop
+    force-recovers to IDLE (``pipeline.state.watchdog_fired``) so a
+    zombie turn (cogloop task died before any TTS-out call, capture
+    stalled mid-recording, STT parked past its own timeout) cannot
+    permanently deafen the pipeline. Default 120 s is generous enough
+    for a slow local LLM's batch-mode full-response generation while
+    still bounding operator-visible dead air to two minutes. ``0``
+    disables the watchdog entirely (kill-switch per anti-pattern #34
+    inverse — recovery defaults ON). SPEAKING is exempt: long TTS
+    playback is legitimate and its exit is owned by the TTS-out
+    coroutines (speak/flush_stream)."""
+
+    tts_synthesis_timeout_seconds: float = Field(default=60.0, ge=0.0, le=600.0)
+    """Per-call deadline for a single TTS synthesis (Piper VITS /
+    Kokoro ONNX inference dispatched via ``asyncio.to_thread``).
+    Every other inference path already has one (Moonshine
+    ``transcribe_timeout``, CloudSTT httpx+Hystrix); pre-fix a wedged
+    ONNX session or pathological input hung the TTS stage forever
+    with no recovery for that turn. Default 60 s covers worst-case
+    long-sentence synthesis on a Pi-class CPU with wide margin;
+    ``0`` disables the deadline (kill-switch, inverse #34). On
+    timeout the engine raises its typed error so the pipeline's
+    per-segment resilience / consecutive-failure abort (T1.21)
+    handles it like any other synthesis failure."""
+
     pipeline_speaker_consistency_enabled: bool = Field(default=True)
     """T1.39 — gate the spectral-centroid drift detector. ``True``
     enables :class:`sovyx.voice._speaker_consistency.SpeakerConsistencyMonitor`

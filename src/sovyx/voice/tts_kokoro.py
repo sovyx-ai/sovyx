@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
+from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._stage_metrics import (
@@ -47,6 +49,12 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_SAMPLE_RATE = 24000
+
+_TTS_SYNTHESIS_TIMEOUT_S = _VoiceTuning().tts_synthesis_timeout_seconds
+"""Per-call deadline for one Kokoro ONNX inference dispatched via
+``asyncio.to_thread``. ``0.0`` disables the deadline. See
+``VoiceTuningConfig.tts_synthesis_timeout_seconds``
+(``SOVYX_TUNING__VOICE__TTS_SYNTHESIS_TIMEOUT_SECONDS``)."""
 
 # Model file names
 _MODEL_FULL = "kokoro-v1.0.onnx"
@@ -404,15 +412,51 @@ class KokoroTTS(TTSEngine):
             # Kokoro's `create` runs G2P + ONNX VITS2 synchronously and
             # is CPU-bound (multiple seconds for a long sentence).
             # Offload to a worker thread so the event loop stays
-            # responsive.
+            # responsive. The `wait_for` deadline bounds how long THIS
+            # turn waits — a wedged ONNX session pre-fix hung the TTS
+            # stage forever. HONESTY NOTE: `asyncio.to_thread` work is
+            # NOT actually cancelled by `wait_for`; the worker thread
+            # keeps running to completion (or forever, if wedged) and
+            # its result is discarded. The point is to unblock the
+            # pipeline turn; repeated timeouts feed the pipeline's
+            # consecutive-failure abort (T1.21). The exception raised
+            # here flows through measure_stage_duration's BaseException
+            # handler, so the stage is recorded ERROR/VoiceError.
             gen_start = time.monotonic()
-            samples, sample_rate = await asyncio.to_thread(
-                self._kokoro.create,
-                text,
-                voice=voice,
-                speed=resolved_speed,
-                lang=language,
-            )
+            try:
+                samples, sample_rate = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._kokoro.create,
+                        text,
+                        voice=voice,
+                        speed=resolved_speed,
+                        lang=language,
+                    ),
+                    timeout=_TTS_SYNTHESIS_TIMEOUT_S if _TTS_SYNTHESIS_TIMEOUT_S > 0 else None,
+                )
+            except TimeoutError as exc:
+                msg = (
+                    f"Kokoro TTS synthesis exceeded the "
+                    f"{_TTS_SYNTHESIS_TIMEOUT_S:.1f}s deadline "
+                    f"(text_chars={len(text)}, voice={voice}). The ONNX "
+                    "worker thread is still running and cannot be "
+                    "cancelled — this turn is aborted so the pipeline "
+                    "stays responsive. action_required: if this recurs, "
+                    "the ONNX session is likely wedged — restart the "
+                    "daemon; for legitimately long synth workloads raise "
+                    "SOVYX_TUNING__VOICE__TTS_SYNTHESIS_TIMEOUT_SECONDS "
+                    "(0 disables)."
+                )
+                raise VoiceError(
+                    msg,
+                    context={
+                        "timeout_seconds": _TTS_SYNTHESIS_TIMEOUT_S,
+                        "text_chars": len(text),
+                        "voice": voice,
+                        "language": language,
+                        "engine": "kokoro",
+                    },
+                ) from exc
             generation_ms = (time.monotonic() - gen_start) * 1000
 
             # Convert float32 → int16 PCM

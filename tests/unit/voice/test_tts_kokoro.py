@@ -6,6 +6,7 @@ without requiring actual model files (~300MB) or ONNX runtime.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1245,3 +1246,70 @@ class TestKokoroLoadSelfHeal:
         ):
             await tts.initialize()
         ensure_mock.assert_not_awaited()  # non-production dir → no heal
+
+
+# ---------------------------------------------------------------------------
+# Synthesis deadline (tts_synthesis_timeout_seconds)
+# ---------------------------------------------------------------------------
+
+
+class TestSynthesisTimeout:
+    """A wedged ONNX inference must not hang the TTS stage forever.
+
+    The deadline wraps ``asyncio.to_thread(self._kokoro.create, ...)`` in
+    ``asyncio.wait_for``. NOTE: the worker thread itself is NOT cancelled
+    by ``wait_for`` — the tests release the wedged callable and drain the
+    thread before returning so the loop closes cleanly (Debugging Rule
+    #12 Windows asyncio-teardown class).
+    """
+
+    @pytest.mark.asyncio
+    async def test_wedged_inference_raises_typed_error(self, tmp_path: Path) -> None:
+        import threading
+
+        import sovyx.voice.tts_kokoro as tts_kokoro_module
+
+        tts, mock_kokoro = _build_kokoro(tmp_path)
+
+        release = threading.Event()
+        finished = threading.Event()
+
+        def _wedged_create(*_args: object, **_kwargs: object) -> tuple[np.ndarray, int]:
+            release.wait(timeout=10.0)
+            finished.set()
+            return np.zeros(4800, dtype=np.float32), 24000
+
+        mock_kokoro.create = MagicMock(side_effect=_wedged_create)
+
+        try:
+            with (
+                patch.object(tts_kokoro_module, "_TTS_SYNTHESIS_TIMEOUT_S", 0.05),
+                pytest.raises(Exception) as exc_info,
+            ):
+                await tts.synthesize("hello world")
+        finally:
+            release.set()
+
+        # xdist-safe class-name assert (anti-pattern #8).
+        assert type(exc_info.value).__name__ == "VoiceError"
+        message = str(exc_info.value)
+        assert "0.1s" in message  # timeout value surfaced
+        assert "action_required" in message
+        context = exc_info.value.context  # type: ignore[attr-defined]
+        assert context["engine"] == "kokoro"
+        assert context["timeout_seconds"] == 0.05
+
+        # Drain the abandoned worker thread before the loop closes.
+        await asyncio.to_thread(finished.wait, 10.0)
+
+    @pytest.mark.asyncio
+    async def test_zero_timeout_disables_deadline(self, tmp_path: Path) -> None:
+        import sovyx.voice.tts_kokoro as tts_kokoro_module
+
+        tts, _mock_kokoro = _build_kokoro(tmp_path)
+
+        with patch.object(tts_kokoro_module, "_TTS_SYNTHESIS_TIMEOUT_S", 0.0):
+            chunk = await tts.synthesize("hello world")
+
+        assert isinstance(chunk, AudioChunk)
+        assert len(chunk.audio) > 0

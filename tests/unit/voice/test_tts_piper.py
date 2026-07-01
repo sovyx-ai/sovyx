@@ -1253,3 +1253,78 @@ class TestPiperT2EnergyValidation:
         events = _piper_events_of(caplog, "voice.tts.chunk_emitted")
         assert len(events) >= 1
         assert events[-1]["voice.synthesis_health"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Synthesis deadline (tts_synthesis_timeout_seconds)
+# ---------------------------------------------------------------------------
+
+
+class TestSynthesisTimeout:
+    """A wedged ONNX inference must not hang the TTS stage forever.
+
+    The per-sentence deadline wraps ``asyncio.to_thread(self._synthesize_ids,
+    ...)`` in ``asyncio.wait_for``. NOTE: the worker thread itself is NOT
+    cancelled by ``wait_for`` — the tests release the wedged callable and
+    drain the thread before returning so the loop closes cleanly (Debugging
+    Rule #12 Windows asyncio-teardown class).
+    """
+
+    @pytest.mark.asyncio
+    async def test_wedged_inference_raises_typed_error(self, tmp_path: Path) -> None:
+        import asyncio
+        import threading
+
+        import sovyx.voice.tts_piper as tts_piper_module
+
+        piper = _build_piper(tmp_path)
+        _, modules = _mock_phonemize_module([["h", "ɛ", "l", "oʊ"]])
+
+        release = threading.Event()
+        finished = threading.Event()
+
+        def _wedged_run(_output_names: object, _inputs: dict[str, Any]) -> list[Any]:
+            release.wait(timeout=10.0)
+            finished.set()
+            rng = np.random.default_rng(42)
+            return [rng.uniform(-0.5, 0.5, (1, 1, 4410)).astype(np.float32)]
+
+        piper._session.run = _wedged_run  # type: ignore[union-attr]
+
+        try:
+            with (
+                patch.dict("sys.modules", modules),
+                patch.object(tts_piper_module, "_TTS_SYNTHESIS_TIMEOUT_S", 0.05),
+                pytest.raises(Exception) as exc_info,
+            ):
+                await piper.synthesize("Hello")
+        finally:
+            release.set()
+
+        # xdist-safe class-name assert (anti-pattern #8).
+        assert type(exc_info.value).__name__ == "VoiceError"
+        message = str(exc_info.value)
+        assert "0.1s" in message  # timeout value surfaced
+        assert "action_required" in message
+        context = exc_info.value.context  # type: ignore[attr-defined]
+        assert context["engine"] == "piper"
+        assert context["timeout_seconds"] == 0.05
+
+        # Drain the abandoned worker thread before the loop closes.
+        await asyncio.to_thread(finished.wait, 10.0)
+
+    @pytest.mark.asyncio
+    async def test_zero_timeout_disables_deadline(self, tmp_path: Path) -> None:
+        import sovyx.voice.tts_piper as tts_piper_module
+
+        piper = _build_piper(tmp_path, audio_length=4410)
+        _, modules = _mock_phonemize_module([["h", "ɛ", "l", "oʊ"]])
+
+        with (
+            patch.dict("sys.modules", modules),
+            patch.object(tts_piper_module, "_TTS_SYNTHESIS_TIMEOUT_S", 0.0),
+        ):
+            chunk = await piper.synthesize("Hello")
+
+        assert isinstance(chunk, AudioChunk)
+        assert len(chunk.audio) > 0
