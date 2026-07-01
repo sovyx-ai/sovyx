@@ -33,8 +33,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from sovyx.voice.pipeline import TTSCompletedEvent, VoicePipelineState
 from sovyx.voice.pipeline import _heartbeat_mixin as _heartbeat_mod
 from sovyx.voice.pipeline import _output_queue as _output_queue_mod
@@ -113,7 +111,9 @@ class TestStreamingBackgroundDrainer:
         flush the drainer slot is cleared and all audio has played."""
         pipeline, _refs = _make_pipeline()
         with patch.object(_output_queue_mod, "_play_audio", AsyncMock()):
-            await pipeline.stream_text("Sentence number one done. Sentence number two done. still generating more here")
+            await pipeline.stream_text(
+                "Sentence number one done. Sentence number two done. still generating more here"
+            )
             await pipeline.flush_stream()
         assert pipeline._stream_drain_task is None
         assert pipeline._output._queue.empty()

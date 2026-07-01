@@ -528,3 +528,82 @@ class TestProtocolCompliance:
         from sovyx.engine.protocols import LLMProvider
 
         assert isinstance(OllamaProvider(), LLMProvider)
+
+
+class TestOllamaDefaultModelResolution:
+    """Empty/"default" model sentinel resolves to an installed model.
+
+    2026-07-01 audio-engine audit — a key-less install (no cloud API
+    key) leaves mind.llm.default_model empty; the router normalises it
+    to "default", which no Ollama instance serves, so every turn 404'd
+    into the degraded reply even with a healthy local Ollama.
+    """
+
+    async def test_sentinel_resolves_to_first_installed(self) -> None:
+        from unittest.mock import patch
+
+        p = OllamaProvider()
+        with patch.object(
+            p, "list_models", AsyncMock(return_value=["qwen2.5:0.5b", "qwen2.5:3b"])
+        ):
+            assert await p._ensure_concrete_model("") == "qwen2.5:0.5b"
+            assert await p._ensure_concrete_model("default") == "qwen2.5:0.5b"
+        await p.close()
+
+    async def test_embedding_models_skipped(self) -> None:
+        from unittest.mock import patch
+
+        p = OllamaProvider()
+        with patch.object(
+            p, "list_models", AsyncMock(return_value=["nomic-embed-text", "qwen2.5:3b"])
+        ):
+            assert await p._ensure_concrete_model("default") == "qwen2.5:3b"
+        await p.close()
+
+    async def test_explicit_model_untouched(self) -> None:
+        from unittest.mock import patch
+
+        p = OllamaProvider()
+        with patch.object(p, "list_models", AsyncMock(return_value=["qwen2.5:3b"])) as lm:
+            assert await p._ensure_concrete_model("llama3.2:1b") == "llama3.2:1b"
+            lm.assert_not_awaited()
+        await p.close()
+
+    async def test_no_models_returns_sentinel(self) -> None:
+        from unittest.mock import patch
+
+        p = OllamaProvider()
+        with patch.object(p, "list_models", AsyncMock(return_value=[])):
+            assert await p._ensure_concrete_model("default") == "default"
+        await p.close()
+
+    async def test_resolution_cached_single_list_call(self) -> None:
+        from unittest.mock import patch
+
+        p = OllamaProvider()
+        with patch.object(p, "list_models", AsyncMock(return_value=["qwen2.5:3b"])) as lm:
+            await p._ensure_concrete_model("default")
+            await p._ensure_concrete_model("")
+            assert lm.await_count == 1
+        await p.close()
+
+    async def test_generate_uses_resolved_model_in_payload(self) -> None:
+        from unittest.mock import patch
+
+        p = OllamaProvider()
+        mock_resp = httpx.Response(
+            200,
+            json={
+                "message": {"content": "Oi!"},
+                "model": "qwen2.5:3b",
+                "prompt_eval_count": 10,
+                "eval_count": 5,
+            },
+        )
+        post = AsyncMock(return_value=mock_resp)
+        p._client.post = post  # type: ignore[method-assign]
+        with patch.object(p, "list_models", AsyncMock(return_value=["qwen2.5:3b"])):
+            result = await p.generate([{"role": "user", "content": "Oi"}], model="default")
+        assert result.content == "Oi!"
+        assert post.call_args.kwargs["json"]["model"] == "qwen2.5:3b"
+        await p.close()

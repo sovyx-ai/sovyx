@@ -63,6 +63,12 @@ class OllamaProvider:
             base_url = os.environ.get(_OLLAMA_HOST_ENV, _DEFAULT_BASE_URL)
         self._base_url = base_url.rstrip("/")
         self._verified: bool = False
+        # Cached resolution of the router's empty/"default" model
+        # sentinel to a real installed model (see
+        # :meth:`_ensure_concrete_model`). Process-lifetime cache —
+        # installed models rarely change mid-session, and a stale hit
+        # falls through to the existing 404 error path.
+        self._resolved_default_model: str | None = None
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=30.0),
         )
@@ -181,6 +187,52 @@ class OllamaProvider:
             )
             return []
 
+    async def _ensure_concrete_model(self, model: str) -> str:
+        """Resolve the router's empty/``"default"`` sentinel to an installed model.
+
+        A key-less install (no cloud API key) leaves
+        ``mind.llm.default_model`` empty; ThinkPhase selects ``""`` and
+        the router normalises it to the ``"default"`` sentinel — which
+        no Ollama instance actually serves, so every turn 404'd into
+        the degraded "having trouble thinking" reply even with a
+        healthy local Ollama. This is the make-or-break for the
+        zero-config local-LLM conversation path.
+
+        Resolution: list installed models once (cached for the process
+        lifetime), drop embedding-only models, pick the first sorted
+        name, and WARN loudly with the full candidate list so the
+        operator can pin ``mind.llm.default_model`` explicitly.
+
+        Explicit model names are returned untouched — a typo'd or
+        missing model must keep failing loudly (AP #48: substituting a
+        different model than requested silently would be a semantic
+        lie), so only the sentinel is auto-resolved.
+        """
+        if model not in ("", "default"):
+            return model
+        if self._resolved_default_model is not None:
+            return self._resolved_default_model
+        installed = await self.list_models()
+        candidates = [m for m in installed if "embed" not in m.lower()]
+        if not candidates:
+            # No usable model — return the sentinel and let the
+            # existing request-error path produce the honest failure.
+            return model
+        chosen = candidates[0]
+        self._resolved_default_model = chosen
+        logger.warning(
+            "ollama_default_model_resolved",
+            chosen_model=chosen,
+            installed_models=candidates[:10],
+            action_required=(
+                "No default LLM model is configured (no cloud API key and "
+                "mind.llm.default_model is empty). Auto-selected the first "
+                "installed Ollama model. Pin your preferred model in "
+                "mind.yaml under llm.default_model to silence this warning."
+            ),
+        )
+        return chosen
+
     # ── Lifecycle ────────────────────────────────────────────
 
     async def close(self) -> None:
@@ -198,6 +250,7 @@ class OllamaProvider:
         tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         """Generate response from Ollama."""
+        model = await self._ensure_concrete_model(model)
         url = f"{self._base_url}/api/chat"
 
         payload: dict[str, Any] = {
@@ -311,6 +364,7 @@ class OllamaProvider:
             * The terminal line has ``done: true`` plus
               ``prompt_eval_count`` / ``eval_count`` for usage.
         """
+        model = await self._ensure_concrete_model(model)
         url = f"{self._base_url}/api/chat"
 
         payload: dict[str, Any] = {
