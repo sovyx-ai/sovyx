@@ -1151,10 +1151,29 @@ class CaptureIntegrityCoordinator:
             # (APO_DEGRADED or INCONCLUSIVE); the verdict-driven map
             # at :data:`_VERDICT_TO_QUARANTINE_REASON` resolves the
             # ``derived_reason`` tag for downstream consumers.
+            #
+            # INCONCLUSIVE reaching exhaustion is NOT a programming
+            # error at THIS site: the T6.16 INCONCLUSIVE retry covers
+            # only the POST-APPLY probe, so a PRE-BYPASS INCONCLUSIVE
+            # (e.g. ring-buffer underrun on a dead pipeline — the most
+            # common deaf-mic pre-bypass verdict) legitimately survives
+            # to this fall-through. :func:`resolve_reason_from_verdict`
+            # raises ``ValueError`` on INCONCLUSIVE by design, and that
+            # exception would escape :meth:`handle_deaf_signal` BEFORE
+            # ``_is_resolved``/quarantine/failover — permanently
+            # blocking recovery on every subsequent deaf heartbeat.
+            # Map INCONCLUSIVE to ``None`` instead: ``None`` takes the
+            # documented legacy fallback inside
+            # :meth:`_quarantine_endpoint` →
+            # :attr:`QuarantineReason.APO_DEGRADED`, which is
+            # apo-recheck-eligible — preserving failover + watchdog
+            # TTL recovery.
             self._quarantine_endpoint(
                 before,
                 tuning,
-                terminal_verdict=before.verdict,
+                terminal_verdict=(
+                    before.verdict if before.verdict is not IntegrityVerdict.INCONCLUSIVE else None
+                ),
             )
             self._is_resolved = True
             return outcomes

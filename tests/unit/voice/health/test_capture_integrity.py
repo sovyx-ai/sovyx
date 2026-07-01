@@ -1083,6 +1083,80 @@ class TestInconclusiveRetry:
         assert retry_events[0]["retry_recovered"] is False
 
 
+# ── Pre-bypass INCONCLUSIVE exhaustion — quarantine, not ValueError ──
+
+
+class TestPreBypassInconclusiveExhaustion:
+    """P0 regression — a PRE-BYPASS INCONCLUSIVE verdict that survives to
+    strategy exhaustion must quarantine under the legacy APO_DEGRADED
+    reason, NOT raise :class:`ValueError`.
+
+    The T6.16 INCONCLUSIVE retry covers only the POST-APPLY probe, so a
+    pre-bypass INCONCLUSIVE (e.g. ring-buffer underrun on a dead
+    pipeline — the most common deaf-mic pre-bypass verdict) legitimately
+    falls through the verdict-router into the strategy loop and reaches
+    the exhaustion quarantine site. Before the fix,
+    ``resolve_reason_from_verdict(INCONCLUSIVE)`` raised there, escaping
+    ``handle_deaf_signal`` BEFORE ``_is_resolved``/quarantine/failover —
+    permanently blocking recovery on every subsequent deaf heartbeat.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_inconclusive_exhaustion_quarantines_as_apo_degraded(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from sovyx.voice.health._quarantine import EndpointQuarantine
+
+        caplog.set_level(logging.WARNING, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        # Dead pipeline: every probe window is an underrun → INCONCLUSIVE
+        # both pre-bypass AND post-apply.
+        before = _result(verdict=IntegrityVerdict.INCONCLUSIVE)
+        after = _result(verdict=IntegrityVerdict.INCONCLUSIVE)
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        capture = _FakeCaptureTask(post_apply_frames=frames)
+        probe = _FakeProbe(before=before, after=after)
+        strategy = _FakeStrategy()
+        quarantine = EndpointQuarantine(quarantine_s=60.0)
+        coordinator = CaptureIntegrityCoordinator(
+            probe=probe,  # type: ignore[arg-type]
+            strategies=[strategy],  # type: ignore[list-item]
+            capture_task=capture,  # type: ignore[arg-type]
+            platform_key="linux",
+            tuning=VoiceTuningConfig(),
+            quarantine=quarantine,
+        )
+
+        # (a) Must NOT raise — pre-fix this threw ValueError out of
+        # handle_deaf_signal from resolve_reason_from_verdict.
+        outcomes = await coordinator.handle_deaf_signal()
+
+        # (c) Terminal outcome reached: outcomes returned + resolved.
+        assert len(outcomes) >= 1
+        assert outcomes[-1].verdict.value == BypassVerdict.APPLIED_STILL_DEAD.value
+        assert coordinator.is_resolved is True
+
+        # (b) Endpoint IS quarantined, resolved via the documented legacy
+        # fallback (terminal_verdict=None → APO_DEGRADED) — the
+        # apo-recheck-eligible reason that preserves failover + TTL
+        # recovery via the watchdog recheck loop.
+        assert quarantine.is_quarantined("guid-fake") is True
+        entry = quarantine.get("guid-fake")
+        assert entry is not None
+        assert entry.resolved_reason == "apo_degraded"
+        assert entry.derived_reason == "apo_degraded"
+
+        # The quarantine log fired — the coordinator completed the full
+        # terminal path instead of aborting mid-way.
+        quarantined_events = _records_named(
+            caplog,
+            "capture_integrity_coordinator_quarantined",
+        )
+        assert len(quarantined_events) == 1
+        assert quarantined_events[0]["resolved_reason"] == "apo_degraded"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Mission C1 §T1.2 — classifier extension regression suite.
 #

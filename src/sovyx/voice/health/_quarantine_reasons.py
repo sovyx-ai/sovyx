@@ -271,7 +271,14 @@ def resolve_reason_from_verdict(verdict: IntegrityVerdict) -> QuarantineReason:
     (``HEALTHY``, ``VAD_MUTE``, ``INCONCLUSIVE``) raise :class:`ValueError`
     at runtime — programming error: the coordinator's verdict-router
     branches MUST handle these earlier (HEALTHY short-circuits;
-    VAD_MUTE benign-skips; INCONCLUSIVE retries). The runtime error
+    VAD_MUTE benign-skips; INCONCLUSIVE retries — but the T6.16 retry
+    covers only the POST-APPLY probe, so a PRE-BYPASS INCONCLUSIVE can
+    legitimately survive to bypass-strategy exhaustion; call sites
+    passing such a fall-through verdict MUST map INCONCLUSIVE to
+    ``terminal_verdict=None`` so ``_quarantine_endpoint``'s documented
+    legacy fallback resolves the apo-recheck-eligible
+    :attr:`QuarantineReason.APO_DEGRADED` instead of raising here and
+    blocking quarantine/failover). The runtime error
     fails loudly so coordinator-side dispatch bugs surface immediately
     instead of silently classifying a benign verdict as a terminal one.
 
