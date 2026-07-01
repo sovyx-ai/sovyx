@@ -312,3 +312,78 @@ class TestCognitiveLoopStreaming:
         llm_resp = act.process.call_args.args[0]
         assert llm_resp.content == "Hi there!"
         assert llm_resp.finish_reason == "stop"
+
+    @pytest.mark.asyncio()
+    async def test_degraded_fallback_chunk_attribution_threaded(self) -> None:
+        """D1 streaming — the ThinkPhase degradation fallback chunk's
+        ``degraded_reason``/``degraded_detail`` survive the LLMResponse
+        reconstruction and land in ``ActionResult.metadata`` alongside
+        ``degraded_stage='think'``."""
+        from sovyx.cognitive.act import ActionResult
+        from sovyx.cognitive.loop import CognitiveLoop
+        from sovyx.cognitive.think import DEGRADED_MODEL, DEGRADED_PROVIDER
+        from sovyx.engine.types import MindId
+
+        degraded_chunk = LLMStreamChunk(
+            delta_text="I'm having trouble thinking clearly right now.",
+            is_final=True,
+            finish_reason="error",
+            model=DEGRADED_MODEL,
+            provider=DEGRADED_PROVIDER,
+            degraded_reason="TimeoutError",
+            degraded_detail="provider timed out after 30s",
+        )
+
+        async def aiter_chunks():  # noqa: ANN201
+            yield degraded_chunk
+
+        async def _fake_process_streaming(*a: Any, **kw: Any):  # noqa: ANN401
+            return (aiter_chunks(), [])
+
+        state_machine = MagicMock()
+        perceive = AsyncMock()
+        perception_mock = MagicMock()
+        perception_mock.id = "p1"
+        perception_mock.source = "voice"
+        perception_mock.content = "Hello"
+        perception_mock.metadata = {"complexity": 0.5}
+        perceive.process.return_value = perception_mock
+        attend = AsyncMock()
+        attend.process.return_value = True
+        think = MagicMock()
+        think.process_streaming = _fake_process_streaming
+        act = AsyncMock()
+        act.process.return_value = ActionResult(
+            response_text="I'm having trouble thinking clearly right now.",
+            target_channel="voice",
+        )
+
+        loop = CognitiveLoop(
+            state_machine=state_machine,
+            perceive=perceive,
+            attend=attend,
+            think=think,
+            act=act,
+            reflect=AsyncMock(),
+            event_bus=AsyncMock(),
+        )
+
+        request = MagicMock()
+        request.mind_id = MindId("test")
+        request.conversation_id = "conv1"
+        request.conversation_history = []
+        request.person_name = None
+        request.perception = MagicMock()
+        request.perception.source = "voice"
+
+        async def _on_chunk(text: str) -> None:
+            pass
+
+        result = await loop.process_request_streaming(request, _on_chunk)
+
+        assert result.degraded is True
+        assert result.error is True
+        assert result.metadata.get("reason") == "llm_think_degraded"
+        assert result.metadata.get("degraded_reason") == "TimeoutError"
+        assert result.metadata.get("degraded_stage") == "think"
+        assert result.metadata.get("degraded_detail") == "provider timed out after 30s"

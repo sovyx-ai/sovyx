@@ -110,6 +110,66 @@ class TestThinkPhase:
             finish_reason=response.finish_reason,
         )
 
+    async def test_llm_failure_attaches_degraded_reason(self) -> None:
+        """D1 — the fallback attributes WHICH exception degraded the turn:
+        class name in ``degraded_reason``, sanitized summary in
+        ``degraded_detail`` — so downstream metadata (and dashboards) can
+        tell a provider outage from a real bug."""
+        router = _mock_router()
+        router.generate = AsyncMock(side_effect=KeyError("missing_provider_config"))
+        phase = ThinkPhase(_mock_assembler(), router, MindConfig(name="Aria"))
+
+        response, _ = await phase.process(_perception(), MIND, [])
+        assert response.degraded_reason == "KeyError"
+        assert response.degraded_detail is not None
+        assert "missing_provider_config" in response.degraded_detail
+
+    async def test_pre_llm_failure_attaches_degraded_reason(self) -> None:
+        """Failures BEFORE the LLM call (context assembly) are attributed
+        too — the whole try block funnels into one fallback."""
+        assembler = _mock_assembler()
+        assembler.assemble = AsyncMock(side_effect=ValueError("assembler exploded"))
+        phase = ThinkPhase(assembler, _mock_router(), MindConfig(name="Aria"))
+
+        response, _ = await phase.process(_perception(), MIND, [])
+        assert response.model == DEGRADED_MODEL
+        assert response.degraded_reason == "ValueError"
+
+    async def test_degraded_detail_is_single_line_and_bounded(self) -> None:
+        """The sanitized summary collapses whitespace and is length-capped."""
+        router = _mock_router()
+        router.generate = AsyncMock(side_effect=RuntimeError("line one\nline two   " + "x" * 500))
+        phase = ThinkPhase(_mock_assembler(), router, MindConfig(name="Aria"))
+
+        response, _ = await phase.process(_perception(), MIND, [])
+        assert response.degraded_detail is not None
+        assert "\n" not in response.degraded_detail
+        assert response.degraded_detail.startswith("line one line two")
+        assert len(response.degraded_detail) <= 200  # noqa: PLR2004
+
+    async def test_healthy_response_has_no_degraded_reason(self) -> None:
+        phase = ThinkPhase(_mock_assembler(), _mock_router(), MindConfig(name="Aria"))
+        response, _ = await phase.process(_perception(), MIND, [])
+        assert response.degraded_reason is None
+        assert response.degraded_detail is None
+
+    async def test_streaming_failure_attaches_degraded_reason(self) -> None:
+        """D1 streaming — the fallback chunk carries the same attribution
+        so the loop's reconstructed LLMResponse inherits it."""
+        assembler = _mock_assembler()
+        assembler.assemble = AsyncMock(side_effect=ValueError("context window\nexploded"))
+        phase = ThinkPhase(assembler, _mock_router(), MindConfig(name="Aria"))
+
+        chunk_iter, messages = await phase.process_streaming(_perception(), MIND, [])
+        chunks = [c async for c in chunk_iter]
+        assert messages == []
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        assert chunk.model == DEGRADED_MODEL
+        assert chunk.provider == DEGRADED_PROVIDER
+        assert chunk.degraded_reason == "ValueError"
+        assert chunk.degraded_detail == "context window exploded"
+
     async def test_custom_degradation_message(self) -> None:
         router = _mock_router()
         router.generate = AsyncMock(side_effect=RuntimeError("fail"))

@@ -31,6 +31,22 @@ the canned fallback be processed as a normal answer (W1.2 / G-P1-1)."""
 DEGRADED_PROVIDER = "none"
 """Sentinel ``provider`` value paired with :data:`DEGRADED_MODEL`."""
 
+_DEGRADED_DETAIL_MAX_CHARS = 200
+"""Cap on the sanitized exception summary attached to the degradation
+fallback — keeps the metadata channel (and any dashboard rendering it)
+bounded regardless of how verbose the underlying exception is."""
+
+
+def _sanitize_degraded_detail(exc: BaseException) -> str:
+    """Collapse an exception message to a short single-line summary.
+
+    Whitespace (including newlines from multi-line exception messages)
+    is collapsed to single spaces, then truncated to
+    :data:`_DEGRADED_DETAIL_MAX_CHARS`. Observability-only — the full
+    traceback stays in the ``logger.exception`` line.
+    """
+    return " ".join(str(exc).split())[:_DEGRADED_DETAIL_MAX_CHARS]
+
 
 def is_degraded_llm_response(*, model: str, provider: str, finish_reason: str) -> bool:
     """True iff the response carries the ThinkPhase degradation sentinel.
@@ -128,8 +144,15 @@ class ThinkPhase:
 
             return response, ctx.messages
 
-        except Exception:  # noqa: BLE001
-            logger.exception("think_phase_failed")
+        except Exception as exc:  # noqa: BLE001
+            # Observability-only attribution (resilience behaviour and the
+            # spoken degradation message are unchanged): stamp the exception
+            # class + a short sanitized summary on the fallback so downstream
+            # consumers (cognitive loop → ActionResult.metadata → W1.2 voice
+            # bridge signal, dashboards) can tell a provider outage from a
+            # real bug instead of one indistinguishable degraded sentinel.
+            error_type = type(exc).__name__
+            logger.exception("think_phase_failed", error_type=error_type)
             degraded = LLMResponse(
                 content=self._degradation_message,
                 model=DEGRADED_MODEL,
@@ -139,6 +162,8 @@ class ThinkPhase:
                 cost_usd=0.0,
                 finish_reason="error",
                 provider=DEGRADED_PROVIDER,
+                degraded_reason=error_type,
+                degraded_detail=_sanitize_degraded_detail(exc),
             )
             return degraded, []
 
@@ -190,8 +215,14 @@ class ThinkPhase:
 
             return chunk_iter, ctx.messages
 
-        except Exception:  # noqa: BLE001
-            logger.exception("think_phase_streaming_failed")
+        except Exception as exc:  # noqa: BLE001
+            # Same observability-only attribution as the non-streaming path —
+            # the final chunk carries the exception class + sanitized summary
+            # so the loop's reconstructed LLMResponse (and ActionResult
+            # metadata) can attribute the degraded turn.
+            error_type = type(exc).__name__
+            detail = _sanitize_degraded_detail(exc)
+            logger.exception("think_phase_streaming_failed", error_type=error_type)
 
             async def _degraded_iter() -> AsyncIterator[LLMStreamChunk]:
                 yield LLMStreamChunk(
@@ -200,6 +231,8 @@ class ThinkPhase:
                     finish_reason="error",
                     model=DEGRADED_MODEL,
                     provider=DEGRADED_PROVIDER,
+                    degraded_reason=error_type,
+                    degraded_detail=detail,
                 )
 
             return _degraded_iter(), []

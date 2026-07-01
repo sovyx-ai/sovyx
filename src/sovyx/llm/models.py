@@ -34,6 +34,14 @@ class LLMResponse:
     (Anthropic: ``cache_read_input_tokens`` / ``cache_creation_input_tokens``;
     OpenAI: ``prompt_tokens_details.cached_tokens``). Default ``0`` for
     providers that don't expose cache metadata.
+
+    ``degraded_reason`` / ``degraded_detail`` are observability-only
+    fields set EXCLUSIVELY by the ThinkPhase degradation fallback
+    (``sovyx.cognitive.think``): the swallowed exception's class name
+    and a short single-line summary. Providers never populate them —
+    they let the cognitive loop attribute a degraded turn
+    (``ActionResult.metadata['degraded_reason']``) instead of collapsing
+    every failure class into one indistinguishable sentinel.
     """
 
     content: str
@@ -47,6 +55,8 @@ class LLMResponse:
     tool_calls: list[ToolCall] | None = None
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    degraded_reason: str | None = None
+    degraded_detail: str | None = None
 
 
 @dataclasses.dataclass
@@ -79,6 +89,10 @@ class LLMStreamChunk:
     accounting waits for this chunk because cloud providers only emit
     usage at the end of the SSE stream — including the prompt-cache
     fields ``cache_read_tokens`` and ``cache_creation_tokens``.
+
+    ``degraded_reason`` / ``degraded_detail`` mirror the same-named
+    :class:`LLMResponse` fields: set only on the ThinkPhase streaming
+    degradation fallback chunk, never by providers.
     """
 
     delta_text: str = ""
@@ -91,3 +105,5 @@ class LLMStreamChunk:
     provider: str = ""
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    degraded_reason: str | None = None
+    degraded_detail: str | None = None
