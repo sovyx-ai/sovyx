@@ -142,6 +142,8 @@ class TtsCancelChainMixin:
         _self_feedback_gate: SelfFeedbackGate | None
         _output: AudioOutputQueue
         _text_buffer: str
+        _speech_session_active: bool
+        _stream_drain_task: asyncio.Task[None] | None
 
         # Cross-mixin host-resident method (lives on FrameRecordingMixin,
         # resolved via MRO at runtime). Anti-pattern #32 case (b)
@@ -380,6 +382,34 @@ class TtsCancelChainMixin:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+
+            # Step 1.5: drain-task hand-off. The streaming background
+            # drainer observes the step-1 interrupt at its next slice
+            # boundary (~50 ms) and exits; await it briefly so playback
+            # is genuinely silent before the caller transitions to
+            # RECORDING (otherwise the tail of the assistant's own
+            # audio can leak into the barged-in utterance's capture).
+            drainer = self._stream_drain_task
+            self._stream_drain_task = None
+            if drainer is not None and not drainer.done():
+                drainer.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(drainer),
+                        timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                    )
+                except (TimeoutError, asyncio.CancelledError):
+                    pass
+                except Exception as exc:  # noqa: BLE001 — chain shield
+                    logger.warning(
+                        "voice.tts.cancellation_step_failed",
+                        step="stream_drainer",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+            # The speech session is over regardless of which surface
+            # opened it — release _handle_speaking's IDLE fallback.
+            self._speech_session_active = False
 
             # Step 2: cancel + await in-flight TTS tasks. Snapshot the
             # set so iteration is stable while tasks remove themselves

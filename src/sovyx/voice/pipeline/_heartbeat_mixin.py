@@ -74,15 +74,33 @@ from sovyx.voice.health._metrics import (
     record_noise_floor_drift_alert,
     record_snr_low_alert,
 )
+from sovyx.voice.pipeline._events import PipelineErrorEvent
+from sovyx.voice.pipeline._state import VoicePipelineState
 
 if TYPE_CHECKING:
     from sovyx.voice.pipeline._config import VoicePipelineConfig
-    from sovyx.voice.pipeline._state import VoicePipelineState
+    from sovyx.voice.pipeline._state_machine import PipelineStateMachine
 
 logger = get_logger(__name__)
 
 # ── Heartbeat tuning (moved from _orchestrator.py) ────────────────
 _HEARTBEAT_INTERVAL_S = _VoiceTuning().pipeline_heartbeat_interval_seconds
+_DWELL_WATCHDOG_S = _VoiceTuning().pipeline_dwell_watchdog_seconds
+"""Dwell ceiling for transient states (0 disables). See
+``VoiceTuningConfig.pipeline_dwell_watchdog_seconds``."""
+
+_DWELL_WATCHDOG_STATES = frozenset(
+    {
+        VoicePipelineState.WAKE_DETECTED,
+        VoicePipelineState.RECORDING,
+        VoicePipelineState.TRANSCRIBING,
+        VoicePipelineState.THINKING,
+    },
+)
+"""States that must be transient. SPEAKING is exempt — long TTS
+playback is legitimate and its exit is owned by the TTS-out surfaces
+(speak/flush_stream, guarded by ``_speech_session_active``); IDLE is
+the recovery target."""
 _DEAF_MIN_FRAMES = _VoiceTuning().pipeline_deaf_min_frames
 _DEAF_VAD_MAX_THRESHOLD = _VoiceTuning().pipeline_deaf_vad_max_threshold
 
@@ -182,11 +200,19 @@ class HeartbeatMixin:
         _noise_floor_drift_consecutive_heartbeats: int
         _noise_floor_drift_alert_active: bool
         _deaf_warnings_consecutive: int
+        _state_machine: PipelineStateMachine
+        _current_utterance_id: str
 
         # Host-owned method invoked from the mixin (anti-pattern #32
         # contract — TYPE_CHECKING-only stub so MRO falls through to
         # the real implementation on ``VoicePipeline``).
         def _maybe_trigger_bypass_coordinator(self) -> None: ...
+
+        # Cross-mixin host-resident methods (anti-pattern #32 case (b)
+        # forward declarations — resolved via MRO at runtime).
+        def _cancel_filler(self) -> None: ...
+        def _clear_utterance_id(self) -> None: ...
+        async def _emit(self, event: object) -> None: ...
 
     def _track_vad_for_heartbeat(self, probability: float) -> None:
         """Accumulate per-frame VAD stats for the periodic heartbeat.
@@ -761,6 +787,75 @@ class HeartbeatMixin:
                 **{"voice.mind_id": self._config.mind_id},
             )
 
+    async def _check_dwell_watchdog(self) -> None:
+        """Force-recover a transient state that outlived its dwell ceiling.
+
+        Wires the previously-unconnected dwell machinery on
+        :class:`PipelineStateMachine` (``is_watchdog_expired`` /
+        ``fire_watchdog`` were built "Phase 1: observe" and never
+        called) into the wall-clock heartbeat. Concrete zombies this
+        closes:
+
+        * **THINKING latch** — the cogloop task died (batch-path LLM
+          exception, guardrail-filtered empty response, cancellation
+          before any TTS-out call) and nothing ever wrote the state
+          back; the pipeline passed frames through THINKING forever —
+          permanently deaf until process restart.
+        * **RECORDING/WAKE_DETECTED stall** — capture stopped
+          delivering frames mid-utterance (device unplug, consumer
+          wedge); the frame-count exits in ``_handle_recording`` are
+          frame-driven and never fire without frames.
+        * **TRANSCRIBING park** — STT wedged past its own timeout.
+
+        Recovery is performed on the AUTHORITATIVE state (the host
+        ``_state`` property, which mirrors into the observe-only
+        machine and closes the voice-turn saga) rather than via
+        :meth:`PipelineStateMachine.fire_watchdog` — calling both
+        would double-record the transition. The machine's dwell clock
+        is authoritative because every ``_state`` write mirrors into
+        ``record_transition`` (which resets ``entered_monotonic``).
+
+        Disabled when ``pipeline_dwell_watchdog_seconds == 0``
+        (kill-switch; recovery defaults ON — inverse anti-pattern #34).
+        """
+        if _DWELL_WATCHDOG_S <= 0:
+            return
+        state = self._state
+        if state not in _DWELL_WATCHDOG_STATES:
+            return
+        dwell_s = self._state_machine.time_in_current_state_s()
+        if dwell_s < _DWELL_WATCHDOG_S:
+            return
+        stuck_utterance_id = self._current_utterance_id
+        logger.warning(
+            "pipeline.state.watchdog_fired",
+            **{
+                "voice.mind_id": self._config.mind_id,
+                "voice.from_state": state.name,
+                "voice.dwell_s": round(dwell_s, 1),
+                "voice.threshold_s": _DWELL_WATCHDOG_S,
+                "voice.utterance_id": stuck_utterance_id,
+                "voice.action_required": (
+                    "A transient pipeline state exceeded its dwell "
+                    "ceiling and was force-recovered to IDLE. One "
+                    "occurrence usually means a turn died mid-flight "
+                    "(LLM/STT error or cancellation); recurring "
+                    "occurrences indicate a wedged engine — check "
+                    "`sovyx doctor voice` and the LLM provider health."
+                ),
+            },
+        )
+        self._cancel_filler()
+        self._state = VoicePipelineState.IDLE
+        self._clear_utterance_id()
+        await self._emit(
+            PipelineErrorEvent(
+                mind_id=self._config.mind_id,
+                error=(f"dwell_watchdog_fired (state={state.name}, dwell_s={dwell_s:.1f})"),
+                utterance_id=stuck_utterance_id,
+            )
+        )
+
     async def _heartbeat_loop(self) -> None:
         """Wall-clock heartbeat task — fires regardless of consumer-loop progress.
 
@@ -812,6 +907,17 @@ class HeartbeatMixin:
                 except Exception as exc:  # noqa: BLE001 — observability isolation
                     logger.warning(
                         "voice.pipeline.heartbeat_emit_failed",
+                        mind_id=self._config.mind_id,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                # Dwell watchdog — same isolation contract as the emit
+                # above: a recovery failure must not kill the loop.
+                try:
+                    await self._check_dwell_watchdog()
+                except Exception as exc:  # noqa: BLE001 — recovery isolation
+                    logger.warning(
+                        "voice.pipeline.dwell_watchdog_failed",
                         mind_id=self._config.mind_id,
                         error=str(exc),
                         error_type=type(exc).__name__,

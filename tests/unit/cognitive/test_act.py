@@ -818,3 +818,54 @@ class TestSummarizeToolResults:
         summary = ActPhase._summarize_tool_results(results)
         assert "✓ a: ok" in summary
         assert "✗ b: fail" in summary
+
+
+class TestGuardStreamingSegment:
+    """Per-segment guard surface for the voice streaming path (P0 fix).
+
+    Pre-fix the streaming path spoke raw LLM text — ActPhase's guards
+    ran only on the full response AFTER the chunks were already
+    synthesized. ``guard_streaming_segment`` restores the regex-tier
+    OutputGuard + PIIGuard per sentence segment.
+    """
+
+    def test_pii_redacted_per_segment(self) -> None:
+        from sovyx.cognitive.pii_guard import PIIGuard
+
+        phase = ActPhase(
+            ToolExecutor(),
+            AsyncMock(),
+            pii_guard=PIIGuard(safety=SafetyConfig(pii_protection=True)),
+        )
+        guarded = phase.guard_streaming_segment("Reach me at joe@example.com today.")
+        assert "joe@example.com" not in guarded
+        assert "REDACTED" in guarded
+
+    def test_output_guard_regex_tier_applies(self) -> None:
+        @dataclass
+        class _FilterResult:
+            text: str
+            filtered: bool
+            action: str
+            match: None = None
+
+        guard_mock = MagicMock()
+        guard_mock.check = MagicMock(
+            return_value=_FilterResult(text="[content filtered]", filtered=True, action="redact")
+        )
+        phase = ActPhase(ToolExecutor(), AsyncMock(), output_guard=guard_mock)
+        assert phase.guard_streaming_segment("bad segment") == "[content filtered]"
+        guard_mock.check.assert_called_once_with("bad segment")
+
+    def test_no_guards_pass_through(self) -> None:
+        phase = ActPhase(ToolExecutor(), AsyncMock())
+        assert phase.guard_streaming_segment("clean text") == "clean text"
+
+    def test_loop_delegation(self) -> None:
+        """CognitiveLoop.guard_streaming_segment delegates to ActPhase."""
+        from sovyx.cognitive.loop import CognitiveLoop
+
+        phase = ActPhase(ToolExecutor(), AsyncMock())
+        loop = CognitiveLoop.__new__(CognitiveLoop)
+        loop._act = phase
+        assert loop.guard_streaming_segment("hello world") == "hello world"

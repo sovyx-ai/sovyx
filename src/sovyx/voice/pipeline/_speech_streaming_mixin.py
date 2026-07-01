@@ -83,6 +83,8 @@ from sovyx.voice.pipeline._frame_types import (
 from sovyx.voice.pipeline._state import VoicePipelineState
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sovyx.voice.health._self_feedback import SelfFeedbackGate
     from sovyx.voice.jarvis import JarvisIllusion
     from sovyx.voice.pipeline._config import VoicePipelineConfig
@@ -123,6 +125,9 @@ class SpeechStreamingMixin:
         _output: AudioOutputQueue
         _config: VoicePipelineConfig
         _llm_thinking_start_monotonic: float | None
+        _speech_session_active: bool
+        _stream_drain_task: asyncio.Task[None] | None
+        _stream_segment_guard: Callable[[str], str] | None
 
         # Cross-mixin host-resident methods (resolved via MRO at
         # runtime). Anti-pattern #32 case (b) forward declarations —
@@ -181,6 +186,71 @@ class SpeechStreamingMixin:
         )
         self._llm_thinking_start_monotonic = None
 
+    def set_stream_segment_guard(
+        self,
+        guard: Callable[[str], str] | None,
+    ) -> None:
+        """Wire (or unwire) the per-segment safety guard for streaming TTS.
+
+        The cognitive bridge registers the loop's regex-tier output/PII
+        guard here so streamed segments are filtered BEFORE synthesis.
+        Pre-fix the streaming path structurally bypassed the safety
+        controls ActPhase applies on the batch path (raw LLM text was
+        spoken; the guarded text existed only on the text surface).
+
+        The guard MUST be sync and cheap (<1 ms regex-tier by
+        contract); it receives one sentence segment and returns the
+        guarded text (empty string drops the segment). Pass ``None``
+        to unwire (bridge teardown).
+        """
+        self._stream_segment_guard = guard
+
+    def _apply_segment_guard(self, segment: str) -> str:
+        """Return ``segment`` filtered through the registered guard.
+
+        Fail-closed: a guard exception drops the segment (returns "")
+        with an ERROR log — for a safety control, speaking unguarded
+        text on a guard bug is worse than skipping the segment. No-op
+        pass-through when no guard is registered (voice-only
+        deployments without a cognitive bridge).
+        """
+        guard = self._stream_segment_guard
+        if guard is None:
+            return segment
+        try:
+            return guard(segment)
+        except Exception:  # noqa: BLE001 — safety guard must fail closed
+            logger.error(
+                "voice.tts.segment_guard_failed_segment_dropped",
+                **{
+                    "voice.mind_id": self._config.mind_id,
+                    "voice.segment_chars": len(segment),
+                    "voice.utterance_id": self._current_utterance_id,
+                },
+                exc_info=True,
+            )
+            return ""
+
+    def _ensure_stream_drainer(self) -> None:
+        """Start the background playback drainer if none is running.
+
+        Called after every successful ``enqueue`` in the streaming
+        path so the first synthesized segment starts playing while the
+        LLM is still generating (the advertised ~300 ms perceived
+        latency). ``drain()`` exits when the queue momentarily empties
+        between segments; the next enqueue re-arms it. Single-flight:
+        at most one drainer exists, so it can never pop the queue
+        concurrently with ``flush_stream``'s final drain (which awaits
+        this task first).
+        """
+        task = self._stream_drain_task
+        if task is not None and not task.done():
+            return
+        self._stream_drain_task = spawn(
+            self._output.drain(),
+            name="voice-stream-drain",
+        )
+
     async def speak(self, text: str) -> None:
         """Synthesize and play text (called by CogLoop.act).
 
@@ -193,6 +263,11 @@ class SpeechStreamingMixin:
         # no-op when no preceding THINKING phase fired (proactive
         # cogloop speak), preserving the start-end pairing contract.
         self._emit_llm_full_response_end_frame(output_chars=len(text))
+        # Open the speech session BEFORE the state write so a frame
+        # arriving between the SPEAKING transition and playback start
+        # (synthesis takes hundreds of ms) can't misread "not yet
+        # playing" as "finished" and flap the state back to IDLE.
+        self._speech_session_active = True
         self._state = VoicePipelineState.SPEAKING
         # Step 13 frame emission — TTS speak boundary. Per-chunk
         # OutputAudioRawFrame frames will be emitted as chunks land
@@ -246,7 +321,13 @@ class SpeechStreamingMixin:
                 )
             )
         finally:
-            self._state = VoicePipelineState.IDLE
+            self._speech_session_active = False
+            if self._state is not VoicePipelineState.RECORDING:
+                # A barge-in during playback hands the turn to
+                # RECORDING via ``_handle_speaking``; a late finally
+                # must not clobber it back to IDLE (the barged-in
+                # utterance would be silently dropped).
+                self._state = VoicePipelineState.IDLE
             if self._self_feedback_gate is not None:
                 self._self_feedback_gate.on_tts_end()
             await self._emit(
@@ -266,6 +347,7 @@ class SpeechStreamingMixin:
         Args:
             text_chunk: Partial LLM output text.
         """
+        self._speech_session_active = True
         if self._state != VoicePipelineState.SPEAKING:
             self._state = VoicePipelineState.SPEAKING
             if self._self_feedback_gate is not None:
@@ -292,9 +374,15 @@ class SpeechStreamingMixin:
 
         # Synthesize all complete segments
         for segment in segments[:-1]:
+            guarded_segment = self._apply_segment_guard(segment)
+            if not guarded_segment.strip():
+                continue
             try:
-                chunk = await self._synthesize_tracked(segment)
+                chunk = await self._synthesize_tracked(guarded_segment)
                 await self._output.enqueue(chunk)
+                # Start playback immediately — do not wait for
+                # flush_stream's end-of-response drain.
+                self._ensure_stream_drainer()
                 # T1.39 — observe the spectral-centroid drift on every
                 # successfully-emitted chunk. The DSP runs in a worker
                 # thread (CLAUDE.md anti-pattern #14 — keep CPU-bound
@@ -412,10 +500,19 @@ class SpeechStreamingMixin:
         # Keep incomplete segment in buffer
         self._text_buffer = segments[-1] if segments else ""
 
-    async def flush_stream(self) -> None:
+    async def flush_stream(self, *, discard_buffer: bool = False) -> None:
         """Flush remaining buffered text to TTS.
 
         Call when the LLM stream ends to synthesize the last segment.
+
+        Args:
+            discard_buffer: When True, drop the residual text buffer
+                instead of synthesizing it. The bridge's barge-in
+                cancellation path uses this — pre-fix the cancelled
+                bridge called the normal flush, which SYNTHESIZED and
+                ENQUEUED the interrupted response's tail, so the user
+                heard a fragment of the cancelled utterance after
+                barging in.
 
         T1.34 — every cancellation path in this method now interrupts
         the output queue before exiting. Pre-T1.34 the
@@ -453,9 +550,14 @@ class SpeechStreamingMixin:
         self._emit_llm_full_response_end_frame(
             output_chars=len(self._text_buffer),
         )
-        if self._text_buffer.strip():
+        if discard_buffer:
+            self._text_buffer = ""
+        guarded_tail = (
+            self._apply_segment_guard(self._text_buffer) if self._text_buffer.strip() else ""
+        )
+        if guarded_tail.strip():
             try:
-                chunk = await self._synthesize_tracked(self._text_buffer)
+                chunk = await self._synthesize_tracked(guarded_tail)
                 await self._output.enqueue(chunk)
             except asyncio.CancelledError:
                 # T1: cancelled by cancel_speech_chain mid-flush —
@@ -487,6 +589,27 @@ class SpeechStreamingMixin:
                 )
         self._text_buffer = ""
 
+        # Hand-off from the background drainer: await it BEFORE the
+        # final drain so two drain() calls never pop the queue
+        # concurrently. The drainer exits on its own once the queue
+        # empties (or immediately after a barge-in interrupt), so this
+        # await is bounded by remaining playback.
+        drainer = self._stream_drain_task
+        self._stream_drain_task = None
+        if drainer is not None and not drainer.done():
+            try:
+                await drainer
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    self._output.interrupt()
+                raise
+            except Exception:  # noqa: BLE001 — drainer failure must not lose the tail
+                logger.warning(
+                    "voice.tts.stream_drainer_failed",
+                    mind_id=self._config.mind_id,
+                    exc_info=True,
+                )
+
         # Drain all queued audio
         try:
             await self._output.drain()
@@ -500,6 +623,14 @@ class SpeechStreamingMixin:
                 self._output.interrupt()
             raise
 
+        self._speech_session_active = False
+        if self._state is VoicePipelineState.RECORDING:
+            # A barge-in handed the turn to RECORDING while this flush
+            # was in flight (slow cogloop cancellation past the chain's
+            # await budget). Writing IDLE here would silently drop the
+            # barged-in utterance — leave the state alone; the chain
+            # already emitted the barge-in observability.
+            return
         completed_utterance_id = self._current_utterance_id
         self._state = VoicePipelineState.IDLE
         if self._self_feedback_gate is not None:

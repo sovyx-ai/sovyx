@@ -192,6 +192,67 @@ class TestErrorHandling:
         assert result.degraded is True
         assert result.metadata.get("reason") == "llm_think_degraded"
 
+    async def test_think_degradation_attribution_threaded_to_metadata(self) -> None:
+        """D1 — the exception class + sanitized summary the ThinkPhase
+        stamped on its fallback flow into ``ActionResult.metadata`` as
+        ``degraded_reason`` / ``degraded_stage`` / ``degraded_detail`` so
+        the W1.2 voice-bridge signal and dashboards can attribute the
+        failure class without grepping log tracebacks."""
+        think = _mock_think()
+        think.process = AsyncMock(
+            return_value=(
+                LLMResponse(
+                    content="I'm having trouble thinking clearly right now.",
+                    model=DEGRADED_MODEL,
+                    tokens_in=0,
+                    tokens_out=0,
+                    latency_ms=0,
+                    cost_usd=0.0,
+                    finish_reason="error",
+                    provider=DEGRADED_PROVIDER,
+                    degraded_reason="LLMError",
+                    degraded_detail="provider exploded",
+                ),
+                [],
+            )
+        )
+        loop = _loop(think=think)
+        result = await loop.process_request(_request())
+        assert result.degraded is True
+        assert result.metadata.get("degraded_reason") == "LLMError"
+        assert result.metadata.get("degraded_stage") == "think"
+        assert result.metadata.get("degraded_detail") == "provider exploded"
+
+    async def test_real_think_phase_failure_attribution_round_trip(self) -> None:
+        """D1 producer→consumer round-trip (#40 spirit): a REAL ThinkPhase
+        whose router raises must surface the exception class name in
+        ``ActionResult.metadata['degraded_reason']`` end-to-end."""
+        from sovyx.cognitive.think import ThinkPhase
+        from sovyx.context.assembler import AssembledContext
+        from sovyx.mind.config import MindConfig
+
+        assembler = AsyncMock()
+        assembler.assemble = AsyncMock(
+            return_value=AssembledContext(
+                messages=[{"role": "user", "content": "Hello"}],
+                tokens_used=10,
+                token_budget=128_000,
+                sources=[],
+                budget_breakdown={},
+            )
+        )
+        router = AsyncMock()
+        router.get_context_window = lambda m=None: 128_000
+        router.generate = AsyncMock(side_effect=KeyError("boom"))
+        think = ThinkPhase(assembler, router, MindConfig(name="Aria"))
+
+        loop = _loop(think=think)
+        result = await loop.process_request(_request())
+        assert result.degraded is True
+        assert result.error is True
+        assert result.metadata.get("degraded_reason") == "KeyError"
+        assert result.metadata.get("degraded_stage") == "think"
+
     async def test_normal_think_response_not_marked_degraded(self) -> None:
         """A healthy think response must NOT be marked degraded/error."""
         loop = _loop()
@@ -199,6 +260,8 @@ class TestErrorHandling:
         assert result.error is False
         assert result.degraded is False
         assert "reason" not in result.metadata
+        assert "degraded_reason" not in result.metadata
+        assert "degraded_stage" not in result.metadata
 
     async def test_reflect_failure_still_returns_response(self) -> None:
         reflect = _mock_reflect()

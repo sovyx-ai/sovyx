@@ -174,6 +174,18 @@ class CognitiveLoop:
         """Stop the cognitive loop."""
         logger.info("cognitive_loop_stopped")
 
+    def guard_streaming_segment(self, text: str) -> str:
+        """Filter one streamed sentence segment through the output guards.
+
+        Public delegation to :meth:`ActPhase.guard_streaming_segment`
+        so the voice cognitive bridge can register the regex-tier
+        output/PII guards on the pipeline's per-segment hook without
+        reaching into the loop's phase internals. See the ActPhase
+        method for the full contract (sync, <1 ms, LLM-classifier tier
+        remains batch-only by design).
+        """
+        return self._act.guard_streaming_segment(text)
+
     def _maybe_synthetic_dependency_missing(
         self,
         request: CognitiveRequest,
@@ -392,6 +404,15 @@ class CognitiveLoop:
                 action_result.degraded = True
                 action_result.error = True
                 action_result.metadata.setdefault("reason", "llm_think_degraded")
+                # Attribution — which exception class degraded the turn
+                # (stamped by the ThinkPhase fallback). Lets the W1.2 voice
+                # bridge signal + dashboards tell a provider outage from a
+                # real bug without grepping the log traceback.
+                action_result.metadata["degraded_stage"] = "think"
+                if llm_response.degraded_reason:
+                    action_result.metadata["degraded_reason"] = llm_response.degraded_reason
+                if llm_response.degraded_detail:
+                    action_result.metadata["degraded_detail"] = llm_response.degraded_detail
 
             # ── REFLECT ──
             self._state.transition(CognitivePhase.REFLECTING)
@@ -515,6 +536,8 @@ class CognitiveLoop:
                 tokens_in = 0
                 tokens_out = 0
                 finish_reason = "stop"
+                degraded_reason: str | None = None
+                degraded_detail: str | None = None
 
                 async for chunk in chunk_iter:
                     if chunk.delta_text:
@@ -539,6 +562,13 @@ class CognitiveLoop:
                         tokens_in = chunk.tokens_in
                         tokens_out = chunk.tokens_out
                         finish_reason = chunk.finish_reason or "stop"
+
+                    # ThinkPhase streaming fallback attribution (only ever
+                    # set on the degradation sentinel chunk).
+                    if chunk.degraded_reason:
+                        degraded_reason = chunk.degraded_reason
+                    if chunk.degraded_detail:
+                        degraded_detail = chunk.degraded_detail
 
                     if chunk.model:
                         final_model = chunk.model
@@ -572,6 +602,8 @@ class CognitiveLoop:
                 finish_reason=finish_reason,
                 provider=final_provider,
                 tool_calls=tool_calls,
+                degraded_reason=degraded_reason,
+                degraded_detail=degraded_detail,
             )
 
             # ── ACT ──
@@ -611,6 +643,14 @@ class CognitiveLoop:
                 action_result.degraded = True
                 action_result.error = True
                 action_result.metadata.setdefault("reason", "llm_think_degraded")
+                # Attribution — mirrors the non-streaming path (see
+                # process_request side): exception class + sanitized summary
+                # from the ThinkPhase fallback chunk.
+                action_result.metadata["degraded_stage"] = "think"
+                if llm_response.degraded_reason:
+                    action_result.metadata["degraded_reason"] = llm_response.degraded_reason
+                if llm_response.degraded_detail:
+                    action_result.metadata["degraded_detail"] = llm_response.degraded_detail
 
             # ── REFLECT ──
             self._state.transition(CognitivePhase.REFLECTING)

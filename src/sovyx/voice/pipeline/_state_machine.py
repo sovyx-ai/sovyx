@@ -87,6 +87,12 @@ _CANONICAL_TRANSITIONS: dict[VoicePipelineState, frozenset[VoicePipelineState]] 
             # capture starts without a wake word (e.g. push-to-talk via
             # dashboard or barge-in handoff during speech).
             VoicePipelineState.RECORDING,
+            # Direct IDLE → SPEAKING is legitimate for proactive speech:
+            # the cognitive layer calls ``speak()``/``stream_text()`` on
+            # its own initiative (no preceding wake → STT → THINKING
+            # chain). Both TTS-out surfaces set SPEAKING from whatever
+            # state they find; from IDLE that is a real, intended edge.
+            VoicePipelineState.SPEAKING,
         },
     ),
     VoicePipelineState.WAKE_DETECTED: frozenset(

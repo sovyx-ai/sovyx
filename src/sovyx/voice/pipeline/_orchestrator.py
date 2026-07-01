@@ -441,6 +441,36 @@ class VoicePipeline(
         self._silence_counter = 0
         self._recording_counter = 0
         self._text_buffer = ""
+        # Turn-ownership flag for the SPEAKING state. ``True`` from the
+        # moment a TTS-out surface (speak / stream_text) opens a speech
+        # session until that surface closes it (speak-finally /
+        # flush_stream / cancel_speech_chain). ``_handle_speaking`` may
+        # only fall back to IDLE when this is False — pre-fix it used
+        # ``_output.is_playing`` alone, which is False for the entire
+        # LLM-generation window of a streaming turn (audio is enqueued
+        # but not yet drained), so the state flapped SPEAKING↔IDLE on
+        # every frame: duplicate TTSStarted/Completed events, the
+        # self-feedback duck released mid-turn, and (wake word
+        # disabled) the pipeline re-entered RECORDING on its own TTS
+        # playback — the assistant answered itself.
+        self._speech_session_active = False
+        # Background drainer for the streaming path. ``stream_text``
+        # only enqueues synthesized segments; pre-fix the single
+        # ``drain()`` in ``flush_stream`` meant the user heard NOTHING
+        # until the whole LLM response was generated (the advertised
+        # ~300 ms streaming latency did not exist). The drainer starts
+        # playback as soon as the first segment lands and re-arms on
+        # each enqueue; ``flush_stream`` awaits it before its own final
+        # drain so two drains never pop the queue concurrently.
+        self._stream_drain_task: asyncio.Task[None] | None = None
+        # Optional per-segment safety hook applied by ``stream_text`` /
+        # ``flush_stream`` before synthesis. The cognitive bridge wires
+        # the loop's regex-tier output/PII guards here so the streaming
+        # path stops structurally bypassing safety controls that the
+        # batch path applies in ActPhase (P0 — see
+        # ``VoiceCognitiveBridge``). Sync + cheap by contract (<1 ms
+        # regex); returns the guarded text ("" drops the segment).
+        self._stream_segment_guard: Callable[[str], str] | None = None
 
         # Sub-components
         self._output = AudioOutputQueue()
@@ -1408,8 +1438,16 @@ class VoicePipeline(
             self._clear_utterance_id()
             return await self._transition_to_recording(frame)
 
-        if not self._output.is_playing:
-            # Playback finished
+        if not self._output.is_playing and not self._speech_session_active:
+            # Playback finished AND the TTS-out surface has closed the
+            # speech session. The session flag is load-bearing: during a
+            # streaming turn ``is_playing`` is False whenever the drainer
+            # is between segments (or hasn't started yet), so
+            # ``is_playing`` alone misreads "not yet playing" as
+            # "finished playing" — the pre-fix SPEAKING↔IDLE flapping.
+            # This branch is now a fallback for session-closure paths
+            # that could not write IDLE themselves; the canonical
+            # SPEAKING→IDLE writes live in speak()/flush_stream().
             completed_utterance_id = self._current_utterance_id
             self._state = VoicePipelineState.IDLE
             if self._self_feedback_gate is not None:

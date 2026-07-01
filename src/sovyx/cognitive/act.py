@@ -243,6 +243,31 @@ class ActPhase:
         result = self._pii_guard.check(text)
         return result.text
 
+    def guard_streaming_segment(self, text: str) -> str:
+        """Filter one streamed sentence segment (sync, regex-tier only).
+
+        The voice streaming path hands LLM text to TTS sentence-by-
+        sentence as tokens arrive, so it cannot wait for the full-
+        response :meth:`process` guard pass — pre-fix streamed audio
+        structurally bypassed BOTH guards (the guarded text existed
+        only on the text surface; the user heard the raw response).
+        The cognitive bridge registers this method on the pipeline's
+        per-segment guard hook to restore the deterministic tiers:
+
+        * :meth:`OutputGuard.check` — sync regex fast-path (<1 ms).
+          Redact/replace actions apply per segment.
+        * :meth:`PIIGuard.check` — sync regex redaction.
+
+        Honest gap: the OutputGuard LLM-classifier tier (the async
+        cascade's second stage) still runs only on the full response
+        in :meth:`process` — per-segment LLM classification would add
+        an LLM round-trip per sentence. Its verdict cannot un-speak
+        audio; it still lands on the text surface + audit trail.
+        """
+        if self._output_guard is not None:
+            text = self._output_guard.check(text).text
+        return self._apply_pii_guard(text)
+
     async def _apply_output_guard(
         self, text: str, mind_id: str = ""
     ) -> tuple[str, bool, str | None]:

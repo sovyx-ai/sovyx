@@ -167,7 +167,15 @@ class TestVoiceCognitiveBridgeCancelHookHappyPath:
     @pytest.mark.asyncio
     async def test_streaming_returns_action_result_on_success(self) -> None:
         cogloop = MagicMock()
-        cogloop.process_request_streaming = AsyncMock(return_value=_make_action_result("hi"))
+
+        async def _streams_chunks(
+            _req: object,
+            on_text_chunk: Callable[[str], Awaitable[None]],
+        ) -> ActionResult:
+            await on_text_chunk("hi")
+            return _make_action_result("hi")
+
+        cogloop.process_request_streaming = AsyncMock(side_effect=_streams_chunks)
         pipeline = _make_pipeline()
         bridge = VoiceCognitiveBridge(cogloop, pipeline, streaming=True)
 
@@ -177,7 +185,10 @@ class TestVoiceCognitiveBridgeCancelHookHappyPath:
         assert result.degraded is False
         cogloop.process_request_streaming.assert_awaited_once()
         pipeline.start_thinking.assert_awaited_once()
+        pipeline.stream_text.assert_awaited_once_with("hi")
         pipeline.flush_stream.assert_awaited_once()
+        # Chunks were streamed — the batch fallback must NOT double-speak.
+        pipeline.speak.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_non_streaming_returns_action_result_on_success(self) -> None:
@@ -206,6 +217,124 @@ class TestVoiceCognitiveBridgeCancelHookHappyPath:
         assert len(pipeline._registered_hooks) == 2  # noqa: PLR2004
         assert callable(pipeline._registered_hooks[0])
         assert pipeline._registered_hooks[1] is None
+
+
+class TestVoiceCognitiveBridgeStreamingFallbacks:
+    """Zero-chunk short-circuits are spoken; batch turns always release state.
+
+    P1 fix — pre-fix a loop result that never streamed a chunk (the C6
+    dependency-gate synthetic "no LLM provider" message is the
+    canonical case) was flushed silently: the user heard the thinking
+    filler and then nothing, in exactly the misconfiguration the gate
+    exists to explain. And the batch path left the pipeline latched in
+    THINKING on empty/filtered responses and cogloop exceptions.
+    """
+
+    @pytest.mark.asyncio
+    async def test_streaming_zero_chunks_speaks_response_text(self) -> None:
+        cogloop = MagicMock()
+        degraded = ActionResult(
+            response_text="I can't respond right now — no LLM provider available.",
+            target_channel="voice",
+            degraded=True,
+            error=True,
+            metadata={"reason": "cognitive_dependency_missing"},
+        )
+        cogloop.process_request_streaming = AsyncMock(return_value=degraded)
+        pipeline = _make_pipeline()
+        bridge = VoiceCognitiveBridge(cogloop, pipeline, streaming=True)
+
+        result = await bridge.process(_make_cog_request())
+
+        assert result.degraded is True
+        pipeline.speak.assert_awaited_once_with(degraded.response_text)
+        pipeline.flush_stream.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_streaming_zero_chunks_empty_text_flushes(self) -> None:
+        cogloop = MagicMock()
+        cogloop.process_request_streaming = AsyncMock(return_value=_make_action_result(""))
+        pipeline = _make_pipeline()
+        bridge = VoiceCognitiveBridge(cogloop, pipeline, streaming=True)
+
+        await bridge.process(_make_cog_request())
+
+        pipeline.speak.assert_not_awaited()
+        pipeline.flush_stream.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_barge_in_cancel_flushes_with_discard(self) -> None:
+        """The cancelled streaming turn must DISCARD its residual buffer —
+        pre-fix the normal flush synthesized the interrupted response's
+        tail, so the user heard a fragment after barging in."""
+        cogloop = MagicMock()
+        loop_started = asyncio.Event()
+
+        async def _never_returns(_req: object, **_kw: object) -> ActionResult:
+            loop_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        cogloop.process_request_streaming = AsyncMock(side_effect=_never_returns)
+        pipeline = _make_pipeline()
+        bridge = VoiceCognitiveBridge(cogloop, pipeline, streaming=True)
+
+        async def _barge_in() -> None:
+            # Wait until the cogloop body is genuinely parked — a cancel
+            # delivered before the task's first step never enters
+            # _process_streaming, so its CancelledError cleanup (the
+            # subject under test) would be skipped.
+            await asyncio.wait_for(loop_started.wait(), timeout=5.0)
+            for _ in range(100):
+                hook = pipeline._llm_cancel_hook
+                if hook is not None:
+                    await hook()
+                    return
+                await asyncio.sleep(0)
+
+        proc_task = asyncio.create_task(bridge.process(_make_cog_request()))
+        await _barge_in()
+        result = await proc_task
+
+        assert result.metadata.get("cancelled_reason") == "barge_in"
+        pipeline.flush_stream.assert_awaited_once_with(discard_buffer=True)
+
+    @pytest.mark.asyncio
+    async def test_batch_empty_response_releases_state(self) -> None:
+        cogloop = MagicMock()
+        cogloop.process_request = AsyncMock(return_value=_make_action_result(""))
+        pipeline = _make_pipeline()
+        bridge = VoiceCognitiveBridge(cogloop, pipeline, streaming=False)
+
+        await bridge.process(_make_cog_request())
+
+        pipeline.speak.assert_not_awaited()
+        pipeline.flush_stream.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_batch_exception_releases_state(self) -> None:
+        cogloop = MagicMock()
+        cogloop.process_request = AsyncMock(side_effect=RuntimeError("provider 500"))
+        pipeline = _make_pipeline()
+        bridge = VoiceCognitiveBridge(cogloop, pipeline, streaming=False)
+
+        with pytest.raises(Exception) as exc_info:
+            await bridge._process_batch(_make_cog_request())
+        assert type(exc_info.value).__name__ == "RuntimeError"
+        pipeline.flush_stream.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bridge_registers_segment_guard(self) -> None:
+        """P0 safety wire-up — construction registers the loop's
+        regex-tier guard on the pipeline's per-segment hook."""
+        cogloop = MagicMock()
+        pipeline = _make_pipeline()
+
+        VoiceCognitiveBridge(cogloop, pipeline, streaming=True)
+
+        pipeline.set_stream_segment_guard.assert_called_once_with(
+            cogloop.guard_streaming_segment,
+        )
 
 
 class TestVoiceCognitiveBridgeCancelHookFiring:

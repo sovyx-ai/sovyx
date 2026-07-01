@@ -97,6 +97,17 @@ class VoiceCognitiveBridge:
         self._cogloop = cogloop
         self._pipeline = pipeline
         self._streaming = streaming
+        # P0 safety wire-up — register the loop's regex-tier output/PII
+        # guards on the pipeline's per-segment hook. Pre-fix the
+        # streaming path spoke raw LLM text: ActPhase's guards ran only
+        # AFTER the chunks had already been synthesized and enqueued,
+        # so the guarded text existed on the text surface while the
+        # user heard the unfiltered audio. Best-effort: a pipeline
+        # double without the setter (legacy tests) must not break
+        # construction.
+        set_guard = getattr(pipeline, "set_stream_segment_guard", None)
+        if callable(set_guard):
+            set_guard(cogloop.guard_streaming_segment)
 
     async def process(self, request: CognitiveRequest) -> ActionResult:
         """Run one voice request through the cognitive loop.
@@ -223,37 +234,72 @@ class VoiceCognitiveBridge:
                 self._pipeline.register_llm_cancel_hook(None)
 
     async def _process_streaming(self, request: CognitiveRequest) -> ActionResult:
-        """Streaming path: chunk-by-chunk TTS as the LLM produces tokens."""
+        """Streaming path: chunk-by-chunk TTS as the LLM produces tokens.
+
+        Counts the chunks the loop actually streamed so short-circuit
+        paths that return an :class:`ActionResult` WITHOUT ever calling
+        ``on_text_chunk`` (the C6 dependency-gate synthetic "no LLM
+        provider" result is the canonical case) are still SPOKEN via
+        the batch ``speak()`` path. Pre-fix the user heard the
+        "thinking" filler and then silence forever in exactly the
+        misconfiguration the gate exists to explain — the operator-
+        actionable message reached Telegram/dashboard but never voice.
+        """
+        chunks_streamed = 0
+
+        async def _counting_chunk(delta_text: str) -> None:
+            nonlocal chunks_streamed
+            chunks_streamed += 1
+            await self._pipeline.stream_text(delta_text)
+
         try:
             result = await self._cogloop.process_request_streaming(
                 request,
-                on_text_chunk=self._pipeline.stream_text,
+                on_text_chunk=_counting_chunk,
             )
         except asyncio.CancelledError:
             # Barge-in cancellation propagating from the orchestrator's
-            # cancel_speech_chain → _llm_cancel_hook → this task. Flush
-            # to release any buffered text + drain the output queue
-            # cleanly, then re-raise so process()'s outer except can
-            # convert to the sentinel ActionResult.
-            await self._pipeline.flush_stream()
+            # cancel_speech_chain → _llm_cancel_hook → this task.
+            # ``discard_buffer=True`` drops the interrupted response's
+            # residual text — pre-fix the normal flush SYNTHESIZED the
+            # tail, so the user heard a fragment of the cancelled
+            # utterance after barging in. Re-raise so process()'s outer
+            # except converts to the sentinel ActionResult.
+            await self._pipeline.flush_stream(discard_buffer=True)
             raise
         except Exception:  # noqa: BLE001
             logger.exception("voice_cognitive_bridge_error")
             await self._pipeline.flush_stream()
             raise
 
-        await self._pipeline.flush_stream()
+        if chunks_streamed == 0 and result.response_text and not result.filtered:
+            # Nothing was streamed but the loop produced speakable text
+            # (dependency-gate short-circuit, future non-streaming
+            # fallbacks). speak() owns the SPEAKING→IDLE lifecycle.
+            await self._pipeline.speak(result.response_text)
+        else:
+            await self._pipeline.flush_stream()
 
         logger.debug(
             "voice_request_complete",
             degraded=result.degraded,
             error=result.error,
             streamed=True,
+            chunks_streamed=chunks_streamed,
         )
         return result
 
     async def _process_batch(self, request: CognitiveRequest) -> ActionResult:
-        """Non-streaming path: wait for full response, then speak it."""
+        """Non-streaming path: wait for full response, then speak it.
+
+        Every exit MUST hand the pipeline state back — the pipeline is
+        in THINKING (set by ``start_thinking``) and only the TTS-out
+        surfaces write it forward. Pre-fix, an empty/filtered response
+        or a cogloop exception left the pipeline latched in THINKING
+        forever (no wake word, no timeout — permanently deaf until
+        process restart; the dwell watchdog now bounds this to its
+        ceiling, but the bridge closes it immediately).
+        """
         try:
             result = await self._cogloop.process_request(request)
         except asyncio.CancelledError:
@@ -262,10 +308,19 @@ class VoiceCognitiveBridge:
             raise
         except Exception:  # noqa: BLE001
             logger.exception("voice_cognitive_bridge_error")
+            # Release the THINKING state before propagating — the
+            # caller (_run_bridge_isolated) swallows the exception, so
+            # nothing downstream would ever reset it.
+            await self._pipeline.flush_stream()
             raise
 
         if result.response_text and not result.filtered:
             await self._pipeline.speak(result.response_text)
+        else:
+            # No speakable text (guardrail-filtered or empty) — reset
+            # the turn explicitly; flush on an empty buffer is the
+            # established idle-handoff (mirrors the streaming path).
+            await self._pipeline.flush_stream()
 
         logger.debug(
             "voice_request_complete",

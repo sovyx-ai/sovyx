@@ -99,6 +99,8 @@ class LifecycleMixin:
         _task_tracking_lock: asyncio.Lock
         _in_flight_tts_tasks: set[asyncio.Task[Any]]
         _config: VoicePipelineConfig
+        _speech_session_active: bool
+        _stream_drain_task: asyncio.Task[None] | None
 
         # Cross-mixin host-resident methods (resolved via MRO at
         # runtime). Anti-pattern #32 case (b) forward declarations —
@@ -226,6 +228,21 @@ class LifecycleMixin:
 
         # Interrupt active playback (idempotent).
         self._output.interrupt()
+
+        # Cancel + drain the streaming background drainer (same
+        # bounded pattern as the heartbeat task above). The interrupt
+        # just issued makes it exit at the next slice boundary; the
+        # cancel covers a drainer parked before its first slice.
+        drain_task = self._stream_drain_task
+        self._stream_drain_task = None
+        if drain_task is not None and not drain_task.done():
+            drain_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.shield(drain_task),
+                    timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                )
+        self._speech_session_active = False
 
         # Snapshot the in-flight TTS set so iteration is stable while
         # tasks self-remove via _untrack_tts_task in their finally
