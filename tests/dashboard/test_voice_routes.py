@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import sys
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -992,6 +993,156 @@ class TestOnPerceptionCallback:
             await on_perception("   ", "demo-mind")
 
         bridge_process.assert_not_awaited()
+
+
+class TestOnPerceptionBridgeNotReady:
+    """D2 boot race — a transcript arriving before the cognitive bridge is
+    wired must WARN (operator-actionable) instead of vanishing, and the
+    bridge is now constructed BEFORE ``capture_task.start()`` so the
+    window is structurally closed."""
+
+    @pytest.fixture(autouse=True)
+    def _structlog_stdlib_routing(self):  # noqa: ANN202
+        """Route structlog through stdlib logging so ``caplog`` observes
+        the WARN — same pattern as ``tests/unit/voice/conftest.py``."""
+        from sovyx.engine.config import LoggingConfig
+        from sovyx.observability.logging import setup_logging
+
+        setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
+        yield
+
+    @staticmethod
+    def _fake_sd() -> ModuleType:
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+        return fake_sd
+
+    @staticmethod
+    def _deps_patch():  # noqa: ANN205
+        return patch(
+            "sovyx.voice.model_registry.check_voice_deps",
+            return_value=(
+                [
+                    {"module": "moonshine_voice", "package": "moonshine-voice"},
+                    {"module": "sounddevice", "package": "sounddevice"},
+                ],
+                [],
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_bridge_none_emits_warn_and_drops(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Callback invoked while ``bridge_ref[0]`` is still None →
+        structured WARN with mind_id + text length (never the transcript
+        itself — privacy) and NO exception."""
+        from sovyx.cognitive.loop import CognitiveLoop
+        from sovyx.dashboard.server import create_app
+        from sovyx.voice.factory import VoiceFactoryError
+
+        application = create_app(token=_TOKEN)
+        registry = MagicMock()
+        registry.is_registered.side_effect = lambda cls: cls is CognitiveLoop
+        registry.resolve = AsyncMock(return_value=MagicMock(spec=CognitiveLoop))
+        registry.replace_instance = AsyncMock()
+        application.state.registry = registry
+        application.state.mind_yaml_path = None
+        application.state.mind_id = "demo-mind"
+
+        # Capture the on_perception closure, then abort the enable — this
+        # freezes the exact pre-bridge state (callback exists, bridge_ref
+        # holder still None) the boot window exposes.
+        captured: dict[str, object] = {}
+
+        async def _capture_and_abort(**kwargs: object) -> None:
+            captured.update(kwargs)
+            raise VoiceFactoryError("models missing")
+
+        with (
+            self._deps_patch(),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sd()}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=_capture_and_abort),
+        ):
+            client = TestClient(application, headers={"Authorization": f"Bearer {_TOKEN}"})
+            resp = client.post("/api/voice/enable")
+            assert resp.status_code == 400  # noqa: PLR2004
+
+            on_perception = captured["on_perception"]
+            assert callable(on_perception)
+
+            caplog.set_level(logging.WARNING, logger="sovyx.dashboard.routes.voice")
+            transcript = "hello before bridge"
+            await on_perception(transcript, "demo-mind")  # must not raise
+
+        records = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.perception_dropped_bridge_not_ready"
+        ]
+        assert len(records) == 1
+        payload = records[0]
+        assert payload["mind_id"] == "demo-mind"
+        assert payload["text_length"] == len(transcript)
+        assert "action_required" in payload
+        # Privacy — the transcript text itself is never logged.
+        assert transcript not in str(payload)
+
+    def test_bridge_wired_before_capture_start(self, app, client: TestClient) -> None:
+        """Structural closure: the bridge instance must already exist when
+        ``capture_task.start()`` runs, so a transcript produced right after
+        capture start can never hit the bridge-None drop path."""
+        from sovyx.cognitive.loop import CognitiveLoop
+        from sovyx.voice.factory import VoiceBundle
+
+        cog_loop = MagicMock(spec=CognitiveLoop)
+        app.state.registry.is_registered.side_effect = lambda cls: cls is CognitiveLoop
+        app.state.registry.resolve = AsyncMock(return_value=cog_loop)
+
+        bridge_instances: list[object] = []
+
+        class _StubBridge:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                bridge_instances.append(self)
+
+            async def process(self, req: object) -> None:  # pragma: no cover
+                pass
+
+        bridge_count_at_capture_start: list[int] = []
+
+        async def _record_bridge_count() -> None:
+            bridge_count_at_capture_start.append(len(bridge_instances))
+
+        capture = MagicMock()
+        capture.start = AsyncMock(side_effect=_record_bridge_count)
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+        factory_mock = AsyncMock(return_value=bundle)
+
+        with (
+            self._deps_patch(),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sd()}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+            patch("sovyx.voice.cognitive_bridge.VoiceCognitiveBridge", _StubBridge),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert bridge_count_at_capture_start == [1], (
+            "cognitive bridge must be constructed BEFORE capture_task.start() "
+            "so a transcript arriving immediately after capture start cannot "
+            "be dropped on the bridge-None path"
+        )
 
 
 class TestOnPerceptionTurnCancellationRace:

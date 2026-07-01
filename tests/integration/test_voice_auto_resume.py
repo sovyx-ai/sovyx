@@ -16,6 +16,8 @@ and the helper must best-effort tear down the bundle before re-raising.
 from __future__ import annotations
 
 import inspect
+import logging
+from collections.abc import Generator
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -452,3 +454,145 @@ class TestAutoResumeFullSubComponentRegistration:
         # does not tear down post-start partial-publish failures.
         bundle.capture_task.stop.assert_not_called()
         bundle.pipeline.stop.assert_not_called()
+
+
+_DROP_EVENT = "voice.perception_dropped_bridge_not_ready"
+
+
+class TestOnPerceptionBridgeNotReady:
+    """D2 boot race — a transcript arriving before the cognitive bridge is
+    wired must emit an operator-actionable WARN (never vanish silently),
+    and the bridge is now constructed BEFORE ``capture_task.start()`` so
+    the window is structurally closed.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _structlog_stdlib_routing(self) -> Generator[None, None, None]:
+        """Route structlog through stdlib logging so ``caplog`` observes the
+        WARN — same pattern as ``tests/unit/voice/conftest.py``."""
+        from sovyx.engine.config import LoggingConfig
+        from sovyx.observability.logging import setup_logging
+
+        setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
+        yield
+
+    @staticmethod
+    def _registry_with_cogloop() -> MagicMock:
+        from sovyx.cognitive.loop import CognitiveLoop
+
+        registry = MagicMock()
+        registry.replace_instance = AsyncMock()
+        registry.is_registered = MagicMock(side_effect=lambda t: t is CognitiveLoop)
+        registry.resolve = AsyncMock(return_value=MagicMock(spec=CognitiveLoop))
+        registry.register_instance = MagicMock()
+        return registry
+
+    async def _capture_on_perception(self, tmp_path: Path) -> object:
+        """Run auto-resume with a factory that captures ``on_perception``
+        then aborts — reproducing the exact pre-bridge boot window (the
+        callback exists, ``bridge_ref[0]`` is still None)."""
+        captured: dict[str, object] = {}
+
+        async def _capture_and_abort(**kwargs: object) -> None:
+            captured.update(kwargs)
+            raise RuntimeError("abort after capturing on_perception")
+
+        with (
+            patch("sovyx.voice.factory.create_voice_pipeline", _capture_and_abort),
+            pytest.raises(Exception) as exc_info,
+        ):
+            await bootstrap._auto_resume_voice_pipeline(
+                mind_config=_make_mind_config(),  # type: ignore[arg-type]
+                engine_config=_make_engine_config(tmp_path),  # type: ignore[arg-type]
+                registry=self._registry_with_cogloop(),
+            )
+        assert type(exc_info.value).__name__ == "RuntimeError"
+        on_perception = captured["on_perception"]
+        assert callable(on_perception)
+        return on_perception
+
+    @staticmethod
+    def _drop_records(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+        return [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == _DROP_EVENT
+        ]
+
+    @pytest.mark.asyncio
+    async def test_transcript_before_bridge_wired_warns_and_drops(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Bridge still None → structured WARN with mind_id + text length
+        (never the transcript itself — privacy) and NO exception."""
+        on_perception = await self._capture_on_perception(tmp_path)
+
+        caplog.set_level(logging.WARNING, logger="sovyx.engine.bootstrap")
+        transcript = "hello sovyx boot race"
+        await on_perception(transcript, "test-mind")  # type: ignore[operator]
+
+        records = self._drop_records(caplog)
+        assert len(records) == 1
+        payload = records[0]
+        assert payload["mind_id"] == "test-mind"
+        assert payload["text_length"] == len(transcript)
+        assert "action_required" in payload
+        # Privacy — the transcript text itself is never logged.
+        assert transcript not in str(payload)
+
+    @pytest.mark.asyncio
+    async def test_empty_transcript_dropped_without_warn(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Whitespace-only transcriptions are a normal condition — dropped
+        with NO bridge-not-ready WARN (they'd be dropped bridge or not)."""
+        on_perception = await self._capture_on_perception(tmp_path)
+
+        caplog.set_level(logging.WARNING, logger="sovyx.engine.bootstrap")
+        await on_perception("   ", "test-mind")  # type: ignore[operator]
+
+        assert self._drop_records(caplog) == []
+
+    @pytest.mark.asyncio
+    async def test_bridge_wired_before_capture_start(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Structural closure: a transcript arriving DURING capture start
+        (the old race window) now reaches the bridge — no drop, no WARN."""
+        import sovyx.voice.cognitive_bridge as cb_mod
+
+        processed: list[object] = []
+
+        class _StubBridge:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def process(self, req: object) -> None:
+                processed.append(req)
+
+        captured: dict[str, object] = {}
+        bundle = _make_bundle()
+
+        async def _fake_factory(**kwargs: object) -> SimpleNamespace:
+            captured.update(kwargs)
+            return bundle
+
+        async def _speak_during_start() -> None:
+            await captured["on_perception"]("hi during boot", "test-mind")  # type: ignore[operator]
+
+        bundle.capture_task.start = AsyncMock(side_effect=_speak_during_start)
+
+        caplog.set_level(logging.WARNING, logger="sovyx.engine.bootstrap")
+        with (
+            patch("sovyx.voice.factory.create_voice_pipeline", _fake_factory),
+            patch.object(cb_mod, "VoiceCognitiveBridge", _StubBridge),
+        ):
+            await bootstrap._auto_resume_voice_pipeline(
+                mind_config=_make_mind_config(),  # type: ignore[arg-type]
+                engine_config=_make_engine_config(tmp_path),  # type: ignore[arg-type]
+                registry=self._registry_with_cogloop(),
+            )
+
+        assert len(processed) == 1
+        assert processed[0].perception.content == "hi during boot"  # type: ignore[attr-defined]
+        assert self._drop_records(caplog) == []

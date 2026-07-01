@@ -104,8 +104,28 @@ async def _auto_resume_voice_pipeline(
         bridge's own internal cancel-hook bookkeeping handles barge-in
         cancellation.
         """
+        if not text.strip():
+            return
         bridge = bridge_ref[0]
-        if bridge is None or not text.strip():
+        if bridge is None:
+            # Boot-window race: STT produced a transcript before the
+            # cognitive bridge was wired into ``bridge_ref``. The bridge is
+            # now constructed BEFORE ``capture_task.start()`` so this window
+            # is structurally closed; the WARN is belt-and-suspenders in
+            # case a future reorder reopens it. Text length only — never the
+            # transcript itself (privacy).
+            logger.warning(
+                "voice.perception_dropped_bridge_not_ready",
+                mind_id=mind_id_str,
+                text_length=len(text),
+                action_required=(
+                    "A voice utterance arrived during the boot window before "
+                    "the cognitive bridge was wired and was DISCARDED — the "
+                    "user got no response. One-off at boot: ask the user to "
+                    "repeat. Recurring outside boot: bridge wire-up bug in "
+                    "_auto_resume_voice_pipeline."
+                ),
+            )
             return
         from uuid import uuid4
 
@@ -182,6 +202,28 @@ async def _auto_resume_voice_pipeline(
         allow_inoperative_capture=True,
     )
 
+    # Wire the cognitive bridge BEFORE ``capture_task.start()`` so a
+    # transcript produced immediately after capture starts always finds
+    # the bridge — pre-reorder, an utterance in the start→wire window was
+    # silently dropped (``bridge_ref[0]`` still None). Safe to hoist: the
+    # bridge constructor is passive (stores cogloop + pipeline refs, no
+    # tasks, no I/O) and both dependencies exist once the bundle is built.
+    # The T1.2 contract is untouched — REGISTRY mutation still happens
+    # only after start() succeeds; on start() failure the bridge instance
+    # is discarded with the torn-down bundle. Streaming follows the
+    # mind's LLM config (matches HTTP route contract).
+    if cognitive_loop is not None:
+        # Defensive ``getattr`` — tests build a minimal MindConfig
+        # without an ``llm`` field, and v0.1 single-mind doesn't
+        # mandate one for voice auto-resume to work.
+        llm_cfg = getattr(mind_config, "llm", None)
+        streaming = bool(getattr(llm_cfg, "streaming", True)) if llm_cfg is not None else True
+        bridge_ref[0] = VoiceCognitiveBridge(
+            cognitive_loop,
+            bundle.pipeline,
+            streaming=streaming,
+        )
+
     try:
         await bundle.capture_task.start()
     except Exception:
@@ -202,21 +244,6 @@ async def _auto_resume_voice_pipeline(
             mind_id=mind_config.id,
         )
         raise
-
-    # Wire the cognitive bridge BEFORE registering it so the holder is
-    # ready and the bridge instance exists. Streaming follows the
-    # mind's LLM config (matches HTTP route contract).
-    if cognitive_loop is not None:
-        # Defensive ``getattr`` — tests build a minimal MindConfig
-        # without an ``llm`` field, and v0.1 single-mind doesn't
-        # mandate one for voice auto-resume to work.
-        llm_cfg = getattr(mind_config, "llm", None)
-        streaming = bool(getattr(llm_cfg, "streaming", True)) if llm_cfg is not None else True
-        bridge_ref[0] = VoiceCognitiveBridge(
-            cognitive_loop,
-            bundle.pipeline,
-            streaming=streaming,
-        )
 
     # start() succeeded — only NOW publish the running instances into
     # the registry, so downstream callers never observe a half-started

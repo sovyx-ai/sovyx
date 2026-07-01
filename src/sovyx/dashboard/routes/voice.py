@@ -2690,8 +2690,28 @@ async def _enable_voice_locked(
         ``cogloop_task_ref`` so :func:`disable_voice` can wait / cancel
         it on shutdown, and so tests can assert on completion.
         """
+        if not text.strip():
+            return
         bridge = bridge_ref[0]
-        if bridge is None or not text.strip():
+        if bridge is None:
+            # Boot-window race: STT produced a transcript before the
+            # cognitive bridge was wired into ``bridge_ref``. The bridge is
+            # now constructed BEFORE ``capture_task.start()`` so this window
+            # is structurally closed; the WARN is belt-and-suspenders in
+            # case a future reorder reopens it. Text length only — never the
+            # transcript itself (privacy).
+            logger.warning(
+                "voice.perception_dropped_bridge_not_ready",
+                mind_id=mind_id_str,
+                text_length=len(text),
+                action_required=(
+                    "A voice utterance arrived during the enable boot window "
+                    "before the cognitive bridge was wired and was DISCARDED "
+                    "— the user got no response. One-off at enable: ask the "
+                    "user to repeat. Recurring: bridge wire-up bug in "
+                    "_enable_voice_locked."
+                ),
+            )
             return
         from uuid import uuid4
 
@@ -2902,6 +2922,33 @@ async def _enable_voice_locked(
             status_code=500,
         )
 
+    # 4.5 Wire the cognitive bridge BEFORE ``capture_task.start()`` so a
+    # transcript produced immediately after capture starts always finds the
+    # bridge — pre-reorder, an utterance in the start→wire window was
+    # silently dropped (``bridge_ref[0]`` still None; see the WARN in
+    # ``_on_perception``). Safe to hoist: the bridge constructor is passive
+    # (stores cogloop + pipeline refs, no tasks, no I/O) and both exist once
+    # the bundle is built. Registry publication still happens only after
+    # start() succeeds; on a start() failure the bridge instance is
+    # discarded with the torn-down bundle. Streaming (Jarvis illusion)
+    # defaults to the mind's LLM setting.
+    if cognitive_loop is not None:
+        from sovyx.voice.cognitive_bridge import (
+            VoiceCognitiveBridge as _VoiceCognitiveBridge,
+        )
+
+        streaming = True
+        mind_config = getattr(request.app.state, "mind_config", None)
+        if mind_config is not None:
+            llm_cfg = getattr(mind_config, "llm", None)
+            if llm_cfg is not None:
+                streaming = bool(getattr(llm_cfg, "streaming", True))
+        bridge_ref[0] = _VoiceCognitiveBridge(
+            cognitive_loop,
+            bundle.pipeline,
+            streaming=streaming,
+        )
+
     # 5. Start capture + register. Capture start is the step that can
     # actually fail with a device error — if it does, tear the pipeline
     # down so we don't leave a half-wired registry.
@@ -2975,25 +3022,6 @@ async def _enable_voice_locked(
                 ok=False, error=f"Audio capture failed to start: {exc}"
             ).model_dump(exclude_none=True),
             status_code=500,
-        )
-
-    # 5.5 Wire the cognitive bridge now that the pipeline exists. Streaming
-    # (Jarvis illusion) defaults to the mind's LLM setting.
-    if cognitive_loop is not None:
-        from sovyx.voice.cognitive_bridge import (
-            VoiceCognitiveBridge as _VoiceCognitiveBridge,
-        )
-
-        streaming = True
-        mind_config = getattr(request.app.state, "mind_config", None)
-        if mind_config is not None:
-            llm_cfg = getattr(mind_config, "llm", None)
-            if llm_cfg is not None:
-                streaming = bool(getattr(llm_cfg, "streaming", True))
-        bridge_ref[0] = _VoiceCognitiveBridge(
-            cognitive_loop,
-            bundle.pipeline,
-            streaming=streaming,
         )
 
     if registry is not None:
