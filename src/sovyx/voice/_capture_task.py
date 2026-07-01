@@ -356,6 +356,18 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         self._last_heartbeat_monotonic: float = 0.0
         self._frames_since_heartbeat: int = 0
         self._silent_frames_since_heartbeat: int = 0
+        # D6 — monotonic stamp of the most recent post-normalization
+        # window delivered by ``_consume_loop``. ``None`` until the
+        # first frame; ``status_snapshot`` derives frame recency from
+        # it so classify_signal_state can demote a stalled feed from
+        # LIVE_SIGNAL (stale last-good values must not classify live).
+        self._last_window_monotonic: float | None = None
+        # D4 — lifetime (task-scoped, never reset) count of frames
+        # evicted by ``_enqueue``'s drop-oldest overflow path, plus the
+        # monotonic throttle gate for its WARN. Both mutated only on
+        # the event loop (``_enqueue`` runs via call_soon_threadsafe).
+        self._queue_evictions_total: int = 0
+        self._last_eviction_warning_monotonic: float | None = None
 
         # Per-stream lifecycle counters — reset on every successful open
         # so ``audio.stream.closed`` reflects the activity of *that*
@@ -504,6 +516,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
     def status_snapshot(self) -> dict[str, Any]:
         """Compact dict for ``/api/voice/status`` — no async, no locks."""
         last_rms_db = round(self._last_rms_db, 1)
+        last_window = self._last_window_monotonic
         return {
             "running": self._running,
             "input_device": self._input_device,
@@ -511,13 +524,21 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
             "sample_rate": self._sample_rate,
             "frames_delivered": self._frames_delivered,
             "last_rms_db": last_rms_db,
+            # D4 — lifetime drop-oldest evictions (anti-pattern #49:
+            # explicitly lifetime-suffixed; it never decays or resets).
+            "queue_evictions_lifetime": self._queue_evictions_total,
             # W1.1 / G-P0-1 — honest dead-mic-vs-warming signal state derived
             # from real capture telemetry, so the dashboard stops rendering a
             # dead/absent mic as "warming up". SSoT: classify_signal_state.
+            # D6 — frame recency demotes a stalled feed (frames stopped
+            # arriving) to NO_DEVICE instead of a stale LIVE_SIGNAL.
             "signal_state": classify_signal_state(
                 running=self._running,
                 frames_delivered=self._frames_delivered,
                 last_rms_db=last_rms_db,
+                seconds_since_last_frame=(
+                    time.monotonic() - last_window if last_window is not None else None
+                ),
             ).value,
         }
 

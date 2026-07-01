@@ -2574,6 +2574,8 @@ class TestQueueOverflowStormT627:
 
         task = AudioCaptureTask.__new__(AudioCaptureTask)
         task._queue = asyncio.Queue(maxsize=256)  # noqa: SLF001
+        task._queue_evictions_total = 0  # noqa: SLF001
+        task._last_eviction_warning_monotonic = None  # noqa: SLF001
 
         frame = np.zeros(512, dtype=np.int16)
         for i in range(self._FLOOD_SIZE):
@@ -2599,6 +2601,8 @@ class TestQueueOverflowStormT627:
         maxsize = 256
         task = AudioCaptureTask.__new__(AudioCaptureTask)
         task._queue = asyncio.Queue(maxsize=maxsize)  # noqa: SLF001
+        task._queue_evictions_total = 0  # noqa: SLF001
+        task._last_eviction_warning_monotonic = None  # noqa: SLF001
 
         for i in range(self._FLOOD_SIZE):
             frame_id = np.full(8, i, dtype=np.int16)
@@ -2626,6 +2630,8 @@ class TestQueueOverflowStormT627:
 
         task = AudioCaptureTask.__new__(AudioCaptureTask)
         task._queue = asyncio.Queue(maxsize=256)  # noqa: SLF001
+        task._queue_evictions_total = 0  # noqa: SLF001
+        task._last_eviction_warning_monotonic = None  # noqa: SLF001
 
         frame = np.zeros(512, dtype=np.int16)
         for _ in range(self._FLOOD_SIZE):
@@ -2634,6 +2640,134 @@ class TestQueueOverflowStormT627:
             # production, but the contract is: never raise from this
             # method, and never block.
             task._enqueue(frame)  # noqa: SLF001
+
+
+class TestQueueEvictionObservabilityD4:
+    """D4 — drop-oldest evictions are counted + WARN-throttled, never silent.
+
+    Pre-D4, ``_enqueue`` evicted the oldest frame on overflow with zero
+    counter/log/metric — a consumer falling behind lost speech frames
+    with no evidence ("it didn't hear me"). Pins:
+
+      (a) every eviction increments ``_queue_evictions_total``;
+      (b) the non-overflow path never increments;
+      (c) ``voice.capture.queue_eviction`` WARN fires on the first
+          eviction and is throttled to one per
+          ``_QUEUE_EVICTION_WARN_INTERVAL_S`` thereafter;
+      (d) the WARN carries lifetime count + queue maxsize +
+          action_required;
+      (e) ``status_snapshot`` exposes the counter as
+          ``queue_evictions_lifetime`` (anti-pattern #49 lifetime suffix).
+    """
+
+    @staticmethod
+    def _bare_task(maxsize: int) -> AudioCaptureTask:
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._queue = asyncio.Queue(maxsize=maxsize)  # noqa: SLF001
+        task._queue_evictions_total = 0  # noqa: SLF001
+        task._last_eviction_warning_monotonic = None  # noqa: SLF001
+        return task
+
+    @pytest.mark.asyncio()
+    async def test_every_eviction_increments_lifetime_counter(self) -> None:
+        """Pin (a): pushes beyond maxsize each count exactly one eviction."""
+        task = self._bare_task(maxsize=4)
+        frame = np.zeros(8, dtype=np.int16)
+        for _ in range(10):
+            task._enqueue(frame)  # noqa: SLF001
+        assert task._queue_evictions_total == 6  # noqa: SLF001, PLR2004
+
+    @pytest.mark.asyncio()
+    async def test_no_eviction_below_maxsize(self) -> None:
+        """Pin (b): the common (non-full) path never touches the counter."""
+        task = self._bare_task(maxsize=8)
+        frame = np.zeros(8, dtype=np.int16)
+        for _ in range(8):
+            task._enqueue(frame)  # noqa: SLF001
+        assert task._queue_evictions_total == 0  # noqa: SLF001
+        assert task._last_eviction_warning_monotonic is None  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_warn_is_throttled_and_carries_payload(self) -> None:
+        """Pins (c) + (d): one WARN per throttle window, structured payload."""
+        import sovyx.voice.capture._loop_mixin as loop_mixin
+        from sovyx.voice.capture._constants import _QUEUE_EVICTION_WARN_INTERVAL_S
+
+        task = self._bare_task(maxsize=2)
+        frame = np.zeros(8, dtype=np.int16)
+        with patch.object(loop_mixin, "logger") as mock_logger:
+            for _ in range(50):
+                task._enqueue(frame)  # noqa: SLF001
+            # 48 evictions inside one throttle window → exactly one WARN.
+            assert mock_logger.warning.call_count == 1
+            event = mock_logger.warning.call_args.args[0]
+            payload = mock_logger.warning.call_args.kwargs
+            assert event == "voice.capture.queue_eviction"
+            assert payload["voice.queue_evictions_lifetime"] == 1
+            assert payload["voice.queue_maxsize"] == 2  # noqa: PLR2004
+            assert "voice.action_required" in payload
+
+            # Rewind the throttle gate past the interval → next eviction
+            # re-emits with the accumulated lifetime count.
+            task._last_eviction_warning_monotonic -= _QUEUE_EVICTION_WARN_INTERVAL_S + 1.0  # noqa: SLF001
+            task._enqueue(frame)  # noqa: SLF001
+            assert mock_logger.warning.call_count == 2  # noqa: PLR2004
+            payload = mock_logger.warning.call_args.kwargs
+            assert payload["voice.queue_evictions_lifetime"] == 49  # noqa: PLR2004
+
+    @pytest.mark.asyncio()
+    async def test_status_snapshot_exposes_lifetime_evictions(self) -> None:
+        """Pin (e): the counter surfaces as ``queue_evictions_lifetime``."""
+        task = AudioCaptureTask(MagicMock(), validate_on_start=False)
+        snapshot = task.status_snapshot()
+        assert snapshot["queue_evictions_lifetime"] == 0
+
+        task._queue_evictions_total = 17  # noqa: SLF001
+        assert task.status_snapshot()["queue_evictions_lifetime"] == 17  # noqa: PLR2004
+
+
+class TestSignalStateRecencyWiringD6:
+    """D6 — ``status_snapshot`` feeds real frame recency to the classifier.
+
+    A parked consumer / dead callback freezes ``frames_delivered`` +
+    ``last_rms_db`` at their last-good values; pre-D6 the snapshot kept
+    classifying LIVE_SIGNAL forever off that stale cache. The snapshot
+    now derives ``seconds_since_last_frame`` from
+    ``_last_window_monotonic`` (stamped per delivered window in
+    ``_consume_loop``) so a stalled feed demotes to ``no_device``.
+    """
+
+    @staticmethod
+    def _live_task() -> AudioCaptureTask:
+        import time as _time
+
+        task = AudioCaptureTask(MagicMock(), validate_on_start=False)
+        task._running = True  # noqa: SLF001
+        task._frames_delivered = 10_000  # noqa: SLF001
+        task._last_rms_db = -20.0  # noqa: SLF001
+        task._last_window_monotonic = _time.monotonic()  # noqa: SLF001
+        return task
+
+    @pytest.mark.asyncio()
+    async def test_fresh_frames_classify_live_signal(self) -> None:
+        task = self._live_task()
+        assert task.status_snapshot()["signal_state"] == "live_signal"
+
+    @pytest.mark.asyncio()
+    async def test_stalled_feed_demotes_to_no_device(self) -> None:
+        from sovyx.voice.capture._signal_state import _STALE_FRAME_CEILING_S
+
+        task = self._live_task()
+        task._last_window_monotonic -= _STALE_FRAME_CEILING_S + 1.0  # noqa: SLF001
+        assert task.status_snapshot()["signal_state"] == "no_device"
+
+    @pytest.mark.asyncio()
+    async def test_no_frames_yet_keeps_legacy_verdict(self) -> None:
+        # ``_last_window_monotonic`` is None pre-first-frame — the
+        # recency guard must not fire and the legacy branches decide.
+        task = AudioCaptureTask(MagicMock(), validate_on_start=False)
+        task._running = True  # noqa: SLF001
+        assert task.status_snapshot()["signal_state"] == "no_device"
 
 
 class TestMixinMroResolution:

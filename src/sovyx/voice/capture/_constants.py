@@ -42,6 +42,7 @@ __all__ = [
     "_CAPTURE_UNDERRUN_WINDOW_S",
     "_FRAME_SAMPLES",
     "_HEARTBEAT_INTERVAL_S",
+    "_QUEUE_EVICTION_WARN_INTERVAL_S",
     "_QUEUE_MAXSIZE",
     "_RECONNECT_DELAY_S",
     "_RING_EPOCH_SHIFT",
@@ -145,3 +146,21 @@ fire one WARN per consumer-loop iteration, drowning the dashboard.
 30 s matches the typical operator response cadence — long enough
 that a recovering condition self-suppresses, short enough that an
 unattended outage produces a regular drumbeat in the log feed."""
+
+
+# ── D4 — queue-eviction observability ────────────────────────────────
+#
+# ``LoopMixin._enqueue`` evicts the OLDEST queued frame when the
+# asyncio queue is full (the drop-oldest contract that keeps the audio
+# thread non-blocking). Pre-D4 that eviction was completely silent:
+# a consumer falling behind (CPU pressure, slow ``feed_frame``) lost
+# speech frames with zero counter, zero log — "it didn't hear me"
+# with no evidence. D4 adds a lifetime counter plus a throttled
+# structured WARN (``voice.capture.queue_eviction``).
+_QUEUE_EVICTION_WARN_INTERVAL_S = 30.0
+"""Minimum gap between two ``voice.capture.queue_eviction`` WARN logs.
+A saturated consumer evicts once per callback (~31/s at 512-sample /
+16 kHz blocks) — unthrottled that is a log flood, not a signal. 30 s
+matches ``_CAPTURE_UNDERRUN_WARN_INTERVAL_S`` (same operator response
+cadence, same drumbeat-not-flood rationale); the lifetime count in
+each WARN preserves the true eviction volume between emissions."""

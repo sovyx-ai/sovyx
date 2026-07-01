@@ -8,8 +8,10 @@ frames-delivered).
 
 from __future__ import annotations
 
+from sovyx.voice.capture._constants import _HEARTBEAT_INTERVAL_S
 from sovyx.voice.capture._signal_state import (
     _SILENCE_FLOOR_DB,
+    _STALE_FRAME_CEILING_S,
     _WARMING_FRAME_THRESHOLD,
     SignalState,
     classify_signal_state,
@@ -93,6 +95,130 @@ class TestClassifySignalState:
             )
             is SignalState.LIVE_SILENT
         )
+
+
+class TestStaleFrameRecencyD6:
+    """D6 — stale last-good telemetry must never classify LIVE_SIGNAL.
+
+    ``frames_delivered`` / ``last_rms_db`` freeze at their last-good
+    values when frames stop arriving (consumer parked, callback dead);
+    pre-D6 the classifier returned LIVE_SIGNAL forever off that cache,
+    defeating the honest dead-mic purpose (W1.1 / G-P0-1). A frame older
+    than ``_STALE_FRAME_CEILING_S`` now demotes to NO_DEVICE — the
+    existing state whose contract is "stream open but no PCM arriving".
+    """
+
+    def test_stale_while_running_is_not_live_signal(self) -> None:
+        """THE bug: healthy-looking cache + stopped frames ≠ LIVE_SIGNAL."""
+        state = classify_signal_state(
+            running=True,
+            frames_delivered=1_000_000,
+            last_rms_db=-20.0,
+            seconds_since_last_frame=_STALE_FRAME_CEILING_S * 10.0,
+        )
+        assert state is SignalState.NO_DEVICE
+        assert state is not SignalState.LIVE_SIGNAL
+
+    def test_stale_silent_cache_is_no_device_not_live_silent(self) -> None:
+        # LIVE_SILENT asserts frames ARE flowing — a stalled feed may not
+        # claim it, however silent the cached RMS looks.
+        assert (
+            classify_signal_state(
+                running=True,
+                frames_delivered=1_000_000,
+                last_rms_db=-80.0,
+                seconds_since_last_frame=_STALE_FRAME_CEILING_S + 1.0,
+            )
+            is SignalState.NO_DEVICE
+        )
+
+    def test_stale_during_warming_is_no_device_not_warming(self) -> None:
+        # A feed that died mid-warmup must not report "warming up" forever
+        # (the same masquerade class as LIVE2-P2-1).
+        assert (
+            classify_signal_state(
+                running=True,
+                frames_delivered=_WARMING_FRAME_THRESHOLD - 1,
+                last_rms_db=-30.0,
+                seconds_since_last_frame=_STALE_FRAME_CEILING_S + 1.0,
+            )
+            is SignalState.NO_DEVICE
+        )
+
+    def test_ceiling_boundary_is_inclusive_stale(self) -> None:
+        # ``>=`` per anti-pattern #24 — inclusive + coarse-clock safe.
+        assert (
+            classify_signal_state(
+                running=True,
+                frames_delivered=1_000_000,
+                last_rms_db=-20.0,
+                seconds_since_last_frame=_STALE_FRAME_CEILING_S,
+            )
+            is SignalState.NO_DEVICE
+        )
+
+    def test_fresh_frames_keep_live_signal(self) -> None:
+        """Regression: fresh recency changes NO verdict."""
+        assert (
+            classify_signal_state(
+                running=True,
+                frames_delivered=1_000_000,
+                last_rms_db=-20.0,
+                seconds_since_last_frame=0.01,
+            )
+            is SignalState.LIVE_SIGNAL
+        )
+
+    def test_fresh_frames_keep_live_silent(self) -> None:
+        assert (
+            classify_signal_state(
+                running=True,
+                frames_delivered=1_000_000,
+                last_rms_db=-80.0,
+                seconds_since_last_frame=0.01,
+            )
+            is SignalState.LIVE_SILENT
+        )
+
+    def test_fresh_frames_keep_warming(self) -> None:
+        assert (
+            classify_signal_state(
+                running=True,
+                frames_delivered=_WARMING_FRAME_THRESHOLD - 1,
+                last_rms_db=-30.0,
+                seconds_since_last_frame=0.01,
+            )
+            is SignalState.WARMING
+        )
+
+    def test_none_recency_preserves_legacy_verdicts(self) -> None:
+        # Callers without a recency signal (default None) get the exact
+        # pre-D6 behaviour.
+        assert (
+            classify_signal_state(
+                running=True,
+                frames_delivered=1_000_000,
+                last_rms_db=-20.0,
+                seconds_since_last_frame=None,
+            )
+            is SignalState.LIVE_SIGNAL
+        )
+
+    def test_not_running_still_wins_over_recency(self) -> None:
+        assert (
+            classify_signal_state(
+                running=False,
+                frames_delivered=999,
+                last_rms_db=-20.0,
+                seconds_since_last_frame=0.01,
+            )
+            is SignalState.NO_DEVICE
+        )
+
+    def test_ceiling_tied_to_heartbeat_interval(self) -> None:
+        # The ceiling is 3× the capture heartbeat cadence — one missed
+        # heartbeat is jitter, three means frames genuinely stopped.
+        assert _STALE_FRAME_CEILING_S == 3.0 * _HEARTBEAT_INTERVAL_S
 
 
 class TestProducerAndModelContract:

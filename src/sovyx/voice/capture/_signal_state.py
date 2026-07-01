@@ -16,7 +16,9 @@ heuristic:
 
 * ``NO_DEVICE``   — the capture task is not running, or it is running but
   has delivered ZERO frames (stream open but no PCM — a read-failed /
-  never-started / unplugged device). NOT "warming".
+  never-started / unplugged device), or frames DID flow once but the most
+  recent one is older than ``_STALE_FRAME_CEILING_S`` (consumer parked /
+  callback dead — see :func:`classify_signal_state`). NOT "warming".
 * ``WARMING``     — frames ARE flowing but too few have arrived to judge
   signal yet (the genuinely-transient just-started window). This is the
   ONLY state that legitimately reads as "warming up".
@@ -34,6 +36,8 @@ implementation rather than independent thresholds (anti-pattern #53).
 from __future__ import annotations
 
 from enum import StrEnum
+
+from sovyx.voice.capture._constants import _HEARTBEAT_INTERVAL_S
 
 
 class SignalState(StrEnum):
@@ -61,29 +65,62 @@ speech (typically >-40 dBFS) reads as ``LIVE_SIGNAL``. Tunable; the
 NO_DEVICE / WARMING disambiguation that closes G-P0-1 does not depend on
 its exact value."""
 
+_STALE_FRAME_CEILING_S = 3.0 * _HEARTBEAT_INTERVAL_S
+"""Recency ceiling (seconds) beyond which cached ``last_rms_db`` /
+``frames_delivered`` telemetry is too stale to claim a live verdict (D6).
+Tied to the capture heartbeat cadence
+(``VoiceTuningConfig.capture_heartbeat_interval_seconds``, default 2 s):
+one missed heartbeat is scheduler jitter, three consecutive misses means
+frames have genuinely stopped arriving. Without this ceiling the
+classifier kept returning ``LIVE_SIGNAL`` forever off the LAST-good RMS
+after the consumer parked or the callback died — exactly the dishonest
+verdict W1.1 / G-P0-1 exists to prevent."""
+
 
 def classify_signal_state(
     *,
     running: bool,
     frames_delivered: int,
     last_rms_db: float | None,
+    seconds_since_last_frame: float | None = None,
     warming_frame_threshold: int = _WARMING_FRAME_THRESHOLD,
     silence_floor_db: float = _SILENCE_FLOOR_DB,
+    stale_frame_ceiling_s: float = _STALE_FRAME_CEILING_S,
 ) -> SignalState:
     """Classify the capture signal state from real capture telemetry.
+
+    Staleness guard (D6): ``frames_delivered`` and ``last_rms_db`` are
+    CACHED last-good values — when frames stop arriving (consumer parked,
+    callback dead) they freeze at whatever they last read, and the naive
+    verdict stays ``LIVE_SIGNAL`` forever. When
+    ``seconds_since_last_frame`` exceeds ``stale_frame_ceiling_s`` the
+    classifier returns :attr:`SignalState.NO_DEVICE` — the EXISTING state
+    whose contract already reads "stream open but no PCM arriving", which
+    is literally what a stalled feed is. ``LIVE_SILENT`` would lie (it
+    asserts frames ARE flowing), and no new enum member is added because
+    the value set has typed dashboard consumers. The comparison is ``>=``
+    per anti-pattern #24 (coarse-clock safe). ``None`` recency skips the
+    guard so legacy callers keep their exact pre-D6 verdicts.
 
     Args:
         running: Whether the capture task's stream loop is active.
         frames_delivered: Cumulative PCM frames the loop has delivered.
         last_rms_db: Most recent per-frame RMS in dBFS, or ``None`` when no
             frame has produced a reading yet.
+        seconds_since_last_frame: Monotonic age of the most recent
+            delivered frame, or ``None`` when the caller has no recency
+            signal (skips the staleness guard).
         warming_frame_threshold: Frames required before judging silence.
         silence_floor_db: RMS ceiling below which a live stream is silent.
+        stale_frame_ceiling_s: Frame age at or beyond which the cached
+            telemetry no longer supports a live verdict.
 
     Returns:
         The :class:`SignalState` describing the capture substrate truth.
     """
     if not running or frames_delivered <= 0:
+        return SignalState.NO_DEVICE
+    if seconds_since_last_frame is not None and seconds_since_last_frame >= stale_frame_ceiling_s:
         return SignalState.NO_DEVICE
     if frames_delivered < warming_frame_threshold or last_rms_db is None:
         return SignalState.WARMING

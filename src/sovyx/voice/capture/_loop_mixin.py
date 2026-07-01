@@ -57,6 +57,7 @@ from sovyx.voice.capture._constants import (
     _CAPTURE_UNDERRUN_WARN_INTERVAL_S,
     _CAPTURE_UNDERRUN_WINDOW_S,
     _HEARTBEAT_INTERVAL_S,
+    _QUEUE_EVICTION_WARN_INTERVAL_S,
     _RECONNECT_DELAY_S,
     _VALIDATION_MIN_RMS_DB,
 )
@@ -115,6 +116,9 @@ class LoopMixin:
     _frames_delivered: int
     _frames_since_heartbeat: int
     _silent_frames_since_heartbeat: int
+    _last_window_monotonic: float | None
+    _queue_evictions_total: int
+    _last_eviction_warning_monotonic: float | None
     _reconnect_backoff: BackoffSchedule | None
     _chaos: ChaosInjector
 
@@ -219,10 +223,48 @@ class LoopMixin:
                     loop.call_soon_threadsafe(self._enqueue, empty_marker)
 
     def _enqueue(self, frame: npt.NDArray[np.int16]) -> None:
-        """Enqueue a frame; drop the oldest on overflow."""
+        """Enqueue a frame; drop the oldest on overflow.
+
+        D4 — evictions are no longer silent. Every dropped frame bumps
+        the lifetime counter ``_queue_evictions_total`` (plain ``int +=``
+        — this method runs on the asyncio loop via
+        ``call_soon_threadsafe``, never the audio thread, so the cheap
+        bookkeeping is anti-pattern #14 safe) and emits a
+        ``voice.capture.queue_eviction`` WARN throttled to one per
+        ``_QUEUE_EVICTION_WARN_INTERVAL_S`` (same monotonic-gated
+        pattern as ``voice.vad.inference_timeout``). The common
+        (non-full) path is untouched: one ``full()`` check, no
+        allocation, no logging.
+        """
         if self._queue.full():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self._queue.get_nowait()
+                self._queue_evictions_total += 1
+                now = time.monotonic()
+                if (
+                    self._last_eviction_warning_monotonic is None
+                    or now - self._last_eviction_warning_monotonic
+                    >= _QUEUE_EVICTION_WARN_INTERVAL_S
+                ):
+                    self._last_eviction_warning_monotonic = now
+                    logger.warning(
+                        "voice.capture.queue_eviction",
+                        **{
+                            "voice.queue_evictions_lifetime": self._queue_evictions_total,
+                            "voice.queue_maxsize": self._queue.maxsize,
+                            "voice.action_required": (
+                                "Capture queue overflowed — the consumer is "
+                                "falling behind the audio callback and the "
+                                "OLDEST frames are being dropped, so speech "
+                                "may be silently lost. Likely causes: host "
+                                "CPU pressure starving the event loop, or a "
+                                "slow pipeline.feed_frame stage (VAD / "
+                                "normalizer). Check CPU load; if sustained, "
+                                "reduce co-resident load or raise "
+                                "SOVYX_TUNING__VOICE__CAPTURE_QUEUE_MAXSIZE."
+                            ),
+                        },
+                    )
         self._queue.put_nowait(frame)
 
     def _check_sustained_underrun_rate(self) -> None:
@@ -327,6 +369,10 @@ class LoopMixin:
                     rms_db = _rms_db_int16(window)
                     self._last_rms_db = rms_db
                     self._frames_delivered += 1
+                    # D6 — frame-recency stamp so status_snapshot can
+                    # detect that frames STOPPED arriving (stale
+                    # LIVE_SIGNAL guard in classify_signal_state).
+                    self._last_window_monotonic = time.monotonic()
                     self._frames_since_heartbeat += 1
                     if rms_db < _VALIDATION_MIN_RMS_DB:
                         self._silent_frames_since_heartbeat += 1
