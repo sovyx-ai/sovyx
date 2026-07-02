@@ -22,6 +22,11 @@ Design contract mirrors the F3/F4/WI3 modules:
 
 * Detection NEVER raises — subprocess / parse failures collapse
   into UNKNOWN with structured ``notes``.
+* Parsing is LOCALE-NEUTRAL — Windows localizes the sc.exe LABELS
+  ("STATE" is "ESTADO" on pt-BR) but never the state TOKENS
+  ("RUNNING", "STOPPED", ...) nor the numeric state codes, so the
+  parser scans for the tokens/codes instead of keying on the
+  English label (WINDOWS-1).
 * Watchdog is OPT-IN — explicit ``start()`` / ``stop()`` lifecycle.
 * Bounded subprocess timeouts so a wedged Service Control Manager
   doesn't stall Sovyx.
@@ -34,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import shutil
 import subprocess  # noqa: S404 — fixed-argv subprocess to trusted Win SCM binary
 import sys
@@ -97,8 +103,10 @@ class WindowsServiceReport:
     """Current service state."""
 
     raw_state: str = ""
-    """Verbatim ``STATE`` line value from sc.exe output. Useful
-    for debugging when ``state`` is UNKNOWN."""
+    """Verbatim state-line value from sc.exe output (text right of
+    the colon, e.g. ``"4  RUNNING"``) regardless of the localized
+    label carrying it. Useful for debugging when ``state`` is
+    UNKNOWN."""
 
     notes: tuple[str, ...] = field(default_factory=tuple)
     """Per-step diagnostic notes (subprocess errors, parse fallbacks)."""
@@ -222,14 +230,103 @@ def _query_one_service(sc_path: str, service: str) -> WindowsServiceReport:
             notes=tuple(notes),
         )
     state, raw = _parse_state_from_sc_output(result.stdout)
-    if state is WindowsServiceState.UNKNOWN and raw == "":
-        notes.append("STATE line not found in sc output")
+    if state is WindowsServiceState.UNKNOWN:
+        if raw == "":
+            # Genuinely nothing recognizable — neither a state token
+            # nor a numeric state code anywhere in the output.
+            notes.append("service state not found in sc output (no known state token or code)")
+        else:
+            # A token/code WAS found but has no WindowsServiceState
+            # mapping (e.g. PAUSE_PENDING / CONTINUE_PENDING — kept
+            # out of the closed-set enum consumed by the dashboard
+            # zod twin). raw_state carries the actual value.
+            notes.append(f"unmapped service state in sc output: {raw[:60]}")
     return WindowsServiceReport(
         name=service,
         state=state,
         raw_state=raw,
         notes=tuple(notes),
     )
+
+
+_SC_STATE_TOKENS: tuple[str, ...] = (
+    "START_PENDING",
+    "STOP_PENDING",
+    "PAUSE_PENDING",
+    "CONTINUE_PENDING",
+    "RUNNING",
+    "STOPPED",
+    "PAUSED",
+)
+"""The closed SCM state-token vocabulary emitted by ``sc.exe query``.
+Windows localizes the surrounding LABELS but never these tokens."""
+
+
+_SC_STATE_CODES: dict[str, str] = {
+    "1": "STOPPED",
+    "2": "START_PENDING",
+    "3": "STOP_PENDING",
+    "4": "RUNNING",
+    "5": "CONTINUE_PENDING",
+    "6": "PAUSE_PENDING",
+    "7": "PAUSED",
+}
+"""``SERVICE_STATUS.dwCurrentState`` numeric codes → canonical token.
+The numeric code on the state line is locale-invariant like the token."""
+
+
+_SC_STATE_TOKEN_RE = re.compile(r"\b(" + "|".join(_SC_STATE_TOKENS) + r")\b")
+
+_SC_STATE_CODE_RE = re.compile(r":\s*([1-7])\b")
+
+
+def scan_sc_state_token(stdout: str) -> tuple[str, str] | None:
+    """Locale-neutrally extract the service state from ``sc query`` output.
+
+    Windows localizes the sc.exe field labels — the state line is
+    ``STATE              : 4  RUNNING`` on English SKUs but
+    ``ESTADO             : 4  RUNNING`` on pt-BR (empirical,
+    WINDOWS-1) — while the state TOKEN and the numeric state code are
+    never localized. So instead of keying on the English ``STATE``
+    label, scan every line for the known tokens as whole words
+    (primary), cross-checking against the numeric code when both are
+    present (token wins on mismatch; the mismatch is logged at DEBUG).
+    A line carrying only a valid numeric code (``:  4``) is kept as a
+    fallback when no token appears anywhere.
+
+    Returns:
+        ``(token, raw_value)`` where ``token`` is the canonical
+        un-localized token (e.g. ``"RUNNING"``) and ``raw_value`` is
+        the text right of the colon on the matched line (the stripped
+        line when it has no colon), or ``None`` when no state token or
+        numeric state code was found.
+    """
+    code_only: tuple[str, str] | None = None
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        upper = line.upper()
+        raw_value = line.split(":", 1)[1].strip() if ":" in line else line
+        token_match = _SC_STATE_TOKEN_RE.search(upper)
+        code_match = _SC_STATE_CODE_RE.search(upper)
+        if token_match is not None:
+            token = token_match.group(1)
+            if code_match is not None:
+                code_token = _SC_STATE_CODES.get(code_match.group(1))
+                if code_token is not None and code_token != token:
+                    logger.debug(
+                        "sc_state_token_code_mismatch",
+                        token=token,
+                        numeric_code=code_match.group(1),
+                        line=line[:120],
+                    )
+            return token, raw_value
+        if code_only is None and code_match is not None:
+            mapped = _SC_STATE_CODES.get(code_match.group(1))
+            if mapped is not None:
+                code_only = (mapped, raw_value)
+    return code_only
 
 
 _STATE_TOKENS: dict[str, WindowsServiceState] = {
@@ -239,35 +336,28 @@ _STATE_TOKENS: dict[str, WindowsServiceState] = {
     "STOP_PENDING": WindowsServiceState.STOP_PENDING,
     "PAUSED": WindowsServiceState.PAUSED,
 }
+"""Token → :class:`WindowsServiceState` map. Deliberately a SUBSET of
+:data:`_SC_STATE_TOKENS`: PAUSE_PENDING / CONTINUE_PENDING have no enum
+member (the enum is a closed set mirrored by the dashboard zod twin
+``WindowsServiceStateTokenSchema``) — they surface as UNKNOWN with
+``raw_state`` preserving the actual token."""
 
 
 def _parse_state_from_sc_output(stdout: str) -> tuple[WindowsServiceState, str]:
-    """Extract the STATE token from ``sc query`` output.
+    """Map ``sc query`` output to a :class:`WindowsServiceState`.
 
-    Output format::
-
-        SERVICE_NAME: Audiosrv
-                TYPE               : 30  WIN32
-                STATE              : 4  RUNNING
-                ...
-
-    The STATE line carries an integer code AND a textual token; we
-    key on the token for stability."""
-    for raw_line in stdout.splitlines():
-        line = raw_line.strip()
-        if not line.upper().startswith("STATE"):
-            continue
-        # "STATE              : 4  RUNNING" — split on colon then whitespace.
-        if ":" not in line:
-            continue
-        right = line.split(":", 1)[1].strip()
-        # Tokens are space-separated; the textual one is the LAST.
-        tokens = right.split()
-        for token in reversed(tokens):
-            upper = token.upper()
-            if upper in _STATE_TOKENS:
-                return _STATE_TOKENS[upper], right
-    return WindowsServiceState.UNKNOWN, ""
+    Delegates the locale-neutral extraction to
+    :func:`scan_sc_state_token` (token-scan primary, numeric-code
+    fallback — never the localized ``STATE``/``ESTADO`` label), then
+    maps the canonical token onto the closed-set enum. Tokens without
+    an enum member (PAUSE_PENDING / CONTINUE_PENDING) return UNKNOWN
+    with the raw value preserved so the caller can distinguish
+    "unmapped state" from "nothing found" (``raw == ""``)."""
+    scanned = scan_sc_state_token(stdout)
+    if scanned is None:
+        return WindowsServiceState.UNKNOWN, ""
+    token, raw = scanned
+    return _STATE_TOKENS.get(token, WindowsServiceState.UNKNOWN), raw
 
 
 # ── Watchdog ──────────────────────────────────────────────────────
@@ -399,4 +489,5 @@ __all__ = [
     "WindowsServiceReport",
     "WindowsServiceState",
     "query_audio_service_status",
+    "scan_sc_state_token",
 ]

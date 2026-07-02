@@ -11,6 +11,12 @@ must not cascade into a spurious re-probe.
 Cadence comes from ``tuning.voice.watchdog_audio_service_poll_s``
 (default 2 s). ``sc`` is present on every Windows SKU since Vista so
 no external dependency is required.
+
+Parsing of the ``sc`` output is LOCALE-NEUTRAL: Windows localizes the
+field labels ("STATE" is "ESTADO" on pt-BR) but never the state
+tokens or numeric codes, so extraction delegates to the shared
+:func:`~sovyx.voice.health._windows_audio_service.scan_sc_state_token`
+(one parser for both sc.exe consumers — WINDOWS-1).
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from sovyx.voice.health._audio_service import (
     AudioServiceMonitor,
     NoopAudioServiceMonitor,
 )
+from sovyx.voice.health._windows_audio_service import scan_sc_state_token
 from sovyx.voice.health.contract import AudioServiceEvent, AudioServiceEventKind
 
 if TYPE_CHECKING:
@@ -42,11 +49,17 @@ _SERVICE_NAME = "audiosrv"
 
 
 def _query_audiosrv_state() -> str | None:
-    """Return ``audiosrv`` state or ``None`` when the query failed.
+    """Return the ``audiosrv`` state token or ``None`` when the query failed.
 
     The caller treats ``None`` as "no change" so a transient ``sc``
-    failure never flips the watchdog state. The state string mirrors
-    ``sc`` output ("RUNNING", "STOPPED", "STOP_PENDING", etc.).
+    failure never flips the watchdog state. The returned string is the
+    canonical un-localized token ("RUNNING", "STOPPED",
+    "STOP_PENDING", etc.).
+
+    Extraction is locale-neutral (WINDOWS-1): the ``STATE`` label is
+    localized by Windows ("ESTADO" on pt-BR) but the token and the
+    numeric state code are not, so :func:`scan_sc_state_token` scans
+    for those instead of keying on the English label.
     """
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
@@ -60,15 +73,10 @@ def _query_audiosrv_state() -> str | None:
         return None
     if proc.returncode != 0:
         return None
-    for raw in proc.stdout.splitlines():
-        line = raw.strip()
-        if not line.startswith("STATE"):
-            continue
-        # Format: "STATE              : 4  RUNNING"
-        parts = line.split()
-        if len(parts) >= 4:
-            return parts[3].upper()
-    return None
+    scanned = scan_sc_state_token(proc.stdout)
+    if scanned is None:
+        return None
+    return scanned[0]
 
 
 class WindowsAudioServiceMonitor:
@@ -170,9 +178,15 @@ class WindowsAudioServiceMonitor:
 
 
 def build_windows_audio_service_monitor() -> AudioServiceMonitor:
-    """Return a real Windows monitor, or Noop when ``sc.exe`` is absent."""
-    # Fast-path probe: if sc.exe isn't on PATH the monitor would never
-    # report a transition anyway. Skip the thread entirely.
+    """Return a real Windows monitor, or Noop when the state probe fails.
+
+    The probe fails (returns ``None``) when ``sc.exe`` is missing,
+    the query errors/times out/exits non-zero, or the output carries
+    no recognizable state token or numeric code — the Noop reason
+    names all of those causes rather than asserting one.
+    """
+    # Fast-path probe: if the state query cannot succeed the monitor
+    # would never report a transition anyway. Skip the thread entirely.
     probe = _query_audiosrv_state()
     if probe is None:
         logger.warning(
@@ -180,7 +194,13 @@ def build_windows_audio_service_monitor() -> AudioServiceMonitor:
             platform="win32",
             reason="sc_query_failed",
         )
-        return NoopAudioServiceMonitor(reason="sc.exe unavailable or audiosrv missing")
+        return NoopAudioServiceMonitor(
+            reason=(
+                "audiosrv state probe failed (sc.exe missing, query "
+                "error/non-zero exit, or no recognizable state token "
+                "in output)"
+            ),
+        )
     return WindowsAudioServiceMonitor()
 
 
