@@ -2,7 +2,12 @@
 
 Coordinates the real-time flow:
     perception → start_thinking → filler timer → LLM stream →
-    stream_text (per chunk) → flush_stream → output guard (final)
+    stream_text (per chunk; each sentence segment guarded before
+    TTS) → flush_stream
+
+The per-segment guard is the loop's regex-tier output/PII guard,
+registered via :meth:`VoicePipeline.set_stream_segment_guard` so
+streamed segments are filtered BEFORE synthesis.
 
 The bridge does NOT own the voice pipeline or the cognitive loop —
 it's a stateless adapter that wires them together for one request.
@@ -11,8 +16,8 @@ T1 / Gap 2 wire-up — barge-in cancellation
 ==========================================
 
 When the user barges in mid-response, the orchestrator's
-:meth:`VoicePipeline.cancel_speech_chain` runs the four-step
-transactional teardown. Step 3 invokes
+:meth:`VoicePipeline.cancel_speech_chain` runs the transactional
+teardown chain. Step 3 invokes
 :attr:`VoicePipeline._llm_cancel_hook` to stop the LLM from producing
 tokens that would leak into the next turn (the pre-T1 silent failure
 mode). The bridge OWNS that hook for the duration of every

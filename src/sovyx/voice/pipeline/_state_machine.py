@@ -30,12 +30,16 @@ Enterprise sequencing: **observe → confirm → enforce**.
   transitions raise :class:`InvalidTransitionError` at write time.
 
 The watchdog is independent of validation — it tracks
-``time_in_current_state`` and exposes
-:meth:`PipelineStateMachine.is_watchdog_expired` for the
-orchestrator's existing heartbeat to query. A 30-second dwell in
-e.g. ``THINKING`` is the canonical "stuck pipeline" symptom and
-already triggers other recovery paths in the orchestrator; this
-makes the dwell metric explicit + queryable.
+``time_in_current_state``. In production the orchestrator's
+heartbeat (``HeartbeatMixin._check_dwell_watchdog``) queries
+:meth:`PipelineStateMachine.time_in_current_state_s` directly
+against its OWN dwell ceiling
+(``VoiceTuningConfig.pipeline_dwell_watchdog_seconds``, default
+120 s); :meth:`PipelineStateMachine.is_watchdog_expired` (machine-
+local threshold, 30 s default) is NOT the production query path and
+remains for external/test callers. A sustained dwell in e.g.
+``THINKING`` is the canonical "stuck pipeline" symptom; this makes
+the dwell metric explicit + queryable.
 
 Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §2.6
 (Ring 6), §3.10 O1; GStreamer state-machine spec; Pipecat frame
@@ -450,9 +454,9 @@ class PipelineStateMachine:
         # Record outside the lock — metrics emit can be heavy and the
         # lock only protects ``_state``. ``get_metrics`` returns a
         # cached registry; the histogram lookup is a getattr. Defensive
-        # ``getattr(...)`` matches the pattern at
-        # ``_orchestrator.py:1515-1519`` so a metrics-init race during
-        # boot can't take down state recording.
+        # ``getattr(...)`` matches the orchestrator's defensive
+        # metrics-instrument lookup pattern so a metrics-init race
+        # during boot can't take down state recording.
         from sovyx.observability.metrics import get_metrics  # noqa: PLC0415
 
         histogram = getattr(get_metrics(), "voice_pipeline_state_dwell", None)
@@ -510,9 +514,13 @@ class PipelineStateMachine:
     ) -> TransitionRecord:
         """Forcibly transition to ``recover_to`` (default IDLE).
 
-        Called by the orchestrator's heartbeat when
-        :meth:`is_watchdog_expired` returns True. Emits a
-        ``pipeline.state.watchdog_fired`` event with the dwell
+        NOT called by the wired dwell watchdog: the orchestrator's
+        heartbeat (``HeartbeatMixin._check_dwell_watchdog``) recovers
+        via the host ``_state`` property — which itself mirrors into
+        :meth:`record_transition` — so calling this method too would
+        double-record the transition. This helper remains available
+        for external/test callers that drive the machine directly.
+        Emits a ``pipeline.state.watchdog_fired`` event with the dwell
         duration so dashboards can attribute the recovery to the
         pipeline-level watchdog vs other recovery paths.
         """

@@ -265,17 +265,14 @@ class HeartbeatMixin:
     def _emit_heartbeat(self, now: float) -> None:
         """Emit a single ``voice_pipeline_heartbeat`` (idempotent within a window).
 
-        Called from two sites:
+        Called ONLY from :meth:`_heartbeat_loop` — the wall-clock
+        timer that fires regardless of consumer-loop progress
+        (v0.31.7 CR3; CR3 removed the legacy per-frame trigger, so
+        :meth:`_track_vad_for_heartbeat` only accumulates window
+        stats and never calls this method).
 
-        * :meth:`_heartbeat_loop` — primary contract, wall-clock
-          timer regardless of consumer-loop progress (v0.31.7 CR3).
-        * :meth:`_track_vad_for_heartbeat` — legacy per-frame fallback
-          when the interval has elapsed AND a frame happens to be in
-          flight; converges on the same idempotent body.
-
-        Both call sites reset ``_last_heartbeat_monotonic = now`` at
-        the bottom so a subsequent caller observes "interval has not
-        elapsed" and short-circuits.
+        The body resets ``_last_heartbeat_monotonic = now`` at the
+        bottom so the anchor always reflects the latest emission.
 
         The emission carries the same fields the pre-CR3 inline code
         emitted PLUS the new freshness snapshot fields:
@@ -873,9 +870,9 @@ class HeartbeatMixin:
         This loop fixes the contract: heartbeat fires every
         ``_HEARTBEAT_INTERVAL_S`` regardless of consumer-loop progress.
         Per-frame ``_track_vad_for_heartbeat`` continues to update
-        the window stats (and is a SECONDARY trigger — see that
-        method's docstring) so dashboards see fresh VAD probability
-        in every emit even during parking.
+        the window stats (accumulation only — CR3 removed its
+        emission trigger; see that method's docstring) so dashboards
+        see fresh VAD probability in every emit even during parking.
 
         Cancellation contract:
 

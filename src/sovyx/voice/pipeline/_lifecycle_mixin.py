@@ -19,10 +19,11 @@ Lifecycle contract:
   the prior session's tasks.
 * ``stop`` — Mission Phase 1 / T1.10 drain-before-return. Sequence:
   emit stop_begin → flip ``_running=False`` → cancel + drain filler →
-  cancel + drain heartbeat → interrupt output → cancel + drain TTS
-  tasks (snapshot under ``_task_tracking_lock``) → reset state →
-  release self-feedback gate → unregister listeners → emit
-  stop_complete with drain counters.
+  cancel + drain heartbeat → interrupt output → cancel + drain the
+  streaming background drainer + clear ``_speech_session_active`` →
+  cancel + drain TTS tasks (snapshot under ``_task_tracking_lock``) →
+  reset state → release self-feedback gate → unregister listeners →
+  emit stop_complete with drain counters.
 
 Anti-pattern #32 contract: the mixin makes 4 cross-mixin method
 calls — all forward-declared in the TYPE_CHECKING block so MRO
@@ -51,6 +52,10 @@ State the mixin reads/writes (initialised on the HOST in
 * ``_in_flight_tts_tasks: set[asyncio.Task[Any]]`` — drain target.
 * ``_config: VoicePipelineConfig`` — read for mind_id +
   wake_word_enabled log attribution.
+* ``_speech_session_active: bool`` — turn-ownership flag cleared on
+  stop so the next session starts without a stale open turn.
+* ``_stream_drain_task: asyncio.Task[None] | None`` — streaming
+  background playback drainer; cancelled + drained on stop.
 """
 
 from __future__ import annotations
@@ -176,12 +181,16 @@ class LifecycleMixin:
            nulls it out, then await the cancellation with a
            ``_CANCELLATION_TASK_TIMEOUT_S`` budget.
         4. Interrupt the output queue (idempotent).
-        5. Snapshot ``_in_flight_tts_tasks``, cancel each, await with
+        5. Cancel + drain the streaming background drainer
+           (``_stream_drain_task``) with the same bounded budget and
+           clear ``_speech_session_active`` so a mid-stream stop
+           doesn't leave the next session claiming an open turn.
+        6. Snapshot ``_in_flight_tts_tasks``, cancel each, await with
            the same per-task budget. ``CancelledError`` + ``TimeoutError``
            both count as "drained" so a wedged TTS backend doesn't
            stall :meth:`stop`; unexpected exceptions log a structured
            WARN but don't propagate.
-        6. Reset state, release the self-feedback duck, emit
+        7. Reset state, release the self-feedback duck, emit
            ``voice.pipeline.stop_complete`` with drain counters.
         """
         logger.info("voice.pipeline.stop_begin", mind_id=self._config.mind_id)

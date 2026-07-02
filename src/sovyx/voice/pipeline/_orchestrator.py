@@ -208,7 +208,7 @@ _VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S = (
 # and didn't signal upstream LLM token streams to stop. The user heard
 # silence after barge-in but the next turn would start mid-old-thought
 # because the LLM kept producing tokens. T1 introduces a transactional
-# four-step cancellation chain executed under a single asyncio.Lock so
+# cancellation chain executed under a single asyncio.Lock so
 # concurrent barge-ins serialise, and per-step success/failure is
 # surfaced on a structured ``voice.tts.cancellation_chain`` event for
 # dashboard attribution.
@@ -1515,9 +1515,11 @@ class VoicePipeline(
 
         # Mission Phase 1 / T1.16 — Pipecat-aligned UserStoppedSpeaking
         # frame at the RECORDING → TRANSCRIBING boundary. Mirrors the
-        # UserStartedSpeakingFrame emitted at WAKE_DETECTED → RECORDING
-        # (line 924) and at the no-wake / barge-in transition
-        # (line 1088), so the per-utterance frame_history span is
+        # UserStartedSpeakingFrame emitted at the wake-word detection
+        # in ``_handle_idle`` (source="wake_word") and at the no-wake /
+        # barge-in transition in ``_transition_to_recording``
+        # (source="barge_in_or_no_wake"), so the per-utterance
+        # frame_history span is
         # bracketed on both ends. Emitted BEFORE the state mutation so
         # the frame's monotonic timestamp lines up with the moment
         # silence-end was detected (the trailing frames have already

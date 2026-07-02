@@ -1,19 +1,27 @@
 """TTS task tracking + atomic cancellation chain mixin (extracted from ``_orchestrator.py``).
 
 Owns the orchestrator's TTS-task lifecycle + the T1 transactional
-barge-in cancellation chain. The chain coordinates 5 cleanup steps
-under :attr:`_cancellation_lock` so concurrent barge-ins serialise
-and each chain run produces a single auditable
-``voice.tts.cancellation_chain`` event with per-step verdicts:
+barge-in cancellation chain. The chain runs under
+:attr:`_cancellation_lock` so concurrent barge-ins serialise and
+each chain run produces a single auditable
+``voice.tts.cancellation_chain`` event recording 6 step verdicts
+(``output_flush``, ``tts_tasks_cancel``, ``cogloop_tasks_cancel``,
+``llm_cancel``, ``filler_and_gate``, ``text_buffer_cleanup``) plus a
+step-1.5 stream-drainer hand-off that has no verdict of its own:
 
-1. Output queue flush (idempotent ``interrupt()``).
-2. In-flight TTS task cancellation under bounded budget.
-3. (T3.2 / M5) Cogloop bridge task cancellation — fallback when
-   ``_llm_cancel_hook`` is None during the CR1 race window.
-4. Upstream LLM cancellation via the registered hook.
-5. Filler + self-feedback gate cleanup.
-6. Text-buffer cleanup (band-aid #15 final fix — pre-step-6 left
-   ``_text_buffer`` populated, leaking residue into the next turn).
+1.   Output queue flush (idempotent ``interrupt()``).
+1.5. Stream-drainer hand-off — cancel + briefly await the streaming
+     background playback drainer and clear
+     ``_speech_session_active`` so playback is genuinely silent
+     before the caller transitions to RECORDING.
+2.   In-flight TTS task cancellation under bounded budget.
+2.5. (T3.2 / M5) Cogloop bridge task cancellation — fallback when
+     ``_llm_cancel_hook`` is None during the CR1 race window.
+3.   Upstream LLM cancellation via the registered hook.
+4.   Filler + self-feedback gate cleanup.
+5.   Text-buffer cleanup (band-aid #15 final fix — pre-this-step the
+     chain left ``_text_buffer`` populated, leaking residue into the
+     next turn).
 
 A terminal :class:`BargeInInterruptionFrame` is recorded on the
 bounded ring buffer at chain exit so post-incident forensics can read
@@ -67,7 +75,7 @@ State the mixin reads/writes (initialised on the HOST in
   upstream LLM cancellation hook.
 * ``_self_feedback_gate`` — optional mic-ducking gate.
 * ``_output: AudioOutputQueue`` — read by step 1 of the chain.
-* ``_text_buffer: str`` — wiped by step 6 of the chain.
+* ``_text_buffer: str`` — wiped by step 5 of the chain.
 """
 
 from __future__ import annotations
@@ -332,27 +340,41 @@ class TtsCancelChainMixin:
         task.add_done_callback(self._in_flight_cogloop_tasks.discard)
 
     async def cancel_speech_chain(self, *, reason: str = "barge_in") -> None:
-        """Run the four-step transactional cancellation chain (T1).
+        """Run the transactional cancellation chain (T1).
 
-        Steps in order, each recorded with a ``"ok"`` / ``"failed"`` /
-        ``"timeout"`` verdict on the structured
-        ``voice.tts.cancellation_chain`` event:
+        Steps in order, each numbered step recorded with a ``"ok"`` /
+        ``"failed"`` / ``"timeout"`` verdict on the structured
+        ``voice.tts.cancellation_chain`` event (the step-1.5 hand-off
+        has no verdict of its own):
 
         1. **Output queue flush** — interrupt active playback so the
            user hears barge-in immediately. Synchronous + always
            succeeds (idempotent ``interrupt()``).
+        1.5. **Stream-drainer hand-off** — cancel + briefly await the
+           streaming background playback drainer (which observes the
+           step-1 interrupt at its next slice boundary) and clear
+           ``_speech_session_active`` so playback is genuinely silent
+           before the caller transitions to RECORDING.
         2. **In-flight TTS task cancellation** — every task in
            :attr:`_in_flight_tts_tasks` is cancelled and awaited with
            :data:`_CANCELLATION_TASK_TIMEOUT_S` budget. A wedged task
            that doesn't honour CancelledError within the budget is
            recorded as ``cancellation_timeout`` so operators can spot
            a buggy TTS backend.
+        2.5. **Cogloop bridge task cancellation** (T3.2 / M5) —
+           cancel + await every task in
+           :attr:`_in_flight_cogloop_tasks`; fallback that stops the
+           bridge when ``_llm_cancel_hook`` is None during the CR1
+           race window.
         3. **Upstream LLM cancellation** — the registered
            :attr:`_llm_cancel_hook` is awaited if present. Without
            this step, the LLM keeps producing tokens that flow into
            the next turn (the pre-T1 silent failure mode).
         4. **Filler + self-feedback gate cleanup** — cancel the
            pending filler task and release the mic-ducking gate.
+        5. **Text-buffer cleanup** — wipe ``_text_buffer``
+           unconditionally so a barged-in turn's streamed residue
+           never prepends onto the next turn's speech.
 
         The entire chain runs under :attr:`_cancellation_lock` so
         concurrent barge-ins serialise; the second acquirer observes
@@ -579,10 +601,10 @@ class TtsCancelChainMixin:
             # frame in the entire mission. Captures the T1 atomic
             # cancellation chain contract in one frozen object so
             # post-incident forensics can answer "what failed during
-            # the barge-in" without crawling 5 separate
+            # the barge-in" without crawling 6 separate
             # voice.tts.cancellation_step_failed log lines.
             #
-            # Recorded AT CHAIN EXIT with all 5 step verdicts populated.
+            # Recorded AT CHAIN EXIT with all 6 step verdicts populated.
             # The frame is recorded INSIDE the cancellation lock so
             # observers see a consistent (chain-complete, frame-emitted)
             # state — concurrent barge-ins serialise on the lock + each

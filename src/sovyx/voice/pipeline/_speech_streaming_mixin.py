@@ -11,6 +11,9 @@ the cognitive layer uses to deliver an LLM response to the user:
   drain the output queue, transition back to IDLE).
 * ``start_thinking`` — THINKING-state entry that arms the filler
   task (Jarvis Illusion §3 — fill the pre-LLM-token gap).
+* ``set_stream_segment_guard`` — wire/unwire the per-segment safety
+  guard the cognitive bridge registers so streamed sentence segments
+  are filtered BEFORE synthesis.
 * ``_emit_llm_full_response_end_frame`` — observability helper that
   pairs every THINKING-Start frame with a matching End frame on the
   bounded ring buffer (v0.32.3 Phase 3.B.1 — closes audit gap P0.B2).
@@ -57,6 +60,15 @@ State the mixin reads/writes (initialised on the HOST in
 * ``_config: VoicePipelineConfig`` — read for mind_id + fillers_enabled.
 * ``_llm_thinking_start_monotonic: float | None`` — THINKING-Start
   anchor for the End-frame elapsed_ms computation.
+* ``_speech_session_active: bool`` — turn-ownership flag so the
+  surface that opened the speech session (speak vs stream) is the
+  one that closes it / falls back to IDLE.
+* ``_stream_drain_task: asyncio.Task[None] | None`` — background
+  playback drainer so the first synthesized segment plays while the
+  LLM is still generating.
+* ``_stream_segment_guard: Callable[[str], str] | None`` — per-
+  segment safety hook (regex-tier output/PII guard) applied before
+  synthesis; fail-closed on guard errors.
 """
 
 from __future__ import annotations
