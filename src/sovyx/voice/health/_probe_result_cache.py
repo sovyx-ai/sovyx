@@ -18,10 +18,24 @@ Consulted by:
 1. :func:`sovyx.voice.health._cascade_verdict.select_alternative_endpoint`
    via the optional ``recent_probe_results`` parameter (§T2.2) — a
    candidate flagged via :meth:`is_known_unopenable` is excluded
-   from the failover selection set.
-2. The failover loop body's pre-dispatch skip-guard (§T2.4) — if
-   the cache short-circuits, emit ``voice.failover.candidate_skipped``
+   from the failover selection set. Wired from the runtime ladder's
+   ``_resolve_target_safe`` (``_runtime_failover.py``) since 2026-07-02
+   (HEALTH-3 — previously the parameter had no production caller).
+2. The failover loop body's pre-dispatch skip-guard (§T2.4) — the loop
+   consults the cache DIRECTLY (``lookup`` + ``is_known_unopenable``);
+   if the cache short-circuits, emit ``voice.failover.candidate_skipped``
    instead of the expensive open thrash.
+
+Key discipline (AP #53, HEALTH-3 2026-07-02): producer and consumer
+key by ONE shared derivation. The boot cascade produces planner
+host-API literals (``"WASAPI"`` / ``"DirectSound"``) and endpoint
+GUIDs, while the runtime failover consumer looks up PortAudio labels
+(``"Windows WASAPI"``) and ``DeviceEntry.canonical_name`` — so every
+cache method normalises the host-API half of its key via
+:func:`_normalize_host_api`, and the boot producer additionally
+records a twin entry keyed by the physical ``canonical_name`` (see
+``cascade/_executor_helpers.py`` ``_log_probe_result``) so runtime
+lookups by canonical name round-trip.
 
 Lifecycle decisions (ADR-D3, ADR-D5):
 
@@ -58,6 +72,30 @@ from sovyx.voice.health._failover_error_classifier import (
 )
 
 logger = get_logger(__name__)
+
+
+def _normalize_host_api(host_api: str) -> str:
+    """Collapse producer/consumer host-API spellings onto one key form.
+
+    AP #53 (HEALTH-3, 2026-07-02) — the boot-cascade producer keys with
+    planner literals (``"WASAPI"``, ``"DirectSound"``, ``"WDM-KS"``,
+    ``"CoreAudio"``) while the runtime-failover consumer keys with
+    PortAudio labels (``"Windows WASAPI"``, ``"Windows DirectSound"``,
+    ``"Core Audio"``). Both spellings MUST resolve to the same cache
+    key or boot-population is never consumable at failover time.
+
+    Normalisation: lowercase, strip all non-alphanumerics, then drop a
+    leading ``windows`` platform prefix (``"Windows WASAPI"`` →
+    ``"wasapi"``; ``"WDM-KS"`` → ``"wdmks"``; ``"Core Audio"`` and
+    ``"CoreAudio"`` → ``"coreaudio"``). Applied uniformly to every key
+    read/write inside :class:`ProbeResultCache`; entries keep their
+    verbatim ``host_api`` field for display surfaces (doctor CLI,
+    dashboard widget).
+    """
+    collapsed = "".join(ch for ch in host_api.lower() if ch.isalnum())
+    if collapsed.startswith("windows") and collapsed != "windows":
+        collapsed = collapsed.removeprefix("windows")
+    return collapsed
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,10 +215,8 @@ class ProbeResultCache:
             monotonic_ts=ts,
         )
 
-        if (
-            len(self._by_key) >= self._MAX_ENTRIES
-            and (normalized.endpoint_guid, normalized.host_api) not in self._by_key
-        ):
+        key = (normalized.endpoint_guid, _normalize_host_api(normalized.host_api))
+        if len(self._by_key) >= self._MAX_ENTRIES and key not in self._by_key:
             # Cardinality safeguard. Evict the oldest entry by ts.
             oldest_key = min(self._by_key, key=lambda k: self._by_key[k].monotonic_ts)
             evicted = self._by_key.pop(oldest_key)
@@ -191,7 +227,7 @@ class ProbeResultCache:
                 age_s=time.monotonic() - evicted.monotonic_ts,
             )
 
-        self._by_key[(normalized.endpoint_guid, normalized.host_api)] = normalized
+        self._by_key[key] = normalized
 
     def record_success(self, endpoint_guid: str, host_api: str) -> None:
         """Invalidate any stale dead-entry on successful open.
@@ -206,17 +242,22 @@ class ProbeResultCache:
         """
         if not endpoint_guid:
             return
-        self._by_key.pop((endpoint_guid, host_api), None)
+        self._by_key.pop((endpoint_guid, _normalize_host_api(host_api)), None)
 
     def lookup(
         self,
         endpoint_guid: str,
         host_api: str,
     ) -> ProbeResultEntry | None:
-        """Return the most recent entry for the key, or ``None``."""
+        """Return the most recent entry for the key, or ``None``.
+
+        ``host_api`` accepts either the planner literal or the PortAudio
+        label — both normalise onto the same key half via
+        :func:`_normalize_host_api`.
+        """
         if not endpoint_guid:
             return None
-        return self._by_key.get((endpoint_guid, host_api))
+        return self._by_key.get((endpoint_guid, _normalize_host_api(host_api)))
 
     def is_known_unopenable(
         self,

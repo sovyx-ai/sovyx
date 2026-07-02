@@ -224,10 +224,12 @@ def select_alternative_endpoint(
             (in addition to the explicit exclusion sets) if the
             cache says the candidate's last probe-or-open verdict is
             in the ``UNOPENABLE_*`` class. Default ``None`` preserves
-            pre-Mission-C3 behaviour for callers that don't yet
-            consult the cache. The failover loop body
-            (``_runtime_failover.py``, §T2.4) is the primary consumer;
-            the boot cascade does NOT pass the cache (boot is the
+            pre-Mission-C3 behaviour for callers that don't consult
+            the cache. Production caller: the runtime failover
+            ladder's ``_resolve_target_safe``
+            (``_runtime_failover.py``, wired 2026-07-02 per HEALTH-3 —
+            the parameter previously had no production caller). The
+            boot cascade does NOT pass the cache (boot is the
             POPULATION phase, not the consumption phase).
 
     Returns ``None`` when no viable alternative exists (every device

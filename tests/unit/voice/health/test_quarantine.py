@@ -787,3 +787,267 @@ class TestQuarantineSPropertyExposed:
         store = EndpointQuarantine(quarantine_s=60.0)
         with pytest.raises(AttributeError):
             store.quarantine_s = 30.0  # type: ignore[misc]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# HEALTH-1 (2026-07-02) — AP #54 clear-edge for the H3 composite-store
+# quarantine banner. Every quarantine-release path (explicit clear +
+# TTL expiry, eager and lazy) must clear the paired
+# ``axis="voice", reason="quarantine.<resolved_reason>"`` entry once no
+# live quarantine carries that reason.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _record_banner(reason_value: str) -> None:
+    """Simulate the capture_integrity coordinator's H3 record site."""
+    from sovyx.engine._degraded_store import (
+        DegradedEntry,
+        get_default_degraded_store,
+    )
+
+    get_default_degraded_store().record(
+        DegradedEntry(
+            axis="voice",
+            reason=f"quarantine.{reason_value}",
+            severity="warning",
+            title_token=f"degraded.voice.quarantine.{reason_value}.title",
+            body_token=f"degraded.voice.quarantine.{reason_value}.body",
+        ),
+    )
+
+
+def _banner_reasons() -> set[str]:
+    from sovyx.engine._degraded_store import get_default_degraded_store
+
+    return {e.reason for e in get_default_degraded_store().snapshot()}
+
+
+class TestDegradedBannerClearEdge:
+    """AP #54 — record-without-clear = stale banner (HEALTH-1)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_degraded_store(self) -> Generator[None, None, None]:
+        from sovyx.engine._degraded_store import reset_default_degraded_store
+
+        reset_default_degraded_store()
+        yield
+        reset_default_degraded_store()
+
+    def test_explicit_clear_removes_banner(self, store: EndpointQuarantine) -> None:
+        """Recheck-recovered / hotplug release path: quarantine →
+        banner present → ``clear()`` → banner GONE."""
+        store.add(
+            endpoint_guid="{AAA}",
+            derived_reason="apo_degraded",
+            resolved_reason="apo_degraded",
+        )
+        _record_banner("apo_degraded")
+        assert "quarantine.apo_degraded" in _banner_reasons()
+
+        assert store.clear("{AAA}", reason="recheck_recovered") is True
+
+        assert "quarantine.apo_degraded" not in _banner_reasons()
+
+    def test_ttl_expiry_purge_removes_banner(
+        self,
+        store: EndpointQuarantine,
+        clock: _FakeClock,
+    ) -> None:
+        """TTL release path via ``purge_expired``."""
+        store.add(
+            endpoint_guid="{AAA}",
+            derived_reason="driver_silent",
+            resolved_reason="driver_silent",
+        )
+        _record_banner("driver_silent")
+        assert "quarantine.driver_silent" in _banner_reasons()
+
+        clock.advance(61.0)
+        evicted = store.purge_expired()
+
+        assert len(evicted) == 1
+        assert "quarantine.driver_silent" not in _banner_reasons()
+
+    def test_ttl_lazy_expiry_removes_banner(
+        self,
+        store: EndpointQuarantine,
+        clock: _FakeClock,
+    ) -> None:
+        """TTL release path via the ``is_quarantined`` lazy purge."""
+        store.add(
+            endpoint_guid="{AAA}",
+            derived_reason="apo_degraded",
+            resolved_reason="apo_degraded",
+        )
+        _record_banner("apo_degraded")
+
+        clock.advance(61.0)
+        assert store.is_quarantined("{AAA}") is False
+
+        assert "quarantine.apo_degraded" not in _banner_reasons()
+
+    def test_banner_persists_while_same_reason_entry_live(
+        self,
+        store: EndpointQuarantine,
+    ) -> None:
+        """Two quarantined endpoints share a resolved reason — releasing
+        ONE must keep the banner; releasing BOTH clears it."""
+        store.add(
+            endpoint_guid="{AAA}",
+            derived_reason="apo_degraded",
+            resolved_reason="apo_degraded",
+        )
+        store.add(
+            endpoint_guid="{BBB}",
+            derived_reason="apo_degraded",
+            resolved_reason="apo_degraded",
+        )
+        _record_banner("apo_degraded")
+
+        store.clear("{AAA}", reason="recheck_recovered")
+        assert "quarantine.apo_degraded" in _banner_reasons()
+
+        store.clear("{BBB}", reason="recheck_recovered")
+        assert "quarantine.apo_degraded" not in _banner_reasons()
+
+    def test_lifecycle_readd_then_clear_removes_banner(
+        self,
+        store: EndpointQuarantine,
+    ) -> None:
+        """A watchdog-recheck re-add (reason=lifecycle tag, resolved
+        inherited) must still reconstruct the recorded reason on clear."""
+        store.add(
+            endpoint_guid="{AAA}",
+            derived_reason="kernel_invalidated",
+            resolved_reason="kernel_invalidated",
+        )
+        # h3-allowlist: lifecycle-tag (test replay of the rechecker re-add)
+        store.add(endpoint_guid="{AAA}", reason="watchdog_recheck")
+        _record_banner("kernel_invalidated")
+
+        store.clear("{AAA}", reason="recheck_recovered")
+
+        assert "quarantine.kernel_invalidated" not in _banner_reasons()
+
+    def test_clear_respects_composite_store_gate(
+        self,
+        store: EndpointQuarantine,
+    ) -> None:
+        """Gate off → the clear shim is a no-op (mirrors the record
+        site's ``quarantine_composite_store_emit_enabled`` gate)."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import sovyx.engine.config as engine_config
+
+        store.add(
+            endpoint_guid="{AAA}",
+            derived_reason="apo_degraded",
+            resolved_reason="apo_degraded",
+        )
+        _record_banner("apo_degraded")
+
+        with patch.object(
+            engine_config,
+            "VoiceTuningConfig",
+            return_value=SimpleNamespace(quarantine_composite_store_emit_enabled=False),
+        ):
+            store.clear("{AAA}", reason="recheck_recovered")
+
+        # Banner intentionally untouched when the composite-store
+        # surface is disabled.
+        assert "quarantine.apo_degraded" in _banner_reasons()
+
+    def test_degraded_store_failure_never_breaks_release_path(
+        self,
+        store: EndpointQuarantine,
+    ) -> None:
+        """The clear shim is best-effort — a raising store must not
+        break ``clear()`` (observability-only contract)."""
+        from unittest.mock import patch
+
+        import sovyx.engine._degraded_store as degraded_mod
+
+        store.add(
+            endpoint_guid="{AAA}",
+            derived_reason="apo_degraded",
+            resolved_reason="apo_degraded",
+        )
+
+        with patch.object(
+            degraded_mod,
+            "get_default_degraded_store",
+            side_effect=RuntimeError("store down"),
+        ):
+            assert store.clear("{AAA}", reason="recheck_recovered") is True
+
+        assert store.is_quarantined("{AAA}") is False
+
+
+# ─────────────────────────────────────────────────────────────────────
+# HEALTH-4 (2026-07-02) — the T6.17/T6.18 observability side-tables
+# must honor the module's anti-pattern #15 bounded-memory promise:
+# window-aged entries pruned + hard cap at ``maxsize``.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestTrackingTablesBounded:
+    """``_add_history`` + ``_recent_expiries`` are bounded (HEALTH-4)."""
+
+    def test_add_history_hard_capped_at_maxsize(
+        self,
+        store: EndpointQuarantine,
+    ) -> None:
+        """A flood of distinct GUIDs inside one window cannot grow
+        ``_add_history`` past ``maxsize`` (4 for this fixture)."""
+        for i in range(10):
+            store.add(endpoint_guid=f"{{GUID-{i}}}")
+        assert len(store._add_history) <= 4  # noqa: PLR2004
+
+    def test_add_history_pruned_after_pingpong_window(
+        self,
+        store: EndpointQuarantine,
+        clock: _FakeClock,
+    ) -> None:
+        """History whose newest add aged out of the ping-pong window
+        (300 s default) is dropped on the next add."""
+        store.add(endpoint_guid="{OLD}")
+        assert "{OLD}" in store._add_history
+
+        clock.advance(301.0)
+        store.add(endpoint_guid="{NEW}")
+
+        assert "{OLD}" not in store._add_history
+        assert "{NEW}" in store._add_history
+
+    def test_recent_expiries_pruned_after_rapid_window(
+        self,
+        store: EndpointQuarantine,
+        clock: _FakeClock,
+    ) -> None:
+        """An expiry record older than the rapid-requarantine window
+        (60 s default) can never fire the warning again — it is pruned
+        instead of leaking one float per GUID forever."""
+        store.add(endpoint_guid="{OLD}")
+        clock.advance(61.0)  # past the 60 s quarantine TTL
+        assert store.is_quarantined("{OLD}") is False
+        assert "{OLD}" in store._recent_expiries
+
+        clock.advance(61.0)  # past the rapid-requarantine window
+        store.add(endpoint_guid="{NEW}")
+
+        assert "{OLD}" not in store._recent_expiries
+
+    def test_recent_expiries_hard_capped_at_maxsize(
+        self,
+        store: EndpointQuarantine,
+        clock: _FakeClock,
+    ) -> None:
+        """Repeated expiry cycles cannot grow ``_recent_expiries`` past
+        ``maxsize`` even inside the rapid window."""
+        for cycle in range(3):
+            for i in range(4):
+                store.add(endpoint_guid=f"{{C{cycle}-{i}}}")
+            clock.advance(61.0)
+            store.purge_expired()
+        assert len(store._recent_expiries) <= 4  # noqa: PLR2004

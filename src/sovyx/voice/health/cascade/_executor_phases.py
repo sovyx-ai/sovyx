@@ -166,6 +166,7 @@ async def _run_phase_pinned(
         device_index=ctx.device_index,
         combo=pinned,
         result=result,
+        physical_device_id=ctx.physical_device_id,
     )
     ctx.attempts.append(result)
     ctx.attempts_count += 1
@@ -214,6 +215,7 @@ async def _run_phase_pinned(
         platform_key=ctx.platform_key,
         reason="probe_pinned",
         physical_device_id=ctx.physical_device_id,
+        diagnosis=result.diagnosis,
     ):
         logger.warning(
             "voice_cascade_physical_cure_required",
@@ -295,6 +297,7 @@ async def _run_phase_store(
         device_index=ctx.device_index,
         combo=store_combo,
         result=result,
+        physical_device_id=ctx.physical_device_id,
     )
     ctx.attempts.append(result)
     success = result.diagnosis is Diagnosis.HEALTHY
@@ -346,6 +349,7 @@ async def _run_phase_store(
         platform_key=ctx.platform_key,
         reason="probe_store",
         physical_device_id=ctx.physical_device_id,
+        diagnosis=result.diagnosis,
     ):
         if ctx.combo_store is not None:
             ctx.combo_store.invalidate(ctx.endpoint_guid, reason=result.diagnosis.value)
@@ -472,6 +476,7 @@ async def _run_phase_cascade_walk(
             device_index=ctx.device_index,
             combo=combo,
             result=result,
+            physical_device_id=ctx.physical_device_id,
         )
         ctx.attempts.append(result)
         record_cascade_attempt(
@@ -496,6 +501,7 @@ async def _run_phase_cascade_walk(
             platform_key=ctx.platform_key,
             reason="probe_cascade",
             physical_device_id=ctx.physical_device_id,
+            diagnosis=result.diagnosis,
         ):
             logger.warning(
                 "voice_cascade_physical_cure_required",

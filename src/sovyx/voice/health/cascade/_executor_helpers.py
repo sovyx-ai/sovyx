@@ -173,16 +173,29 @@ def _log_probe_result(
     device_index: int,
     combo: Combo,
     result: ProbeResult,
+    physical_device_id: str = "",
 ) -> None:
     """Emit ``voice_cascade_probe_result`` after every probe invocation (T1).
 
     Mission C3 §T2.4 — also writes the result into the process-local
-    :class:`ProbeResultCache` so the runtime failover ladder body can
-    consult it (via ``select_alternative_endpoint(recent_probe_results=...)``)
-    to skip candidates that probed dead at boot without paying the
-    open-thrash per skipped device. The cache write is best-effort —
-    a failure here MUST NOT block the probe-result logging path
-    (which is the historically-load-bearing observability surface).
+    :class:`ProbeResultCache` so the runtime failover ladder can consult
+    it (the loop body's direct pre-dispatch skip-guard AND the candidate
+    selector via ``select_alternative_endpoint(recent_probe_results=...)``,
+    wired from ``_resolve_target_safe``) to skip candidates that probed
+    dead at boot without paying the open-thrash per skipped device.
+
+    AP #53 (HEALTH-3, 2026-07-02): the runtime consumer keys its lookup
+    by ``DeviceEntry.canonical_name``, not the endpoint GUID — so when
+    the caller supplies ``physical_device_id`` (the canonical name, same
+    identity the quarantine stores) a TWIN cache entry is recorded under
+    it. The host-API half of the key is normalised inside the cache
+    (:func:`~sovyx.voice.health._probe_result_cache._normalize_host_api`),
+    so the planner literal recorded here matches the PortAudio label the
+    consumer passes.
+
+    The cache write is best-effort — a failure here MUST NOT block the
+    probe-result logging path (which is the historically-load-bearing
+    observability surface).
     """
     logger.info(
         "voice_cascade_probe_result",
@@ -213,17 +226,20 @@ def _log_probe_result(
         )
 
         cache = get_default_probe_result_cache()
-        cache.record_probe(
-            ProbeResultEntry(
-                endpoint_guid=endpoint_guid,
-                host_api=combo.host_api or "",
-                verdict=str(result.diagnosis),
-                error_code="",  # boot cascade probe doesn't surface PA codes
-                error_detail=result.error or "",
-                callbacks_fired=result.callbacks_fired,
-                rms_db=result.rms_db,
-            ),
-        )
+        for cache_key_guid in {endpoint_guid, physical_device_id}:
+            if not cache_key_guid:
+                continue
+            cache.record_probe(
+                ProbeResultEntry(
+                    endpoint_guid=cache_key_guid,
+                    host_api=combo.host_api or "",
+                    verdict=str(result.diagnosis),
+                    error_code="",  # boot cascade probe doesn't surface PA codes
+                    error_detail=result.error or "",
+                    callbacks_fired=result.callbacks_fired,
+                    rms_db=result.rms_db,
+                ),
+            )
 
 
 __all__ = [

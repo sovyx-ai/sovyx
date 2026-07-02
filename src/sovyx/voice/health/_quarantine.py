@@ -14,7 +14,20 @@ This module provides a small in-memory quarantine store:
 * **Bounded** — an :class:`~sovyx.engine._lock_dict.LRULockDict`-style
   cap (default 64, matching ``cascade_lifecycle_lock_max``) so a
   pathological flood of endpoint GUIDs cannot leak memory over a
-  long-lived daemon (anti-pattern #15).
+  long-lived daemon (anti-pattern #15). The T6.17/T6.18 observability
+  side-tables (``_add_history`` / ``_recent_expiries``) share the same
+  promise via :meth:`EndpointQuarantine._prune_tracking` — window-aged
+  entries are dropped and both dicts are hard-capped at ``maxsize``.
+* **Banner-clearing (AP #54)** — the Mission H3 composite-store entry
+  recorded at quarantine time (``axis="voice"``,
+  ``reason="quarantine.<resolved_reason>"`` — producer at
+  ``capture_integrity.py`` ``_quarantine_endpoint``) is best-effort
+  cleared by :meth:`EndpointQuarantine._clear_degraded_banner` on
+  EVERY release path — explicit :meth:`EndpointQuarantine.clear`
+  (watchdog APO recheck, kernel-invalidated recheck, hotplug clear)
+  AND TTL expiry (eager + lazy purges). Centralising the clear-edge
+  in the store means every current and future release path shares
+  one paired HEALTHY edge instead of four duplicated shims.
 * **Timestamp-gated** — each entry expires after
   :attr:`VoiceTuningConfig.kernel_invalidated_quarantine_s`. On expiry
   the entry is evicted on next lookup; the watchdog L4 recheck loop
@@ -94,12 +107,17 @@ class QuarantineEntry:
         expires_at_monotonic: Monotonic deadline. Entries past this are
             evicted lazily on lookup.
         reason: Short tag describing the trigger — ``"probe_pinned"`` /
-            ``"probe_store"`` / ``"probe_cascade"`` (normal cascade
-            path), ``"watchdog_recheck"`` (periodic retry still failing),
-            ``"factory_integration"`` (boot-time cascade),
+            ``"probe_store"`` / ``"probe_cascade"`` (cascade path,
+            including the boot-time factory-integration cascade, which
+            routes through the same ``cascade/_budget.py``
+            ``_quarantine_endpoint`` centraliser),
+            ``"watchdog_recheck"`` (periodic retry still failing),
             ``"apo_degraded"`` (runtime :class:`CaptureIntegrityCoordinator`
             exhausted every :class:`PlatformBypassStrategy` candidate).
-            Stable across minor versions so dashboards can key on it.
+            ``"factory_integration"`` remains in the Gate 14 lifecycle
+            allowlist for backward compatibility but has no producer at
+            HEAD. Stable across minor versions so dashboards can key
+            on it.
     """
 
     endpoint_guid: str
@@ -361,9 +379,11 @@ class EndpointQuarantine:
         # within ``pingpong_window_s``; emit
         # ``voice_quarantine_re_quarantine_event`` when the count meets
         # ``pingpong_threshold``. Pure observability — never gates the
-        # add. The history dict's lifetime is bounded by ``maxsize``
-        # (cleaned alongside ``_entries`` capacity eviction below) +
-        # natural window-trim turnover.
+        # add. The history dict is bounded by :meth:`_prune_tracking`
+        # (invoked below): keys whose newest timestamp aged out of the
+        # ping-pong window are dropped and the dict is hard-capped at
+        # ``maxsize``, mirroring the ``_entries`` eviction strategy
+        # (anti-pattern #15).
         history = self._add_history.setdefault(endpoint_guid, [])
         history.append(now)
         cutoff = now - self._pingpong_window_s
@@ -391,7 +411,96 @@ class EndpointQuarantine:
                     "for kernel-side errors, consider hardware replacement."
                 ),
             )
+        self._prune_tracking(now)
         return entry
+
+    def _prune_tracking(self, now: float) -> None:
+        """Bound the T6.17/T6.18 observability side-tables (anti-pattern #15).
+
+        ``_add_history`` keys whose newest ``add()`` timestamp fell out
+        of the ping-pong window and ``_recent_expiries`` values older
+        than the rapid-requarantine window can no longer influence any
+        detection — drop them. A hard cap of ``maxsize`` entries per
+        table (mirroring the ``_entries`` capacity-eviction strategy)
+        guards against a pathological flood of distinct GUIDs inside a
+        single window. Called from :meth:`add`, :meth:`purge_expired`,
+        and :meth:`snapshot` so both tables turn over at the same
+        cadence as the store itself.
+        """
+        history_cutoff = now - self._pingpong_window_s
+        for guid in [
+            g
+            for g, stamps in self._add_history.items()
+            if not stamps or stamps[-1] < history_cutoff
+        ]:
+            del self._add_history[guid]
+        while len(self._add_history) > self._maxsize:
+            oldest = min(self._add_history, key=lambda g: self._add_history[g][-1])
+            del self._add_history[oldest]
+        expiry_cutoff = now - self._rapid_requarantine_window_s
+        for guid in [g for g, ts in self._recent_expiries.items() if ts < expiry_cutoff]:
+            del self._recent_expiries[guid]
+        while len(self._recent_expiries) > self._maxsize:
+            oldest = min(self._recent_expiries, key=lambda g: self._recent_expiries[g])
+            del self._recent_expiries[oldest]
+
+    def _clear_degraded_banner(self, entry: QuarantineEntry) -> None:
+        """Best-effort AP #54 clear-edge for the H3 quarantine banner.
+
+        The runtime coordinator's quarantine producer
+        (``capture_integrity.py`` ``_quarantine_endpoint``) records a
+        composite-store :class:`~sovyx.engine._degraded_store.DegradedEntry`
+        with ``axis="voice"`` and ``reason="quarantine.<resolved_reason>"``.
+        Without a paired clear, the operator banner outlives the
+        quarantine (stale banner — CLAUDE.md anti-pattern #54). Every
+        release path funnels through this store (explicit
+        :meth:`clear` + TTL expiry), so the clear-edge lives HERE, once.
+
+        Semantics:
+
+        * The recorded reason is reconstructed from the entry's
+          field-chain candidates (``resolved_reason`` / ``derived_reason``
+          / ``reason``) — the record site keys on ``resolved_reason``,
+          so coordinator entries reconstruct exactly; lifecycle-tag
+          candidates clear as harmless no-ops.
+        * A reason still carried by ANOTHER live entry is NOT cleared —
+          the banner must persist while any same-reason quarantine
+          remains.
+        * Gated by the same tuning knob as the record site
+          (``quarantine_composite_store_emit_enabled``) and wrapped in
+          the same try/except-debug shim — the degraded store is
+          observability-only and MUST NOT break the release path.
+        """
+        candidates = {r for r in (entry.resolved_reason, entry.derived_reason, entry.reason) if r}
+        if not candidates:
+            return
+        try:
+            from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
+
+            if not getattr(_VoiceTuning(), "quarantine_composite_store_emit_enabled", True):
+                return
+            still_live: set[str] = set()
+            for other in self._entries.values():
+                still_live.update(
+                    r for r in (other.resolved_reason, other.derived_reason, other.reason) if r
+                )
+            from sovyx.engine._degraded_store import get_default_degraded_store
+
+            store = get_default_degraded_store()
+            for reason_value in sorted(candidates - still_live):
+                if store.clear_reason(f"quarantine.{reason_value}"):
+                    logger.info(
+                        "voice_quarantine_degraded_banner_cleared",
+                        endpoint=entry.endpoint_guid,
+                        friendly_name=entry.device_friendly_name,
+                        reason=f"quarantine.{reason_value}",
+                    )
+        except Exception:  # noqa: BLE001 — observability only
+            logger.debug(
+                "h3_degraded_store_clear_failed",
+                axis="voice",
+                endpoint=entry.endpoint_guid,
+            )
 
     def clear(self, endpoint_guid: str, *, reason: str = "") -> bool:
         """Remove ``endpoint_guid`` from quarantine.
@@ -410,6 +519,11 @@ class EndpointQuarantine:
             friendly_name=entry.device_friendly_name,
             reason=reason or "explicit",
         )
+        # AP #54 — paired clear-edge for the H3 composite-store banner.
+        # Covers the watchdog APO recheck (``apo_recheck_recovered``),
+        # kernel-invalidated recheck (``recheck_recovered``), and
+        # hotplug (``hotplug_clear``) release paths in one site.
+        self._clear_degraded_banner(entry)
         return True
 
     def purge_expired(self) -> list[QuarantineEntry]:
@@ -434,6 +548,9 @@ class EndpointQuarantine:
                     friendly_name=entry.device_friendly_name,
                     age_s=now - entry.added_at_monotonic,
                 )
+                # AP #54 — TTL expiry is a release path too.
+                self._clear_degraded_banner(entry)
+        self._prune_tracking(now)
         return evicted
 
     # ── Queries ─────────────────────────────────────────────────────────
@@ -458,6 +575,8 @@ class EndpointQuarantine:
                 endpoint=endpoint_guid,
                 friendly_name=entry.device_friendly_name,
             )
+            # AP #54 — lazy TTL expiry is a release path too.
+            self._clear_degraded_banner(entry)
             return False
         return True
 
@@ -504,6 +623,8 @@ class EndpointQuarantine:
                     endpoint=guid,
                     friendly_name=evicted.device_friendly_name,
                 )
+                # AP #54 — lazy TTL expiry is a release path too.
+                self._clear_degraded_banner(evicted)
         return match
 
     def get(self, endpoint_guid: str) -> QuarantineEntry | None:
@@ -519,6 +640,8 @@ class EndpointQuarantine:
             self._entries.pop(endpoint_guid, None)
             # T6.18 — track the expiry for rapid-requarantine detection.
             self._recent_expiries[endpoint_guid] = now
+            # AP #54 — lazy TTL expiry is a release path too.
+            self._clear_degraded_banner(entry)
             return None
         return entry
 
@@ -535,9 +658,13 @@ class EndpointQuarantine:
         # Purge anything that didn't make the cut so the store doesn't
         # drift from the snapshot.
         for guid in [g for g, e in list(self._entries.items()) if e.expires_at_monotonic <= now]:
-            self._entries.pop(guid, None)
+            expired = self._entries.pop(guid, None)
             # T6.18 — track the expiry for rapid-requarantine detection.
             self._recent_expiries[guid] = now
+            if expired is not None:
+                # AP #54 — lazy TTL expiry is a release path too.
+                self._clear_degraded_banner(expired)
+        self._prune_tracking(now)
         return live
 
     def __len__(self) -> int:

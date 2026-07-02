@@ -1536,3 +1536,180 @@ class TestRuntimeFailoverFrameLossWindow:
         assert summary == []
 
         reset_default_probe_result_cache()
+
+
+class TestCacheSkipsDoNotConsumeAttemptCap:
+    """HEALTH-5 (2026-07-02) — AP #41 stranding regression.
+
+    Probe-cache SKIPS must not consume the per-ladder attempt cap:
+    with the pre-fix accounting (``iteration_index += 1`` on skip
+    bounded the loop), a cap-sized set of cached-unopenable candidates
+    ranked ahead of a viable one starved it for the entire boot (the
+    cache has no TTL and ``record_success`` only fires on a dispatch
+    success that never happens).
+    """
+
+    @pytest.mark.asyncio()
+    async def test_cap_sized_skip_set_does_not_starve_viable_candidate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """cap=2, THREE cache-flagged dead candidates ranked first,
+        then a viable one → the viable candidate IS dispatched."""
+        from sovyx.voice.health._probe_result_cache import (
+            ProbeResultEntry,
+            get_default_probe_result_cache,
+            reset_default_probe_result_cache,
+        )
+
+        reset_default_probe_result_cache()
+        cache = get_default_probe_result_cache()
+
+        captured = _capture_logs(monkeypatch)
+        capture_task = _make_capture_task()
+        pipeline = _make_pipeline()
+        tuning = VoiceTuningConfig(
+            runtime_failover_on_quarantine_enabled=True,
+            failover_intra_ladder_cooldown_s=0.0,
+            failover_candidate_max_attempts_per_ladder=2,
+        )
+        state = RuntimeFailoverState()
+
+        dead = [
+            _make_target_entry(index=i, name=f"dead_{i}", canonical_name=f"dead-{i}-canonical")
+            for i in (3, 4, 5)
+        ]
+        good = _make_target_entry(index=7, name="dev_good", canonical_name="good-canonical")
+        for candidate in dead:
+            cache.record_probe(
+                ProbeResultEntry(
+                    endpoint_guid=candidate.canonical_name,
+                    host_api="ALSA",
+                    verdict="NO_SIGNAL",
+                ),
+            )
+
+        success_result = DeviceChangeRestartResult(
+            verdict=DeviceChangeRestartVerdict.DEVICE_CHANGED_SUCCESS,
+            engaged=True,
+            target_device_index=7,
+            target_host_api="ALSA",
+            new_endpoint_guid="g",
+        )
+        capture_task.request_device_change_restart = AsyncMock(return_value=success_result)
+
+        resolve_side_effect = [
+            (dead[0], 4, None),  # pre-loop
+            (dead[1], 3, None),  # skip 1 → must NOT consume the cap
+            (dead[2], 2, None),  # skip 2 → must NOT consume the cap
+            (good, 1, None),  # viable — MUST still be dispatched
+        ]
+        with patch.object(
+            failover_mod,
+            "_resolve_target_safe",
+            side_effect=resolve_side_effect,
+        ):
+            await _try_runtime_failover(
+                capture_task=capture_task,
+                pipeline=pipeline,
+                tuning=tuning,
+                state=state,
+            )
+
+        # The viable candidate was dispatched despite 3 (> cap=2) skips.
+        assert capture_task.request_device_change_restart.await_count == 1
+        dispatched = capture_task.request_device_change_restart.call_args.args[0]
+        assert dispatched is good
+
+        skipped = [kwargs for evt, kwargs in captured if evt == "voice.failover.candidate_skipped"]
+        assert len(skipped) == 3  # noqa: PLR2004
+
+        ladder_complete = [
+            kwargs for evt, kwargs in captured if evt == "voice.failover.ladder_complete"
+        ]
+        assert len(ladder_complete) == 1
+        assert ladder_complete[0]["voice.verdict"] == "succeeded"
+        assert ladder_complete[0]["voice.candidates_tried"] == 1
+        assert ladder_complete[0]["voice.skipped_count"] == 3  # noqa: PLR2004
+
+        reset_default_probe_result_cache()
+
+    @pytest.mark.asyncio()
+    async def test_cap_still_bounds_dispatches(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The cap still hard-bounds DISPATCHED attempts: skips are
+        free, dispatches are not (cap=1 → one failing dispatch ends
+        the ladder even with more candidates available)."""
+        from sovyx.voice.health._probe_result_cache import (
+            ProbeResultEntry,
+            get_default_probe_result_cache,
+            reset_default_probe_result_cache,
+        )
+
+        reset_default_probe_result_cache()
+        cache = get_default_probe_result_cache()
+
+        captured = _capture_logs(monkeypatch)
+        capture_task = _make_capture_task()
+        pipeline = _make_pipeline()
+        tuning = VoiceTuningConfig(
+            runtime_failover_on_quarantine_enabled=True,
+            failover_intra_ladder_cooldown_s=0.0,
+            failover_candidate_max_attempts_per_ladder=1,
+        )
+        state = RuntimeFailoverState()
+
+        skipped_candidate = _make_target_entry(
+            index=3,
+            name="dead_3",
+            canonical_name="dead-3-canonical",
+        )
+        cache.record_probe(
+            ProbeResultEntry(
+                endpoint_guid="dead-3-canonical",
+                host_api="ALSA",
+                verdict="NO_SIGNAL",
+            ),
+        )
+        first_dispatch = _make_target_entry(index=4, name="dev_4", canonical_name="d-4-canonical")
+        never_reached = _make_target_entry(index=5, name="dev_5", canonical_name="d-5-canonical")
+
+        failed_result = DeviceChangeRestartResult(
+            verdict=DeviceChangeRestartVerdict.OPEN_FAILED_NO_STREAM,
+            engaged=False,
+            target_device_index=4,
+            target_host_api="ALSA",
+            new_endpoint_guid="g",
+        )
+        capture_task.request_device_change_restart = AsyncMock(return_value=failed_result)
+
+        resolve_side_effect = [
+            (skipped_candidate, 3, None),
+            (first_dispatch, 2, None),
+            (never_reached, 1, None),
+        ]
+        with patch.object(
+            failover_mod,
+            "_resolve_target_safe",
+            side_effect=resolve_side_effect,
+        ):
+            await _try_runtime_failover(
+                capture_task=capture_task,
+                pipeline=pipeline,
+                tuning=tuning,
+                state=state,
+            )
+
+        # Exactly ONE dispatch (the cap), for the non-skipped candidate.
+        assert capture_task.request_device_change_restart.await_count == 1
+        ladder_complete = [
+            kwargs for evt, kwargs in captured if evt == "voice.failover.ladder_complete"
+        ]
+        assert len(ladder_complete) == 1
+        assert ladder_complete[0]["voice.verdict"] == "exhausted"
+        assert ladder_complete[0]["voice.candidates_tried"] == 1
+        assert ladder_complete[0]["voice.skipped_count"] == 1
+
+        reset_default_probe_result_cache()

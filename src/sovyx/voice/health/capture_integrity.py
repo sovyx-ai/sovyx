@@ -1331,11 +1331,26 @@ class CaptureIntegrityCoordinator:
 
                 _h3_now = now_monotonic()
                 _h3_reason_namespace = f"quarantine.{resolved_reason_value}"
+                # AP #54 — the paired clear-edge for this record lives in
+                # :meth:`EndpointQuarantine._clear_degraded_banner`
+                # (``_quarantine.py``): every quarantine-release path
+                # (APO/kernel recheck recovery, hotplug clear, TTL
+                # expiry) clears ``quarantine.<resolved_reason>`` once no
+                # live entry carries that reason.
                 # Severity escalation per ADR-D6: CAPTURE_DEAD and
                 # KERNEL_INVALIDATED are physical-cure terminal verdicts
                 # (substrate fully silent / kernel-wedge) → "error".
                 # APO_DEGRADED / VAD_FRONTEND_DEAD / FORMAT_MISMATCH /
                 # DRIVER_SILENT remain operator-actionable warnings.
+                # NOTE (2026-07-02 HEALTH-2): the "error" arm is
+                # currently unreachable AT THIS SITE —
+                # ``resolve_reason_from_verdict`` above only returns the
+                # four coordinator-layer reasons, and the cascade-layer
+                # producer (``cascade/_budget.py``, which DOES resolve
+                # CAPTURE_DEAD / KERNEL_INVALIDATED since the AP #70
+                # wire-up) does not record composite-store entries.
+                # Kept deliberately: it becomes load-bearing the moment
+                # a CAPTURE_DEAD-class value reaches this record path.
                 _h3_severity = (
                     "error"
                     if resolved_reason_enum

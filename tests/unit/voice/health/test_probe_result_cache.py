@@ -273,3 +273,143 @@ class TestSingleton:
     def test_singleton_starts_empty(self) -> None:
         cache = get_default_probe_result_cache()
         assert len(cache) == 0
+
+
+# ─────────────────────────────────────────────────────────────────────
+# HEALTH-3 (2026-07-02) — AP #53 key discipline. The boot-cascade
+# producer keys with planner literals ("WASAPI") + endpoint GUIDs; the
+# runtime-failover consumer keys with PortAudio labels
+# ("Windows WASAPI") + ``DeviceEntry.canonical_name``. Producer and
+# consumer must round-trip through ONE shared key derivation.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestHostApiKeyNormalization:
+    """Planner literals and PortAudio labels hit the same key."""
+
+    @pytest.mark.parametrize(
+        ("producer_label", "consumer_label"),
+        [
+            ("WASAPI", "Windows WASAPI"),
+            ("DirectSound", "Windows DirectSound"),
+            ("WDM-KS", "Windows WDM-KS"),
+            ("MME", "MME"),
+            ("ALSA", "ALSA"),
+            ("CoreAudio", "Core Audio"),
+        ],
+    )
+    def test_record_planner_lookup_portaudio(
+        self,
+        producer_label: str,
+        consumer_label: str,
+    ) -> None:
+        cache = ProbeResultCache()
+        cache.record_probe(
+            _entry("dev_a", host_api=producer_label, verdict="NO_SIGNAL"),
+        )
+        assert cache.lookup("dev_a", consumer_label) is not None
+        assert cache.is_known_unopenable("dev_a", consumer_label) is True
+
+    def test_record_success_crosses_spellings(self) -> None:
+        """ADR-D5 invalidation must clear an entry recorded under the
+        planner spelling when the success reports the PortAudio label."""
+        cache = ProbeResultCache()
+        cache.record_probe(_entry("dev_a", host_api="WASAPI", verdict="NO_SIGNAL"))
+        cache.record_success("dev_a", "Windows WASAPI")
+        assert cache.lookup("dev_a", "WASAPI") is None
+
+    def test_entry_keeps_verbatim_host_api_for_display(self) -> None:
+        """Only the KEY is normalised — the entry's ``host_api`` field
+        stays verbatim for the doctor CLI / dashboard widget."""
+        cache = ProbeResultCache()
+        cache.record_probe(_entry("dev_a", host_api="Windows WASAPI"))
+        entry = cache.lookup("dev_a", "WASAPI")
+        assert entry is not None
+        assert entry.host_api == "Windows WASAPI"
+
+
+class TestBootProducerRoundTrip:
+    """Boot-cascade population is consumable through the runtime
+    failover ladder's exact lookup keys (canonical_name + PortAudio
+    host-API label)."""
+
+    def test_log_probe_result_round_trips_to_ladder_keys(self) -> None:
+        from sovyx.voice.health import Combo, Diagnosis, ProbeMode, ProbeResult
+        from sovyx.voice.health.cascade._executor_helpers import _log_probe_result
+
+        combo = Combo(
+            host_api="WASAPI",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=True,
+            frames_per_buffer=480,
+            platform_key="win32",
+        )
+        result = ProbeResult(
+            diagnosis=Diagnosis.NO_SIGNAL,
+            mode=ProbeMode.COLD,
+            combo=combo,
+            vad_max_prob=None,
+            vad_mean_prob=None,
+            rms_db=-90.0,
+            callbacks_fired=0,
+            duration_ms=200,
+            error=None,
+        )
+
+        _log_probe_result(
+            endpoint_guid="{surrogate-razer-wasapi}",
+            attempt=0,
+            device_index=4,
+            combo=combo,
+            result=result,
+            physical_device_id="razer blackshark v2 pro",
+        )
+
+        cache = get_default_probe_result_cache()
+        # Consumer key form 1: the ladder loop body keys by
+        # DeviceEntry.canonical_name + PortAudio host-API label.
+        assert cache.is_known_unopenable("razer blackshark v2 pro", "Windows WASAPI") is True
+        # Consumer key form 2: select_alternative_endpoint keys by the
+        # derived endpoint GUID.
+        assert cache.is_known_unopenable("{surrogate-razer-wasapi}", "Windows WASAPI") is True
+
+    def test_log_probe_result_without_physical_id_records_guid_only(self) -> None:
+        from sovyx.voice.health import Combo, Diagnosis, ProbeMode, ProbeResult
+        from sovyx.voice.health.cascade._executor_helpers import _log_probe_result
+
+        combo = Combo(
+            host_api="ALSA",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=True,
+            frames_per_buffer=480,
+            platform_key="linux",
+        )
+        result = ProbeResult(
+            diagnosis=Diagnosis.NO_SIGNAL,
+            mode=ProbeMode.COLD,
+            combo=combo,
+            vad_max_prob=None,
+            vad_mean_prob=None,
+            rms_db=-90.0,
+            callbacks_fired=0,
+            duration_ms=200,
+            error=None,
+        )
+
+        _log_probe_result(
+            endpoint_guid="{linux-usb-mic}",
+            attempt=0,
+            device_index=1,
+            combo=combo,
+            result=result,
+        )
+
+        cache = get_default_probe_result_cache()
+        assert cache.is_known_unopenable("{linux-usb-mic}", "ALSA") is True
+        assert len(cache) == 1

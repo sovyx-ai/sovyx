@@ -12,10 +12,16 @@ It replaces (post-STRICT) the legacy literal-default in
 ``capture_integrity.py`` ``_DEFAULT_QUARANTINE_REASON = "apo_degraded"``
 plus the legacy 4-entry ``_VERDICT_TO_QUARANTINE_REASON`` dict and adds
 the new :attr:`QuarantineReason.CAPTURE_DEAD` /
-:attr:`~QuarantineReason.UNCLASSIFIED` reason values that the cascade-
-layer producer (``_kernel_invalidated_recheck`` /
-``factory_integration``) consumes via
-:func:`resolve_reason_from_diagnosis`.
+:attr:`~QuarantineReason.UNCLASSIFIED` reason values. Producers:
+the coordinator layer (``capture_integrity.py`` ``_quarantine_endpoint``)
+resolves via :func:`resolve_reason_from_verdict`; the cascade layer
+(``cascade/_budget.py`` ``_quarantine_endpoint``, wired 2026-07-02 —
+previously an AP #70 observe-only gap) resolves the terminal
+:class:`Diagnosis` via :func:`resolve_reason_from_diagnosis`, which is
+what makes ``CAPTURE_DEAD`` producible. Downstream consumers read the
+resolved value through :func:`is_recheck_eligible` /
+:func:`is_apo_class_reason` (``_kernel_invalidated_recheck`` filter +
+watchdog APO recheck filter).
 
 Anti-pattern compliance:
 
@@ -162,8 +168,11 @@ compat replay of historical events.
 
 
 # Lifecycle-tag literals — NOT terminal verdict classifications. Used by
-# the watchdog re-add path + factory-integration boot-time cascade. Gate
-# 14 allowlists these as the ``reason=`` value when accompanied by an
+# the watchdog re-add path + the cascade ``probe_*`` centraliser (which
+# also serves the boot-time factory-integration cascade;
+# ``"factory_integration"`` itself has no producer at HEAD and is kept
+# for backward compatibility). Gate 14 allowlists these as the
+# ``reason=`` value when accompanied by an
 # ``# h3-allowlist: lifecycle-tag`` inline comment.
 _LIFECYCLE_TAGS: Final[frozenset[str]] = frozenset(
     {

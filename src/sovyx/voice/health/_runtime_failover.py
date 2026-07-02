@@ -31,7 +31,10 @@ within a single closure invocation, with a per-candidate intra-ladder
 cooldown (:attr:`VoiceTuningConfig.failover_intra_ladder_cooldown_s`,
 default 2.0 s) gating successive dispatches and a per-ladder cap
 (:attr:`VoiceTuningConfig.failover_candidate_max_attempts_per_ladder`,
-default 5) bounding runaway iteration. The outer
+default 5) bounding DISPATCHED attempts — probe-cache skips do NOT
+consume the cap (AP #41 / HEALTH-5 2026-07-02: counting skips let a
+cap-sized set of cached-unopenable candidates starve a viable one for
+the whole boot). The outer
 :attr:`VoiceTuningConfig.failover_cooldown_s` is RE-INTERPRETED as
 the inter-invocation gate (it still gates the *outer* deaf-signal
 closure invocation) — the docstring + mission §T1.1 ADR-D2 document
@@ -85,7 +88,7 @@ in Phase 1 LENIENT):
     - ``voice.failover.ladder_complete`` — fires exactly once per
       ladder invocation that entered the loop body; carries
       ``verdict (succeeded | exhausted), succeeded_index | null,
-      candidates_tried, elapsed_ms, ladder_id``.
+      candidates_tried, skipped_count, elapsed_ms, ladder_id``.
 
 Forensic anchor (Mission C3):
 ``c:\\Users\\guipe\\Downloads\\docs_teste.txt`` lines 1015 → 1063 —
@@ -497,7 +500,19 @@ async def _try_runtime_failover(
         per_ladder_cap = max(1, tuning.failover_candidate_max_attempts_per_ladder)
         current_target: DeviceEntry | None = target
         iteration_index = 0
-        while iteration_index < per_ladder_cap:
+        skipped_count = 0
+        # AP #41 (HEALTH-5, 2026-07-02) — the cap bounds DISPATCHES
+        # (``candidates_tried``), not loop iterations. Probe-cache skips
+        # are free: counting them against the attempt cap let >= cap
+        # cached-unopenable candidates starve a viable candidate for the
+        # entire boot (the cache has no TTL and ``record_success`` only
+        # fires on a dispatch success that never happens). Termination
+        # without the iteration bound is guaranteed: every skip adds a
+        # non-empty ``target_key`` to the exclusion set (the skip branch
+        # requires a cache hit, and the cache never matches an empty
+        # GUID), so the resolver either exhausts (``None`` → break) or
+        # repeats a candidate (defensive duplicate-guard → break).
+        while candidates_tried < per_ladder_cap:
             # On iterations >0, re-resolve via the exclusion set. On
             # iteration 0 we use the pre-loop ``target`` from step 5.
             if iteration_index > 0:
@@ -578,6 +593,7 @@ async def _try_runtime_failover(
                 if target_key:
                     attempted_in_this_ladder.add(target_key)
                     candidates_unreachable.append(target_key)
+                skipped_count += 1
                 iteration_index += 1
                 continue
 
@@ -810,6 +826,7 @@ async def _try_runtime_failover(
                         "voice.verdict": "succeeded",
                         "voice.succeeded_index": succeeded_index,
                         "voice.candidates_tried": candidates_tried,
+                        "voice.skipped_count": skipped_count,
                         "voice.elapsed_ms": elapsed_total_ms,
                         "voice.mind_id": mind_id,
                     },
@@ -969,6 +986,7 @@ async def _try_runtime_failover(
                 "voice.verdict": "exhausted",
                 "voice.succeeded_index": None,
                 "voice.candidates_tried": candidates_tried,
+                "voice.skipped_count": skipped_count,
                 "voice.elapsed_ms": elapsed_total_ms_exhausted,
                 "voice.mind_id": mind_id,
             },
@@ -1314,6 +1332,14 @@ def _resolve_target_safe(
             exclude_endpoint_guids=excluded_guids,
             exclude_physical_device_ids=excluded_physical,
             quarantine=quarantine,
+            # Mission C3 §T2.2 / HEALTH-3 (2026-07-02) — consult the
+            # probe-result cache at SELECTION time so candidates that
+            # probed dead at boot (or failed a prior dispatch) are never
+            # offered to the ladder. This is the documented consumption
+            # path for the boot-cascade population; the loop body's
+            # direct skip-guard stays as belt-and-suspenders for entries
+            # recorded between selection and dispatch.
+            recent_probe_results=get_default_probe_result_cache(),
         )
     except Exception as exc:  # noqa: BLE001
         return None, 0, exc

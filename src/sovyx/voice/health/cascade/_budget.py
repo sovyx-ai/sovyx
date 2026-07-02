@@ -23,13 +23,17 @@ from sovyx.engine._lock_dict import LRULockDict
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._metrics import record_kernel_invalidated_event
+from sovyx.voice.health._metrics_bypass_coordinator import (
+    record_quarantine_resolution_outcome,
+)
+from sovyx.voice.health._quarantine_reasons import resolve_reason_from_diagnosis
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sovyx.voice.health._quarantine import EndpointQuarantine
     from sovyx.voice.health.combo_store import ComboStore
-    from sovyx.voice.health.contract import Combo, ProbeResult
+    from sovyx.voice.health.contract import Combo, Diagnosis, ProbeResult
 
 
 logger = get_logger(__name__)
@@ -110,6 +114,7 @@ def _quarantine_endpoint(
     platform_key: str,
     reason: str,
     physical_device_id: str = "",
+    diagnosis: Diagnosis | None = None,
 ) -> bool:
     """Add ``endpoint_guid`` to the §4.4.7 quarantine and emit the L4 metric.
 
@@ -125,6 +130,17 @@ def _quarantine_endpoint(
     can reject every host-API alias of the same wedged driver during
     fail-over, preventing the Razer-class kernel-reset failure mode.
 
+    ``diagnosis`` is the terminal :class:`Diagnosis` that drove the
+    quarantine (the three ``_executor_phases.py`` sites pass the probe
+    result's ``_PHYSICAL_CURE_DIAGNOSES`` member). It is resolved to the
+    canonical :class:`~sovyx.voice.health._quarantine_reasons.QuarantineReason`
+    via :func:`resolve_reason_from_diagnosis` so ``STREAM_OPEN_TIMEOUT``
+    quarantines carry ``resolved_reason="capture_dead"`` (recheck-
+    INELIGIBLE — a cold re-probe of a substrate-dead endpoint burns the
+    rechecker's budget) and ``KERNEL_INVALIDATED`` carries
+    ``"kernel_invalidated"`` (recheck-eligible). ``None`` preserves the
+    inherit-from-prior semantics of :meth:`EndpointQuarantine.add`.
+
     Centralising this lets the cascade's three probe sites — pinned override,
     ComboStore fast path, and platform cascade loop — all register quarantine
     entries through one consistent path so the metric / log surface stays
@@ -137,10 +153,29 @@ def _quarantine_endpoint(
     # / ``"probe_cascade"``) from its three call sites in
     # ``cascade/_executor_phases.py``. The ``reason=reason`` passthrough
     # is a legitimate variable-substitution at a lifecycle-tag boundary —
-    # the cascade-layer's terminal-classification resolver call (when one
-    # is added in a future phase) will populate ``resolved_reason``
-    # explicitly. For now the resolved_reason defaults to None (inherit-
-    # from-prior) which is correct for these lifecycle-tag re-adds.
+    # the terminal classification lives on ``resolved_reason`` /
+    # ``derived_reason``, resolved below from the terminal ``diagnosis``
+    # via the H3 SSoT resolver (wired 2026-07-02, closing the AP #70
+    # observe-only gap: the resolver previously had zero production
+    # callers while its docstring claimed the cascade consumed it).
+    resolved_reason_value: str | None = None
+    if diagnosis is not None:
+        try:
+            resolved_reason_value = resolve_reason_from_diagnosis(diagnosis).value
+        except ValueError:
+            # Defensive guard — the resolver raises on non-terminal /
+            # cascade-fallthrough diagnoses (its documented contract).
+            # The call sites gate on ``_PHYSICAL_CURE_DIAGNOSES`` so this
+            # only fires on a future dispatch bug; surface it loudly but
+            # NEVER block the quarantine write path (quarantine is the
+            # failover safety net). ``None`` falls back to inherit-from-
+            # prior, matching pre-wiring behaviour.
+            logger.error(
+                "voice_cascade_quarantine_reason_unresolvable",
+                endpoint=endpoint_guid,
+                diagnosis=diagnosis.value,
+                exc_info=True,
+            )
     # h3-allowlist: lifecycle-tag-centraliser (cascade probe_* dispatcher)
     quarantine.add(
         endpoint_guid=endpoint_guid,
@@ -149,7 +184,17 @@ def _quarantine_endpoint(
         host_api=host_api or "unknown",
         reason=reason,
         physical_device_id=physical_device_id,
+        derived_reason=resolved_reason_value,
+        resolved_reason=resolved_reason_value,
     )
+    if resolved_reason_value is not None:
+        # Mission H3 §ADR-D20 — cascade-side resolution telemetry,
+        # mirroring the coordinator-layer emit in ``capture_integrity.py``.
+        record_quarantine_resolution_outcome(
+            diagnosis=diagnosis.value if diagnosis is not None else "",
+            resolved_reason=resolved_reason_value,
+            platform=platform_key,
+        )
     record_kernel_invalidated_event(
         platform=platform_key,
         host_api=host_api or "unknown",
