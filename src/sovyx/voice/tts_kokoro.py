@@ -1,7 +1,8 @@
 """KokoroTTS — near-commercial quality TTS via kokoro-onnx (82M ONNX q8).
 
 Pipeline: text → kokoro-onnx (internal G2P + VITS2) → 24kHz float32 → int16 PCM.
-Supports 60+ voices with style conditioning (speed control).
+Supports the 54 shipped voices (``voice_catalog._KOKORO_VOICES``) with
+style conditioning (speed control).
 
 Quality tier: N100+ only — too heavy for Pi5 (~3x RT on Pi5 vs ~5x on desktop).
 
@@ -162,7 +163,7 @@ class KokoroTTS(TTSEngine):
     """Kokoro-82M TTS via kokoro-onnx wrapper.
 
     Near-commercial quality, significantly better than Piper.
-    Supports 60+ voices with style conditioning via voice vectors.
+    Supports the 54 shipped voices with style conditioning via voice vectors.
 
     Models:
     - ``kokoro-v1.0.onnx``: 300MB (full precision)

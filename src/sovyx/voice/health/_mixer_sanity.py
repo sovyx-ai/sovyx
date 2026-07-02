@@ -373,9 +373,13 @@ async def check_and_maybe_heal(
     """Run the full L2.5 state machine for ``endpoint``.
 
     Returns a :class:`MixerSanityResult` whose
-    :attr:`MixerSanityResult.decision` the cascade keys off to decide
-    whether to skip the platform walk (``HEALED``) or continue
-    (``SKIPPED_*``, ``DEFERRED_*``, ``ROLLED_BACK``, ``ERROR``).
+    :attr:`MixerSanityResult.decision` (``HEALED``, ``SKIPPED_*``,
+    ``DEFERRED_*``, ``ROLLED_BACK``, ``ERROR``) the cascade
+    integration layer logs + feeds to telemetry. The call is
+    fire-and-forget from the cascade's perspective: the platform
+    walk always proceeds afterwards — on ``HEALED`` it validates
+    the now-corrected mixer state rather than being skipped (see
+    ``cascade/_alignment.py::_run_mixer_sanity``).
 
     Timings: target ≤ 3 s typical; hard abort at
     :attr:`VoiceTuningConfig.linux_mixer_sanity_budget_s` (default

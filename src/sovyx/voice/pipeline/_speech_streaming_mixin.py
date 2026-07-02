@@ -54,7 +54,7 @@ State the mixin reads/writes (initialised on the HOST in
 * ``_consecutive_tts_segment_failures: int`` — T1.21 counter.
 * ``_tts_segment_failure_lock: asyncio.Lock`` — guards the counter.
 * ``_first_token_event: asyncio.Event`` — filler-await synchronizer.
-* ``_filler_task: asyncio.Task[None] | None`` — pending filler task.
+* ``_filler_task: asyncio.Task[bool] | None`` — pending filler task.
 * ``_jarvis: JarvisIllusion`` — filler player.
 * ``_output: AudioOutputQueue`` — playback target.
 * ``_config: VoicePipelineConfig`` — read for mind_id + fillers_enabled.

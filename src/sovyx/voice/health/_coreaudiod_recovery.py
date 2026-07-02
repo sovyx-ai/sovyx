@@ -77,10 +77,9 @@ class CoreAudiodReport:
         UNKNOWN with the canonical recovery path. The hint
         deliberately tells the operator what to do (manual
         ``sudo killall``) rather than auto-killing the daemon —
-        big-tech audio teams (Apple's own AppleHealth team in
-        their 2024 macOS-on-WWDC session) explicitly recommend
-        operator-initiated recovery for ``coreaudiod`` because
-        the daemon manages audio for every app on the system.
+        recovery is operator-initiated by design: killing
+        ``coreaudiod`` requires sudo and momentarily interrupts
+        audio for every app on the system.
         """
         if self.verdict is CoreAudiodVerdict.RUNNING:
             return ""

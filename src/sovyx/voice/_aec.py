@@ -20,11 +20,11 @@ This module is **synchronous** — :meth:`AecProcessor.process` is
 called from the audio thread inside :class:`FrameNormalizer`, which
 is itself sync. Per CLAUDE.md anti-pattern #14, async callers MUST
 wrap the call site in :func:`asyncio.to_thread` if invoking from a
-coroutine. Foundation phase ships the abstraction only — the
-:mod:`sovyx.voice._frame_normalizer` wire-up lands in T4.4 (a
-separate commit).
+coroutine. The :mod:`sovyx.voice._frame_normalizer` wire-up (T4.4)
+has shipped — ``FrameNormalizer._apply_aec_to_window`` runs the
+injected processor per emission window.
 
-Foundation phase scope (this commit, T4.1-T4.3 only):
+Module surface (T4.1-T4.3):
 
 * :class:`AecProcessor` Protocol — interface contract.
 * :class:`AecConfig` — tuning knobs.
@@ -33,15 +33,20 @@ Foundation phase scope (this commit, T4.1-T4.3 only):
 * :func:`compute_erle` — pure-DSP ERLE measurement (T4.3).
 * :func:`build_aec_processor` — factory keyed by config.
 
-Out of scope (later commits per ``feedback_staged_adoption``):
+Shipped in later commits (wired at HEAD):
 
 * T4.4 wire-up into :mod:`sovyx.voice._frame_normalizer`.
-* T4.5 default-flag flip planning (foundation default stays False).
 * T4.6 bypass-detection auto-engage when WASAPI exclusive bypasses
-  the OS AEC.
-* T4.7 ERLE histogram metric.
-* T4.8 ``voice.aec.engaged`` counter.
-* T4.9 double-talk detector.
+  the OS AEC (opt-in ``voice_aec_auto_engage_on_exclusive``,
+  default ``False``; the combo detector emits regardless).
+* T4.7 ERLE histogram metric (``record_aec_erle``).
+* T4.8 per-window AEC counter (``record_aec_window``).
+* T4.9 double-talk detector (:mod:`sovyx.voice._double_talk_detector`,
+  consumed by the FrameNormalizer AEC path).
+
+Still pending:
+
+* T4.5 default-flag flip — ``voice_aec_enabled`` remains ``False``.
 * T4.10 cross-platform integration tests with real render+capture.
 """
 
@@ -445,7 +450,8 @@ def compute_erle(
         )
 
     render_power = float(np.mean(np.square(render.astype(np.float64))))
-    silence_floor = 1.0  # corresponds to ~0 dBFS reference noise on int16
+    # Mean-square power 1.0 ≈ -90 dBFS on int16 (full scale 32768² ≈ 1.07e9).
+    silence_floor = 1.0
     if render_power < silence_floor:
         return 0.0
 

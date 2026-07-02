@@ -33,9 +33,11 @@ pipeline's final STT). Streaming (``transcribe_streaming``) delegates to the
 primary unchanged — streaming failover is out of scope and intentionally not
 implemented here.
 
-This module is the FOUNDATION; the factory wire-up (build the chain when an
-operator has configured a secondary STT) ships as a separate, opt-in,
-default-OFF commit per the staged-adoption rule.
+This module is the FOUNDATION; the factory wire-up shipped separately (W2.1):
+``bootstrap`` builds the secondary CloudSTT when configured and the factory
+wraps it via :class:`FailoverSTTEngine`, gated by the opt-in default-OFF
+``SOVYX_TUNING__VOICE__STT_FAILOVER_ENABLED`` flag per the staged-adoption
+rule.
 """
 
 from __future__ import annotations

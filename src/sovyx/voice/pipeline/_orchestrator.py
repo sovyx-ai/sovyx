@@ -846,9 +846,10 @@ class VoicePipeline(
                 # consume a frame that the consumer's deterministic
                 # mocks may not be prepared to produce, and the real
                 # ONNX init already validates the model artefact
-                # bytes at load time. Production callers that need
-                # the extra safety can call ``smoke_probe_session``
-                # explicitly post-construction.
+                # bytes at load time. (The probe itself is the
+                # private ``SileroVAD._smoke_probe_session``, run
+                # only when smoke_probe_at_construction=True — there
+                # is no public post-construction entry point.)
                 smoke_probe_at_construction=False,
             ),
         )
@@ -979,8 +980,8 @@ class VoicePipeline(
     # 13 properties + 1 method (state / config / output /
     # set_render_buffer / jarvis / is_running / frame_history /
     # vad / stt / tts / wake_word / vad_inference_timeout_count /
-    # false_wake_rejected_count) now live on
-    # :class:,
+    # last_stt_latency_ms / false_wake_rejected_count) now live on
+    # :class:`sovyx.voice.pipeline._public_accessors_mixin.PublicAccessorsMixin`,
     # mounted via the multi-mixin host above. Pure delegators — every accessor
     # stays accessible via self.<name> through MRO; no caller-side change.
     # Anti-pattern #16 — Phase 5.F.25.
@@ -2031,7 +2032,7 @@ class VoicePipeline(
     # _track_tts_task + _untrack_tts_task +
     # register_cogloop_task + cancel_speech_chain (9 methods)
     # now live on
-    # :class:,
+    # :class:`sovyx.voice.pipeline._tts_cancel_chain_mixin.TtsCancelChainMixin`,
     # mounted via the multi-mixin host above. Methods stay accessible
     # via instance dispatch through MRO. The chain calls
     # self._record_frame(...) from FrameRecordingMixin via MRO

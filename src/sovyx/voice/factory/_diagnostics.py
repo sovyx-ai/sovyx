@@ -197,22 +197,28 @@ def _emit_alsa_ucm_event(report: object, *, card_index: int) -> None:
 
 
 async def _maybe_log_macos_diagnostics() -> None:
-    """MA1+MA5+MA6 wire-up (Step 5): run the macOS audio diagnostic
-    trio at boot.
+    """Run the macOS audio diagnostic probes (MA1 + MA5 + MA6 + MA10
+    + MA13 + MA14) at boot.
 
-    Three probes invoked sequentially via ``asyncio.to_thread`` so the
+    Six probes invoked sequentially via ``asyncio.to_thread`` so the
     boot path stays async-clean (the Bluetooth probe in particular
     spawns ``system_profiler`` which has a 2-5 s cold-start cost and
     must not block the event loop):
 
-    1. :func:`detect_hal_plugins` — virtual-audio + audio-enhancement
-       HAL plug-ins that intercept capture (Krisp / BlackHole /
-       Loopback / SoundSource).
-    2. :func:`verify_microphone_entitlement` — Hardened-Runtime mic
-       entitlement verdict (PRESENT / ABSENT / UNSIGNED / UNKNOWN).
-    3. :func:`detect_bluetooth_audio_profile` — A2DP-only headphones
-       in input-device role (the canonical "user wonders why their
-       AirPods Pro can't be heard" failure mode).
+    1. MA1 :func:`detect_hal_plugins` — virtual-audio +
+       audio-enhancement HAL plug-ins that intercept capture (Krisp /
+       BlackHole / Loopback / SoundSource).
+    2. MA5 :func:`verify_microphone_entitlement` — Hardened-Runtime
+       mic entitlement verdict (PRESENT / ABSENT / UNSIGNED / UNKNOWN).
+    3. MA6 :func:`detect_bluetooth_audio_profile` — A2DP-only
+       headphones in input-device role (the canonical "user wonders
+       why their AirPods Pro can't be heard" failure mode).
+    4. MA10 :func:`probe_coreaudiod_state` — coreaudiod daemon
+       liveness verdict (RUNNING / MISSING / UNKNOWN).
+    5. MA13 :func:`detect_sandbox_state` — macOS App Sandbox verdict
+       for the running executable.
+    6. MA14 :func:`query_audio_log_events` — recent audio events from
+       unified logging (sysdiagnose subset).
 
     Opt-in via
     :attr:`VoiceTuningConfig.voice_probe_macos_diagnostics_enabled`
@@ -223,7 +229,7 @@ async def _maybe_log_macos_diagnostics() -> None:
     Failure isolation: each probe internally absorbs its own
     subprocess / parse failures into per-report notes. This wrapper
     additionally catches any unexpected exception per probe so a
-    single broken detector never blocks the other two from running.
+    single broken detector never blocks the others from running.
     """
     from sovyx.engine.config import VoiceTuningConfig
 

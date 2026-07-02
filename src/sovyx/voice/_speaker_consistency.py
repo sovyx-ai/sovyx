@@ -96,8 +96,8 @@ def compute_spectral_centroid(
 class SpeakerConsistencyMonitor:
     """Per-session rolling-window spectral-centroid drift detector.
 
-    The first ``window_size - 1`` observations build the baseline
-    silently (no alert); from observation ``window_size`` onward
+    The first ``window_size`` observations build the baseline
+    silently (no alert); from observation ``window_size + 1`` onward
     each new centroid is compared to the mean of the prior
     ``window_size`` observations. When
     ``|centroid - baseline| / baseline`` exceeds
@@ -151,9 +151,10 @@ class SpeakerConsistencyMonitor:
         """Record a new centroid; return ``(drift_detected, baseline, ratio)``.
 
         Returns ``(False, 0.0, 0.0)`` while the window is being
-        filled (the first ``window_size - 1`` observations) — the
+        filled (the first ``window_size`` observations) — the
         baseline is undefined until ``window_size`` samples are
-        present. Also returns ``(False, 0.0, 0.0)`` on
+        present, so the first comparison happens on observation
+        ``window_size + 1``. Also returns ``(False, 0.0, 0.0)`` on
         non-positive ``centroid_hz`` so the caller can pass through
         :func:`compute_spectral_centroid`'s ``0.0`` "undefined"
         sentinel without a guard.
@@ -174,9 +175,9 @@ class SpeakerConsistencyMonitor:
         """
         if centroid_hz <= 0.0:
             return (False, 0.0, 0.0)
-        # ``window_size - 1`` warm-up observations don't trigger;
-        # they only populate the deque so the baseline mean is
-        # well-defined when the next observation arrives.
+        # The first ``window_size`` warm-up observations don't
+        # trigger; they only populate the deque so the baseline mean
+        # is well-defined when the next observation arrives.
         if self._window.maxlen is None or len(self._window) < self._window.maxlen:
             self._window.append(centroid_hz)
             return (False, 0.0, 0.0)

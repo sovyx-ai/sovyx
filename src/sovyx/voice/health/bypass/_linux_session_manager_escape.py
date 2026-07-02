@@ -146,8 +146,10 @@ class LinuxSessionManagerEscapeBypass:
           device already on a session-manager virtual has nothing to
           escape *to* — the PipeWire-direct strategy covers the
           inverse direction.
-        * At least one session-manager-virtual or OS-default input
-          device is enumerated on the host.
+        * At least one session-manager-virtual input device is
+          enumerated on the host. (The ``DeviceKind.OS_DEFAULT``
+          Pass-3 fallback was deliberately removed in v0.38.2 — see
+          :func:`_find_preferred_session_manager_target`.)
 
     Apply:
         Resolves the preferred target via

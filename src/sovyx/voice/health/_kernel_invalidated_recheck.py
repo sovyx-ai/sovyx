@@ -184,7 +184,8 @@ class KernelInvalidatedRechecker:
         # that caused the quarantine; the verdict class lives on
         # ``derived_reason``. Falling back to ``reason`` covers
         # pre-mission entries (empty ``derived_reason``) AND keeps the
-        # call site correct after the v0.45.0 STRICT flip promotes
+        # call site correct after the v0.53.0 STRICT flip (Gate 14,
+        # Mission H3 — rescheduled from v0.45.0) promotes
         # ``derived_reason`` → ``reason`` (the fallback becomes the
         # actual read path with no further code change).
         snapshot = tuple(

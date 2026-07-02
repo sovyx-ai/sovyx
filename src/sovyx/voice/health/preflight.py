@@ -1,7 +1,7 @@
 """Layer 5 — Stack-wide pre-flight (ADR §4.5).
 
-Before declaring the daemon ready, run the eight steps from ADR §4.5
-sequentially. Each step reports :class:`PreflightStep` with a pass /
+Before declaring the daemon ready, run the nine steps from ADR §4.5
+sequentially (step 9 is Linux-only). Each step reports :class:`PreflightStep` with a pass /
 fail flag, an identity code (:class:`PreflightStepCode`), a human-
 readable hint, elapsed time, and an optional details mapping. The
 orchestrator emits :class:`PreflightReport` with the full sequence,
@@ -16,19 +16,26 @@ testable without mocking PortAudio / LLM / OS APIs, and lets each
 caller (bootstrap, CLI doctor, setup wizard) inject exactly the
 checks that make sense for its invocation context.
 
-Two default factory helpers are provided for checks the voice
+Default check implementations are provided for the steps the voice
 subpackage *does* own:
 
 * :func:`check_portaudio` — succeeds when ``sounddevice`` enumerates
   at least one input-capable host API.
 * :func:`check_wake_word_smoke` — runs one second of silence through
   a :class:`WakeWordDetector` and asserts no spurious detection.
+* :func:`check_model_integrity` — verifies voice/brain model files
+  against their expected SHA-256 digests.
+* :func:`check_tts_synthesize` — asserts a caller-supplied TTS engine
+  can synthesize a short test buffer.
+* :func:`check_llm_reachable` — asserts at least one provider on the
+  caller-supplied LLM router reports available.
 
-Mute, microphone permission, LLM reachability, TTS open, and the L2
-cold cascade are caller-owned because each wants specific state
-(MMDevice client, TCC status, LLM router, TTS engine instance,
-``combo_store`` + endpoint GUID) that preflight has no business
-constructing.
+Mute, microphone permission, the L2 cold cascade, and the Linux ALSA
+mixer sanity check are caller-owned because each wants specific state
+(MMDevice client, TCC status, ``combo_store`` + endpoint GUID, mixer
+probe) that preflight has no business constructing; the TTS / LLM
+helpers likewise take the engine / router from the caller rather
+than constructing them.
 
 Short-circuit policy
 --------------------
@@ -692,7 +699,7 @@ def check_llm_reachable(
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap helper — assemble the canonical 8-step spec list.
+# Bootstrap helper — canonical name/code mapping for the 9 ADR steps.
 # ---------------------------------------------------------------------------
 
 

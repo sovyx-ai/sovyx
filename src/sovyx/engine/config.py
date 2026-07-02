@@ -2036,8 +2036,10 @@ class VoiceTuningConfig(BaseSettings):
     WASAPI-shared endpoints uniformly when the device reports
     ``RawProcessingSupported=true``.
 
-    Default-flip planned for v0.26.0; opt-in flag for early-adopter
-    pilots in v0.25.0. See spec §D2 / Part 1 of mission doc."""
+    Default ``False``. The originally-planned v0.26.0 default-flip
+    never landed and has no current target version (tracked in
+    MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02 findings
+    WINDOWS-4/WINDOWS-7). See spec §D2 / Part 1 of mission doc."""
 
     bypass_tier2_host_api_rotate_enabled: bool = False
     """Furo W-2 Tier 2 — host-API rotate-then-exclusive bypass
@@ -2052,7 +2054,13 @@ class VoiceTuningConfig(BaseSettings):
     cross-validator below rejects the contradictory configuration at
     boot because the rotate path mutates ``self._host_api_name`` and
     relies on the opener honouring it on subsequent device-error
-    reopens. Default-flip planned for v0.26.0."""
+    reopens.
+
+    Default ``False``. The originally-planned v0.26.0 default-flip
+    never landed and has no current target version (tracked in
+    MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02 findings
+    WINDOWS-4/WINDOWS-7). The strategy class is implemented but not
+    registered in the ``factory/_capture.py`` bypass ladder."""
 
     mm_notification_listener_enabled: bool = False
     """IMMNotificationClient device-change listener (Windows only).
@@ -2069,17 +2077,16 @@ class VoiceTuningConfig(BaseSettings):
     ``S_OK`` within ~5 ms. Blocking inside the callback would deadlock
     the entire Windows audio service.
 
-    .. note::
+    The runtime wire-up is LIVE: the voice factory plumbs this flag
+    into the pipeline orchestrator, whose listener wire-up mixin
+    (``voice/pipeline/_listener_wireup_mixin.py``) passes it to
+    ``create_mm_notification_listener`` at pipeline start — flipping
+    the flag is load-bearing.
 
-       As of 2026-04-30 this flag is defined but NOT load-bearing —
-       no production code reads it to register the listener. The
-       runtime wire-up lands via
-       ``MISSION-voice-runtime-listener-wireup-2026-04-30.md``
-       Phase 2. Until that ships, flipping the flag has no effect.
-       Phase 3 Gate 4 (operator backlog) is BLOCKED on the wire-up
-       landing first.
-
-    Default-flip planned for v0.26.0. See spec §D5 / Part 3 of mission
+    Default ``False`` (opt-in). The originally-planned v0.26.0
+    default-flip never landed and has no current target version
+    (tracked in MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02
+    findings WINDOWS-4/WINDOWS-7). See spec §D5 / Part 3 of mission
     doc."""
 
     audio_driver_update_listener_enabled: bool = False
@@ -2629,8 +2636,10 @@ class VoiceTuningConfig(BaseSettings):
     Bucket 1 ranked fallbacks, Bucket 2 PortAudio enumeration order.
 
     Pre-requisite for ``bypass_tier2_host_api_rotate_enabled``.
-    Default-flip planned for v0.25.0. See spec §D4 / Part 4 of mission
-    doc."""
+    Default ``False``. The originally-planned v0.25.0 default-flip
+    never landed and has no current target version (tracked in
+    MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02 findings
+    WINDOWS-4/WINDOWS-7). See spec §D4 / Part 4 of mission doc."""
 
     @model_validator(mode="after")
     def _enforce_settle_ge_probe(self) -> VoiceTuningConfig:

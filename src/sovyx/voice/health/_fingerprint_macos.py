@@ -5,24 +5,31 @@ MMDevices-like registry GUID, but CoreAudio assigns every physical
 audio device a **deviceUID** — a string that is stable across reboots
 (``"BuiltInMicrophoneDevice"`` for the internal mic,
 ``"AppleUSBAudioEngine:Razer…:2015-00-00000-0000-0-0:0"`` for USB
-devices, ``"BluetoothA2DP_<mac-addr>"`` for BT). That UID is what we
-hash into our fingerprint; without it, callers fall back to the
-``{surrogate-…}`` SHA which hotplug-reorder invalidates.
+devices, ``"BluetoothA2DP_<mac-addr>"`` for BT). That UID is embedded
+verbatim (sanitised, not hashed) into our fingerprint; without it,
+callers fall back to their ``{surrogate-…}`` form which
+hotplug-reorder invalidates.
 
 Fingerprint shape
 =================
 
+Always ``{macos-<transport>-<identity>-<direction>}`` where
+``identity`` is the sanitised CoreAudio deviceUID when available,
+else the sanitised device name (sanitisation: separators/braces →
+underscore, capped at 120 chars; no hashing anywhere in this
+module). Examples:
+
 * **Built-in endpoints**:
   ``{macos-builtin-BuiltInMicrophoneDevice-input}``
-* **USB audio**:
-  ``{macos-usb-<vendor>_<product>_<serial>-input}``
-* **Bluetooth**:
-  ``{macos-bluetooth-<mac-addr-suffix>-input}``
+* **USB audio** (sanitised deviceUID):
+  ``{macos-usb-AppleUSBAudioEngine_Razer…_2015-00-00000-0000-0-0_0-input}``
+* **Bluetooth** (sanitised deviceUID):
+  ``{macos-bluetooth-BluetoothA2DP_<mac-addr>-input}``
 * **Aggregate / virtual (BlackHole, Loopback, Soundflower)**:
-  ``{macos-aggregate-<uid-hash>-input}``
+  ``{macos-aggregate-<sanitised-uid-or-name>-input}``
 * **Insufficient info** (system_profiler missing, JSON malformed,
-  device not found): ``None`` — caller falls back to the surrogate
-  hash so the pipeline never aborts.
+  device not found, no UID and no name): ``None`` — caller falls
+  back to its surrogate form so the pipeline never aborts.
 
 The ``macos-<transport>-`` prefix visually distinguishes this class
 from the Windows ``{GUID}`` / Linux ``{linux-…}`` / ``{surrogate-…}``
@@ -159,10 +166,11 @@ def compute_macos_endpoint_fingerprint(
     Identity selection (in order of preference):
 
     * CoreAudio deviceUID when non-empty (the stable kernel-assigned
-      identifier — survives reboots, USB hotplug, OS upgrades).
-    * Short hash of ``(name, manufacturer)`` otherwise (still
-      better than ``canonical_name``-based surrogate — the name
-      doesn't change when the device shifts kernel index).
+      identifier — survives reboots, USB hotplug, OS upgrades),
+      sanitised verbatim.
+    * Sanitised device name otherwise (still better than
+      ``canonical_name``-based surrogate — the name doesn't change
+      when the device shifts kernel index).
     """
     if sys.platform != "darwin":
         return None

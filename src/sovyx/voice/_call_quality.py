@@ -159,13 +159,12 @@ def snapshot_from_pipeline(
     """Construct + return a snapshot, computing ``mos_proxy`` from SNR.
 
     Convenience constructor for the orchestrator's turn-end emission
-    site. Computes the ``mos_proxy`` field per the SNR→MOS curve in
-    ``docs/audio-quality.md``:
+    site. Computes the ``mos_proxy`` field via :func:`_snr_to_mos` —
+    a logistic curve centred at SNR = 17 dB with gain 0.15 per dB:
 
-      MOS = 1.0 + 0.035 × SNR_dB + 7e-6 × SNR_dB × (SNR_dB - 60) ×
-            (100 - SNR_dB)
+      MOS = 1.0 + 4.0 / (1 + exp(-0.15 × (SNR_dB - 17)))
 
-    Bounded to [1.0, 5.0]. SNR < 0 dB clamps to MOS=1.0; SNR > 60 dB
+    Bounded to [1.0, 5.0]. SNR ≤ 0 dB clamps to MOS=1.0; SNR ≥ 60 dB
     clamps to MOS=5.0. ``snr_db=None`` returns ``mos_proxy=None``.
     """
     mos = _snr_to_mos(snr_db) if snr_db is not None else None

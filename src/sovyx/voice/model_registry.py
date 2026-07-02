@@ -96,9 +96,11 @@ _KOKORO_VOICES_URLS: tuple[str, ...] = (
 # Sovyx ships SHA validation OFF by default for Piper because the
 # upstream repo doesn't publish per-file checksums alongside the
 # binaries — operators relying on HF HTTPS as the trust boundary
-# is the same posture HuggingFace Hub itself ships with. Operators
-# wanting stricter validation can override SHAs via
-# ``EngineConfig.tuning.voice.piper_voice_sha256_overrides``.
+# is the same posture HuggingFace Hub itself ships with. No SHA
+# override knob exists today: ``ensure_piper_model`` always passes
+# the catalog's empty sha256, so HF HTTPS is the only trust boundary
+# for Piper voices (stricter validation would require pinning SHAs
+# in ``_PIPER_VOICES`` — see upgrade/doctor.py's advisory).
 _PIPER_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 
 
@@ -168,7 +170,7 @@ VOICE_MODELS: dict[str, VoiceModelInfo] = {
         urls=_KOKORO_MODEL_URLS,
         filename="kokoro-v1.0.int8.onnx",
         sha256="6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb",
-        description="Text-to-Speech (Kokoro v1.0, int8 quantized, 26 voices)",
+        description="Text-to-Speech (Kokoro v1.0, int8 quantized, 54 voices)",
     ),
     "kokoro-voices-v1.0": VoiceModelInfo(
         name="kokoro-voices-v1.0",
@@ -177,7 +179,8 @@ VOICE_MODELS: dict[str, VoiceModelInfo] = {
         urls=_KOKORO_VOICES_URLS,
         filename="voices-v1.0.bin",
         sha256="bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
-        description="Kokoro voice style vectors (26 voices)",
+        # Voice count anchored to voice_catalog._KOKORO_VOICES (SSoT).
+        description="Kokoro voice style vectors (54 voices)",
     ),
     # Piper voices — auto-built from _PIPER_VOICES so adding a voice to
     # the catalog is a one-line tuple addition (no per-voice copy here).

@@ -18,6 +18,10 @@ Schema history:
   / ``os_default`` stored winners — useful for telemetry and for
   surfacing "running on pipewire (fallback)" vs. "running on
   hw:1,0" in the dashboard without a secondary lookup.
+* ``v4`` — Phase 3 / T3.10. Pure version bump, no field reshape;
+  marks the schema boundary at which every ``load()`` applies R14
+  (``silent_combo_evict``) so legacy pre-Furo-W-1 silent winners
+  are evicted. See :func:`_migrate_v3_to_v4`.
 """
 
 from __future__ import annotations

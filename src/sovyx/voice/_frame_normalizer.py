@@ -16,8 +16,8 @@ pyramid fell back to 48 kHz / 2 ch — common on Windows shared-mode mics
 (canonical; supersedes the original voice-silent-vad audit) for the full
 debug trace.
 
-This module owns the four transformations that have to happen between
-the PortAudio callback and :meth:`feed_frame`:
+This module owns the transformation chain between the PortAudio
+callback and :meth:`feed_frame`. The five core stages, in order:
 
 1. **Format normalise** — the VCHL cascade (``docs-internal/ADR-voice-
    capture-health-lifecycle.md`` §5.1) can negotiate ``int16`` / ``int24`` /
@@ -44,6 +44,15 @@ the PortAudio callback and :meth:`feed_frame`:
    and emit as many complete 512-sample windows as possible. Partial
    windows are held for the next call so frame boundaries stay aligned
    across PortAudio blocks.
+
+Around that core, further stages run only when their processors are
+injected (all default ``None`` / disabled = bit-exact passthrough per
+``feedback_staged_adoption``): AGC2 closed-loop digital gain after the
+int16 conversion; per-window AEC then noise suppression on each emitted
+512-sample window; and observability-only probes that never mutate the
+signal (Wiener-entropy check after downmix, resample peak-clip detector,
+SNR estimation on the final cleaned window). :meth:`push` documents the
+exact ordering.
 
 Fast-path: when ``source_rate == 16000`` and ``source_channels == 1`` the
 resampler is skipped entirely and the normaliser degenerates into a pure

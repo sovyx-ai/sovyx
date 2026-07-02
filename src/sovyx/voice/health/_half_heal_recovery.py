@@ -107,8 +107,9 @@ Realistic amixer simple-control names are 5–30 chars
 (``"Capture"``, ``"Internal Mic Boost"``). 128 is a generous
 ceiling that blocks ARG_MAX-style amplification attacks (a 1 MiB
 name passed to ``execve`` would raise E2BIG but also consume the
-attacker-chosen number of seconds). 128 bytes × 64 entries =
-8 KiB total — fits comfortably inside ``_WAL_MAX_BYTES``.
+attacker-chosen number of seconds). 128 bytes ×
+``_WAL_MAX_ENTRIES`` (16 post-R4) = 2 KiB total — fits
+comfortably inside ``_WAL_MAX_BYTES``.
 """
 
 

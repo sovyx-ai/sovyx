@@ -227,7 +227,7 @@ def _detect_os_noise_suppression(*, resolved_name: str | None = None) -> bool:
       that runs WebRTC AEC + NS server-side.
     * macOS: ``virtual_audio_active`` OR
       ``audio_enhancement_active`` from
-      :func:`sovyx.voice.health._macos.detect_hal_plugins`. Krisp,
+      :func:`sovyx.voice._hal_detector_mac.detect_hal_plugins`. Krisp,
       BlackHole, Loopback all surface here.
 
     Detection failures are swallowed → return ``False``. The OS-NS

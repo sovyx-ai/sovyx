@@ -37,7 +37,7 @@ tones (organ, sustained sax, room tone) and inaudible on dense
 program material. For voice — the Sovyx use case — TPDF is
 strictly an upgrade.
 
-Foundation phase scope (T4.43, this commit):
+Module surface (T4.43):
 
 * :func:`apply_tpdf_dither_int16` — pure-NumPy in-place dither
   + saturate from float64 to int16.
@@ -47,12 +47,14 @@ Foundation phase scope (T4.43, this commit):
   ``voice_dither_seed`` (deterministic for tests; system entropy
   in production).
 
-Out of scope (later commits):
+Shipped in later commits (wired at HEAD):
 
-* T4.43.b — wire-up into :class:`FrameNormalizer._float_to_int16_saturate`.
-* T4.44 — Wiener entropy pre-check (skip resample on already-
-  destroyed signal).
-* T4.45 — post-resample peak-clip assertion.
+* T4.43.b — FrameNormalizer wire-up: the int16 conversion stage
+  applies TPDF dither when ``voice_dither_enabled=True``.
+* T4.44 — Wiener entropy detector (:mod:`sovyx.voice._wiener_entropy`),
+  wired observe-only in the FrameNormalizer.
+* T4.45 — post-resample peak-clip detector
+  (``voice.audio.resample_peak_clip``, observability-only).
 """
 
 from __future__ import annotations

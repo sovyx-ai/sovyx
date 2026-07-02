@@ -180,7 +180,7 @@ class ComboStore:
     # ── load + invalidation rules ────────────────────────────────────
 
     def load(self) -> LoadReport:
-        """Open the file and apply invalidation rules R1-R13. Idempotent."""
+        """Open the file and apply invalidation rules R1-R14. Idempotent."""
         rules: list[tuple[str, str]] = []
         backup_used = False
         archived_to: Path | None = None
@@ -705,7 +705,7 @@ class ComboStore:
           in-memory ``self._entries`` unchanged — preserving the
           last-known-good state is safer than dropping every entry
           mid-write. The corruption itself surfaces via the existing
-          ``load()`` rules R1-R13 on the next full reload.
+          ``load()`` rules R1-R14 on the next full reload.
 
         Note: this only refreshes ``_entries``; the global metadata
         (fingerprint, model versions, OS build) doesn't change

@@ -12,10 +12,12 @@ The cross-OS shim ships in v0.24.0 (foundation phase) with the
 contract + factory + non-Windows / disabled no-op surface. The
 actual Windows COM bindings — ``comtypes``-based
 ``IMMDeviceEnumerator`` registration via
-``RegisterEndpointNotificationCallback`` — land in v0.25.0 wire-up
-(mission task T31, this commit). The Windows listener is gated by
-``mm_notification_listener_enabled`` (default False through v0.25.0
-opt-in adoption phase; default-flip planned for v0.26.0).
+``RegisterEndpointNotificationCallback`` — shipped in the v0.25.0
+wire-up (mission task T31). The Windows listener is gated by
+``mm_notification_listener_enabled`` (still default False at HEAD:
+the originally-planned v0.26.0 default-flip never landed and has no
+current target — tracked in
+MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02 WINDOWS-7).
 
 **Critical threading contract (anti-pattern #29 in CLAUDE.md):**
 ``IMMNotificationClient`` callbacks fire on the dedicated MMDevice
@@ -123,8 +125,9 @@ class NoopMMNotificationListener:
 
     1. ``sys.platform != "win32"`` — Linux + macOS use their
        respective hot-plug detectors instead.
-    2. ``mm_notification_listener_enabled=False`` (foundation-phase
-       default through v0.25.0).
+    2. ``mm_notification_listener_enabled=False`` (the default at
+       HEAD — the flag is opt-in; the planned default-flip never
+       landed).
     3. ``comtypes`` is not installed (slim CI runners or a stripped-
        down Windows SKU).
 
@@ -668,13 +671,13 @@ def create_listener(
     * ``sys.platform != "win32"`` → :class:`NoopMMNotificationListener`
       with ``reason="non_windows_platform"``. Linux + macOS hot-plug
       events flow through their dedicated detectors.
-    * ``enabled=False`` (foundation default through v0.25.0
-      promotion) → :class:`NoopMMNotificationListener` with
+    * ``enabled=False`` (the opt-in default at HEAD) →
+      :class:`NoopMMNotificationListener` with
       ``reason="flag_disabled"``.
     * Windows + ``enabled=True`` →
-      :class:`WindowsMMNotificationListener`. In v0.24.0 this is the
-      placeholder that logs + records the not-wired metric; in
-      v0.25.0 wire-up it becomes the real COM subscriber.
+      :class:`WindowsMMNotificationListener`, the real COM subscriber
+      (v0.24.0 shipped a log-only placeholder; the v0.25.0 wire-up
+      replaced it).
 
     The ``enabled`` flag should always come from the resolved
     ``EngineConfig.tuning.voice.mm_notification_listener_enabled``

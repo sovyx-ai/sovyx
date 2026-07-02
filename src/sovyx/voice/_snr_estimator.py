@@ -20,26 +20,29 @@ when no separate VAD is available — it assumes that within any
 silence. The floor adapts to the current room as the user moves,
 HVAC changes, etc.
 
-Foundation phase scope (T4.31, this commit):
+Module surface (T4.31):
 
 * :class:`SnrEstimatorConfig` — tuning snapshot.
 * :class:`SnrEstimator` — stateful per-frame estimator.
 * :func:`estimate_frame_power` — pure-DSP helper used by tests
-  + the future T4.33 ``voice.audio.snr_db`` histogram emitter.
+  + the T4.33 ``voice.audio.snr_db`` histogram emitter.
 
-Out of scope (later commits per ``feedback_staged_adoption``):
+Shipped in later commits (wired at HEAD):
 
-* T4.32 — wire into VAD path so each VAD-positive frame emits SNR.
-* T4.33 — ``voice.audio.snr_db`` histogram metric.
-* T4.34 — per-session p50/p95 in the heartbeat event.
-* T4.35 — alert when SNR p50 < 9 dB (Moonshine degradation
-  threshold — flagged in the master mission §Phase 4 quality gate
-  table).
-* T4.36 — SNR-aware STT confidence gating.
-* T4.37 — dashboard SNR distribution panel.
-* T4.38 — noise-floor trending alert.
-* T4.39 — per-frame SNR threshold for VAD hallucination guard.
-* T4.40 — operator documentation.
+* T4.32/T4.33 — the estimator is wired into the FrameNormalizer's
+  per-window path (``_apply_snr_to_window``), which emits the
+  ``voice.audio.snr_db`` histogram (``record_audio_snr_db``).
+* T4.34 — per-session SNR p50/p95 in the heartbeat event
+  (``pipeline/_heartbeat_mixin``).
+* T4.35 — low-SNR alert (``record_snr_low_alert`` warned/cleared
+  edges from the heartbeat mixin).
+* T4.37/T4.38 — dashboard SNR window + noise-floor trending
+  (``voice/health/_recent_snr.py`` / ``_noise_floor_trending.py``,
+  surfaced by the audio-quality dashboard endpoint).
+* T4.39 — quiet-signal gate for VAD hallucination guard
+  (``vad.py``, ``quiet_signal_gate_enabled``).
+
+Still pending: T4.36 SNR-aware STT confidence gating.
 """
 
 from __future__ import annotations

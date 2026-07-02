@@ -17,17 +17,19 @@ This module ships the runtime-introspection alternative:
    exposed through ``pywin32`` (with a graceful no-op fallback when
    ``pywin32`` isn't installed — the static catalog still works in
    that case).
-3. Optionally hash + cache the DLL bytes so repeated queries don't
-   re-read the file (Microsoft's APOs are stable enough that the
-   SHA serves as a stable identity even when CompanyName fields
-   are blank).
 
-Wire-up: foundation only per staged-adoption. The
-:func:`enrich_apo_report` helper takes an existing
-:class:`~sovyx.voice._apo_detector.CaptureApoReport` and returns
-a new dict with the DLL fields populated; the dashboard's
-``GET /api/voice/capture-diagnostics`` endpoint can opt-in
-by composing the call.
+Public surface: :func:`introspect_apo_clsid` is the one-shot entry
+point (CLSID → DLL path → version info, returning
+:class:`ApoDllInfo`); :func:`resolve_clsid_to_dll_path` and
+:func:`query_dll_version_info` are its composable halves. No result
+hashing or caching is implemented — every call re-reads the registry
+and the version-info resources.
+
+Wire-up: ``_apo_detector._maybe_introspect_unknown_clsids`` calls
+:func:`introspect_apo_clsid` for CLSIDs the static catalog doesn't
+know, gated by
+``VoiceTuningConfig.voice_apo_dll_introspection_enabled``
+(default ``False`` per staged adoption).
 
 Reference: F1 inventory mission task WI3; Microsoft's
 ``GetFileVersionInfoW`` documentation.

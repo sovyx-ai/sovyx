@@ -107,10 +107,6 @@ class ProbeResultEntry:
         monotonic_ts: ``time.monotonic()`` at record time. Used by
             the cardinality-cap eviction (oldest entry evicted) and
             by ``last_ladder_complete_monotonic`` surfacing.
-        boot_cycle_id: Constant within a single process lifetime
-            (initialized at module import). Surfaces in dashboards
-            + ``sovyx doctor voice`` so operators see that the cache
-            is process-local + restarts on every ``sovyx restart``.
     """
 
     endpoint_guid: str

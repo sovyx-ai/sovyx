@@ -21,11 +21,13 @@ Tradeoffs vs. the native listener:
   macOS versions; the native listener's behaviour shifted between
   Big Sur and Sonoma in undocumented ways.
 
-The module is opt-in via
+The module is gated by
 :attr:`VoiceTuningConfig.voice_macos_hotplug_subprocess_enabled` —
-default OFF until the operator opts in (the native pyobjc path is
-still the preferred long-term solution per §8.2; the fallback exists
-as a "good enough until vendor decision lands" patch).
+default ON for darwin since v0.32.0 (opt-out via the flag; OFF on
+Linux + Windows where native hotplug works without polling). The
+native pyobjc path is still the preferred long-term solution per
+§8.2; the fallback exists as a "good enough until vendor decision
+lands" patch.
 
 Reference: MISSION-voice-100pct-autonomous-2026-04-25.md step 6.a.
 """

@@ -7,16 +7,17 @@ engage exclusive mode. Bypasses every APO layer (MFX/SFX/EFX) on the
 capture pipeline because exclusive mode does not traverse the APO
 graph at all.
 
-**STATUS AT v0.49.x — UNWIRED foundation, flag-gated stub (NOT a
-production capability).** The originally-planned v0.25.0 wire-up
-(mission task T28) did not land; as of v0.49.x this strategy is still
-NOT in the production Windows bypass ladder — ``factory/_capture.py``
-ships only :class:`WindowsWASAPIExclusiveBypass` on win32. The
-capture-layer primitive this strategy was designed to drive,
+**STATUS AT v0.49.x — implemented but UNWIRED (NOT a production
+capability).** The originally-planned v0.25.0 wire-up (mission task
+T28) did not land; as of v0.49.x this strategy is still NOT in the
+production Windows bypass ladder — ``factory/_capture.py`` ships only
+:class:`WindowsWASAPIExclusiveBypass` on win32, so nothing ever
+constructs or invokes this class in production. The capture-layer
+primitive this strategy drives,
 ``AudioCaptureTask.request_host_api_rotate`` (see
 ``voice/capture/_restart_mixin.py``), DOES exist and is exercised by
-the capture restart ladder; only the bypass-coordinator wiring is
-absent. Promoting this stub to a live strategy is tracked as deferred
+the capture restart ladder; only the factory registration is absent.
+Promoting this strategy into the live ladder is tracked as deferred
 work in MISSION-VOICE-DEEP-INVESTIGATION-2026-06-01.md (the host-API-
 rotate ladder gap), not as an imminent release. This module ships:
 
@@ -33,12 +34,14 @@ rotate ladder gap), not as an imminent release. This module ships:
   cannot reach because Tier 3's eligibility filter restricts to
   WASAPI-shared endpoints). Tier 2 + Tier 3 partition the Windows
   host_api space without overlap.
-* :meth:`apply` raises :class:`BypassApplyError(reason="strategy_disabled")`
-  when the flag is ``False``. Defence-in-depth gate; eligibility
-  blocks first in production.
+* Fully implemented :meth:`apply` / :meth:`revert` (the 2-phase
+  contract below). The tuning flag is read ONLY by
+  :meth:`probe_eligibility` (via :func:`_tier2_enabled`); apply
+  itself contains no flag check — the coordinator only invokes apply
+  on strategies whose eligibility probe passed.
 
-**Designed wire-up contract (deferred, documented to lock in the
-design):**
+**Apply / revert contract (implemented below; factory registration
+is the only missing piece):**
 
 Apply (2-phase):
 
@@ -205,22 +208,24 @@ class WindowsHostApiRotateThenExclusiveBypass:
     proven safe.
 
     Apply:
-        Unwired placeholder (as of v0.49.x) — raises
-        :class:`BypassApplyError(reason="strategy_disabled")`. A future
-        wire-up replaces this with the 2-phase rotate-then-exclusive
-        logic; the strategy is not in the production ladder today.
+        Implemented — the 2-phase rotate-then-exclusive logic
+        (Phase A ``request_host_api_rotate`` to Windows WASAPI,
+        Phase B ``request_exclusive_restart``); see :meth:`apply`.
+        NOT invoked in production as of v0.49.x — the strategy is
+        absent from the ``factory/_capture.py`` ladder, so nothing
+        constructs it outside tests.
 
     Revert:
-        Placeholder — no-op (the placeholder apply never engages
-        anything to revert).
+        Implemented — 2-step best-effort inverse (shared restart,
+        then rotate back to the source host_api); see :meth:`revert`.
     """
 
     name: str = _STRATEGY_NAME
 
     def __init__(self) -> None:
-        # Deferred wire-up: ``self._source_host_api`` set during
-        # apply (``capture_task._host_api_name`` before rotate) so
-        # revert can restore the pre-apply host_api. Per-coordinator-
+        # ``self._source_host_api`` is set during apply
+        # (``capture_task._host_api_name`` before rotate) so revert
+        # can restore the pre-apply host_api. Per-coordinator-
         # session strategy instance per `_strategy.py:93-95`.
         self._source_host_api: str | None = None
 

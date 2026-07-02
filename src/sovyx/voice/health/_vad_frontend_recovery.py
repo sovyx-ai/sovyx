@@ -22,22 +22,13 @@ the ladder; the coordinator does NOT latch terminal on ladder success
 (pipeline is healthy again, future deaf heartbeats are welcome — see
 :mod:`_bypass_coordinator_mixin` §20.M T1.6.b).
 
-v0.44.0 LENIENT ships steps L1 + L3 of the §4.4 ADR-D4 ladder:
-
-* **L1 ``silero_reset``** — clears the live :class:`VoicePipeline._vad`
-  LSTM recurrent state via :meth:`VoicePipeline.reset_vad`. Cheapest
-  step (< 1 ms); resolves the most common failure mode (LSTM state
-  corruption after a long sustained-silence run).
-* **L3 ``normalizer_engage``** — calls
-  :meth:`AudioCaptureTask.engage_frame_normalizer` to force a stream
-  re-open. Resolves frame-shape / source-rate divergence reaching the
-  VAD.
-
-L2 (re-instantiate ONNX session), L4 (AGC2 adaptive floor lift), L5
-(fallback energy-based VAD) are DEFERRED to v0.44.x patches once their
-underlying APIs land — see mission §4.4 table for the full spec. The
-ordered :data:`_LADDER_STEPS` tuple extends in those patches; the
-coordinator dispatch surface is forward-compatible.
+All five steps of the §4.4 ADR-D4 ladder ship and are wired, ordered
+cheapest-to-most-invasive: L1 ``silero_reset``, L2
+``silero_reinstantiate``, L3 ``normalizer_engage``, L4
+``agc2_floor_lift``, L5 ``fallback_vad``. (v0.44.0 LENIENT shipped
+L1 + L3 only; the remaining steps landed in later patches once their
+underlying APIs did.) Per-step cost and semantics are documented on
+:data:`_LADDER_STEPS`.
 
 L6 (quarantine) is NOT a ladder step — it's the coordinator's terminal
 fall-through after ladder exhaustion. See

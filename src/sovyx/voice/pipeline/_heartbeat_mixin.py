@@ -16,13 +16,14 @@ This mixin is the FIRST extraction step of Finding 5 of
 2785 → 760 LOC across 12 commits via 5 mixins).
 
 Anti-pattern #32 contract (mixin method-via-MRO stub shadowing): the
-heartbeat calls ``self._maybe_trigger_bypass_coordinator()`` which
-lives on the HOST class (``VoicePipeline``, AFTER this mixin in MRO).
-The cross-mixin reference is declared inside ``if TYPE_CHECKING:``
-so the stub body is type-check-only and erased at runtime, letting
-MRO fall through to the real method. Putting a real ``def`` stub
-here would silently shadow the host method and the heartbeat
-deaf-warning path would no-op.
+heartbeat calls ``self._maybe_trigger_bypass_coordinator()``, which
+lives on ``BypassCoordinatorMixin`` — mounted BEFORE this mixin in
+the ``VoicePipeline`` bases (see ``_orchestrator.py``) — so instance
+dispatch resolves it through the MRO. The cross-mixin reference is
+declared inside ``if TYPE_CHECKING:`` so the stub body is
+type-check-only and erased at runtime; unlike a real ``def`` stub,
+it can never shadow the real method regardless of MRO ordering, and
+the heartbeat deaf-warning path stays live.
 
 Heartbeat constants moved with the methods: every
 ``_HEARTBEAT_INTERVAL_S`` / ``_DEAF_*`` / ``_SNR_LOW_ALERT_*`` /
@@ -47,7 +48,7 @@ of the pipeline):
   ``_noise_floor_drift_alert_active`` — noise-floor-drift latch
   (Phase 4 / T4.38)
 * ``_deaf_warnings_consecutive`` — deaf-warning counter consumed by
-  ``_maybe_trigger_bypass_coordinator`` (host-owned)
+  ``_maybe_trigger_bypass_coordinator`` (``BypassCoordinatorMixin``)
 
 Host-owned dependencies the mixin reads (all forward-declared in
 the TYPE_CHECKING block):
@@ -58,8 +59,9 @@ the TYPE_CHECKING block):
 * ``_running: bool`` — loop exit gate
 * ``_voice_clarity_active: bool`` — Windows Voice Clarity APO flag
   on the deaf-warning event
-* ``_maybe_trigger_bypass_coordinator()`` — host method invoked
-  when the deaf-warning fires (anti-pattern #32 contract above)
+* ``_maybe_trigger_bypass_coordinator()`` — sibling-mixin method
+  (``BypassCoordinatorMixin``) invoked when the deaf-warning fires
+  (anti-pattern #32 contract above)
 """
 
 from __future__ import annotations

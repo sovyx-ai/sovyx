@@ -19,10 +19,12 @@ control without pyobjc + entitlements).
 
 Pre-MA6: cascade had no signal to attribute "AirPods are in A2DP
 mode" specifically. Operators saw "mic captures silence" with no
-hint to swap profile. MA6 ships the detection so the dashboard can
-surface a precise remediation: "Your headset is in A2DP playback
-mode; switch to a hands-free / call mode in System Settings →
-Bluetooth → [device] → Mode".
+hint to swap profile. MA6 ships the detection; today its output is
+surfaced via the boot diagnostic log line
+``voice.macos.bluetooth_profile_detected``. The designed
+operator-facing remediation hint ("switch to a hands-free / call
+mode in System Settings → Bluetooth → [device] → Mode") is NOT yet
+wired to the dashboard.
 
 Discovery method: ``system_profiler SPBluetoothDataType`` — slow
 (~2-5 s) but stable across macOS releases since Big Sur. Output
@@ -120,8 +122,11 @@ class BluetoothReport:
     def a2dp_only_devices(self) -> tuple[BluetoothDeviceReport, ...]:
         """Devices currently in A2DP-only mode AND input-capable.
         These are the "user's headset is in playback mode and they
-        wonder why Sovyx can't hear them" candidates — load-bearing
-        for the dashboard's specific remediation hint."""
+        wonder why Sovyx can't hear them" candidates. Sole consumer:
+        the boot diagnostic log line
+        ``voice.macos.bluetooth_profile_detected`` in
+        ``factory/_diagnostics.py`` (count + names). The designed
+        dashboard remediation hint has not shipped."""
         return tuple(
             d
             for d in self.devices

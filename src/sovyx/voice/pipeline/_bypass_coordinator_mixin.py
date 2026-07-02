@@ -303,7 +303,7 @@ class BypassCoordinatorMixin:
         # inner try block) would leak the flag and lock out every
         # subsequent deaf-signal trigger via the
         # ``_coordinator_invocation_pending`` guard at
-        # :meth:`_maybe_invoke_deaf_signal` line 1904. Single outer
+        # :meth:`_maybe_trigger_bypass_coordinator`. Single outer
         # finally is the canonical "always reset" pattern.
         try:
             callback = self._on_deaf_signal
@@ -568,7 +568,7 @@ class BypassCoordinatorMixin:
             # flag instead of leaking it. Pre-T1.23 a leaked flag locked
             # out every subsequent deaf-signal trigger via the
             # ``_coordinator_invocation_pending`` short-circuit at
-            # :meth:`_maybe_invoke_deaf_signal`.
+            # :meth:`_maybe_trigger_bypass_coordinator`.
             self._coordinator_invocation_pending = False
 
     async def _reset_coordinator_pending_after_timeout(
@@ -591,7 +591,7 @@ class BypassCoordinatorMixin:
         stays True. Net effect: deaf-signal handling locked out
         until process restart.
 
-        This watchdog is the safety net. ``_maybe_invoke_deaf_signal``
+        This watchdog is the safety net. ``_maybe_trigger_bypass_coordinator``
         spawns it alongside the coordinator task with the current
         invocation count captured. After
         :data:`_COORDINATOR_PENDING_TIMEOUT_S` (30 s default), the

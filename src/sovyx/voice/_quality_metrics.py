@@ -43,7 +43,7 @@ The :class:`DnsmosQualityEstimator` lazy-imports ``speechmos``
 and raises a clear :class:`QualityEstimatorLoadError` if the
 operator selected the engine but didn't install the extras.
 
-Foundation phase scope (T4.21, this commit):
+Module surface (T4.21):
 
 * :class:`QualityEstimator` Protocol — minimal interface.
 * :class:`QualityScore` immutable result dataclass.
@@ -53,15 +53,23 @@ Foundation phase scope (T4.21, this commit):
 * :class:`QualityEstimatorLoadError` — structured "extras
   missing" error.
 
-Out of scope (later commits):
+Shipped in later commits (wired at HEAD):
+
+* LIVE-2 DNSMOS live scoring (v0.49.52) — the dashboard voice
+  route builds a :class:`DnsmosQualityEstimator` in a background
+  thread (opt-in, requires the extras) and scores a ~6-s window of
+  recent capture audio per poll, surfaced via ``quality_mode`` /
+  ``dnsmos_ovrl_mos`` (see ``dashboard/routes/voice.py``). This
+  covers the dashboard MOS panel (T4.26) via poll-time scoring
+  rather than the originally-specced capture-path per-5-s
+  histogram (T4.23, which did not ship as specced).
+
+Still pending:
 
 * T4.22 — :func:`compute_pesq(reference, degraded)` for
   reference-based PESQ scoring (test-corpus only).
-* T4.23 — wire DNSMOS into capture path; per-5-s window
-  ``voice.audio.dnsmos_score`` histogram emission.
 * T4.24 — synthetic test-corpus PESQ for CI gates.
 * T4.25 — per-session DNSMOS p50/p95 in heartbeat event.
-* T4.26 — dashboard quality MOS panel.
 * T4.27 — alert when p95 < 3.5 (Skype/Zoom acceptable).
 * T4.28 — alert when p95 < 3.0 (Skype/Zoom poor).
 * T4.29 — DNSMOS bucketing (poor / acceptable / good /

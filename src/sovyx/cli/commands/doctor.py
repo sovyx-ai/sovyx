@@ -314,7 +314,7 @@ def doctor_voice(
         False,
         "--non-interactive",
         help="With --full-diag: skip every operator-prompt window in "
-        "the bash diag (cegamente captures whatever audio is on the "
+        "the bash diag (blindly captures whatever audio is on the "
         "mic at probe time). REQUIRED when stdin is not a TTY (CI, "
         "systemd, cron). Reduces forensic coverage; prefer interactive.",
     ),
@@ -425,8 +425,9 @@ def doctor_voice(
         "'vad_frontend_dead' (Silero LSTM corruption); 'format_mismatch' "
         "(frame shape mismatch); 'driver_silent' (working stream / zero "
         "RMS); 'capture_dead' (substrate fully silent, Mission H3 new); "
-        "'kernel_invalidated' (IAudioClient wedged); 'unclassified' "
-        "(Mission H3 taxonomy fallback). Default: show every "
+        "'kernel_invalidated' (IAudioClient wedged); 'watchdog_recheck' "
+        "(lifecycle tag — watchdog re-add, not a terminal class); "
+        "'unclassified' (Mission H3 taxonomy fallback). Default: show every "
         "quarantined endpoint with its reason class + remediation hint. "
         "Empty quarantine renders an empty section regardless of the "
         "filter.",
@@ -685,9 +686,11 @@ def _run_voice_doctor(
     # number of failing steps so existing CI scripts keep working.
     if not fix:
         if failure_count and _first_failure_is_saturation(report):
-            # Keep behaviour stable but let callers distinguish the
-            # "saturation present, fix available" case via stderr
-            # without changing the numeric contract.
+            # Both arms return the same value today — nothing extra
+            # is written to stderr, so callers CANNOT distinguish the
+            # "saturation present, fix available" case yet. The branch
+            # is kept as the seam where such a hint would go without
+            # changing the numeric exit-code contract.
             return failure_count
         return failure_count
 
@@ -1898,9 +1901,10 @@ def _render_dashboard_integrity_surface(
 ) -> None:
     """Mission C5 §T3.4 — render the "Dashboard — bundle integrity" section.
 
-    Mirrors :func:`_render_voice_degraded_banner_surface` shape so the
-    aggregate ``sovyx doctor`` (no args) renders this section alongside
-    the voice quarantine / failover / degraded banner surfaces.
+    Mirrors :func:`_render_voice_degraded_banner_surface` shape;
+    ``sovyx doctor voice`` renders this section alongside the voice
+    quarantine / failover / degraded banner surfaces (the no-args
+    ``sovyx doctor`` does not render these surfaces).
 
     JSON mode skips this surface entirely (operators using JSON output
     consume ``sovyx dashboard doctor --json`` directly).
@@ -1951,10 +1955,10 @@ def _render_dashboard_integrity_surface(
 
 
 def _render_llm_health_surface(*, output_json: bool) -> None:
-    """Mission C6 §T3.2 — surface LLM provider health in aggregate ``sovyx doctor``.
+    """Mission C6 §T3.2 — surface LLM provider health in ``sovyx doctor voice``.
 
     Pure read. Never blocks the doctor exit path. JSON mode is a no-op
-    here because the aggregate ``sovyx doctor --json`` output already
+    here because the ``sovyx doctor voice --json`` output already
     summarizes the voice surfaces; the LLM detail lives at
     ``sovyx llm doctor --json``.
     """
@@ -2490,9 +2494,12 @@ def doctor_voice_capture_integrity(
     subcommand syntax since v0.21.1; the underlying check existed but
     no Typer wire-up was ever added.
 
-    Same backing function as the ``voice_capture_apo`` row in the
-    default ``sovyx doctor`` output — running this subcommand directly
-    skips the other 11 checks and prints just the result.
+    Same backing function as the ``voice_capture_apo`` check in the
+    upgrade blue-green diagnostic suite
+    (:meth:`sovyx.upgrade.doctor.Doctor.run_all` — the default
+    ``sovyx doctor`` output does NOT render this row). Running this
+    subcommand directly runs just this one check, skipping the rest
+    of that suite, and prints the result.
 
     Always exits ``0`` on non-Windows platforms (the check returns
     ``PASS`` with a "skipped" message — capture APOs are a Windows-only

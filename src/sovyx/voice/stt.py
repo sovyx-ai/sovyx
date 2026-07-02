@@ -408,11 +408,14 @@ class STTEngine(ABC):
     Implementations:
     - :class:`MoonshineSTT` (local, default — auto-wired by the factory).
     - :class:`sovyx.voice.stt_cloud.CloudSTT` (OpenAI Whisper API,
-      BYOK). v0.32.4 Phase 3.C.1 clarification: NOT auto-wired into
-      the factory; operators who want Whisper STT must instantiate
-      and pass ``CloudSTT`` to the factory's STT slot explicitly. The
-      auto-fallback chain (Moonshine low-confidence → CloudSTT) is a
-      Phase 4+ feature target, not a current capability.
+      BYOK). Opt-in failover secondary (W2.1): when
+      ``tuning.voice.stt_failover_enabled=True`` (default ``False``)
+      and ``OPENAI_API_KEY`` is set, the factory wraps the primary in
+      :class:`sovyx.voice.stt_failover.FailoverSTTEngine` with a
+      CloudSTT secondary, triggered on raise/timeout — not on
+      Moonshine confidence (confidence-gated fallback remains
+      unimplemented). Operators may also pass ``CloudSTT`` to the
+      factory's STT slot explicitly as a stand-alone engine.
     """
 
     @abstractmethod
@@ -721,8 +724,9 @@ class MoonshineSTT(STTEngine):
     ) -> AsyncIterator[PartialTranscription]:
         """Streaming transcription with incremental updates.
 
-        Yields PartialTranscription events as audio arrives.
-        The CogLoop can start Orient phase before utterance completes.
+        Yields PartialTranscription events as audio arrives, so the
+        cognitive loop (Perceive → Attend → Think → Act → Reflect)
+        can begin work before the utterance completes.
 
         Args:
             audio_stream: Async iterator yielding (audio_chunk, sample_rate) tuples.

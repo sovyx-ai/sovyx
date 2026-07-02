@@ -284,8 +284,10 @@ class AudioServiceWatchdog:
     not one per tick.
 
     Thread-safety: the watchdog runs as a single asyncio task; the
-    callback is awaited in-loop so no concurrency races against
-    the orchestrator's other handlers."""
+    (synchronous) callback is invoked directly from that task, so no
+    concurrency races against the orchestrator's other handlers. An
+    async callable passed as ``on_state_change`` would produce an
+    un-awaited coroutine — the callback must be sync."""
 
     def __init__(
         self,

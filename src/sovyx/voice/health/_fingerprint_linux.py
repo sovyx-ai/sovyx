@@ -241,8 +241,10 @@ def compute_linux_endpoint_fingerprint(
     Walks, in order:
 
     1. Parse ``device_entry.name`` (ALSA PCM name) into a
-       ``(card_index, pcm_device)`` pair via three pattern matchers
-       (``hw:N,M``, ``<plugin>:CARD=id,DEV=M``, bare card-id).
+       ``(card_index, pcm_device)`` pair via four pattern matchers
+       (``hw:N,M``, ``<plugin>:CARD=id,DEV=M``, bare card-id, and —
+       since v0.38.2 — friendly-prefixed names with an embedded
+       ``hw:N,M`` tail).
     2. Read ``/sys/class/sound/card<N>/device`` symlink and extract
        the PCI BDF or USB VID:PID from the target path.
     3. For HDA cards, read the codec Vendor:Device from

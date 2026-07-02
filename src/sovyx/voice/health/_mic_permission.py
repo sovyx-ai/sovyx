@@ -1,4 +1,4 @@
-"""Windows microphone-permission preflight check (band-aid #34 partial).
+"""Cross-platform microphone-permission preflight check (band-aid #34).
 
 The OS-level "App can access your microphone" Privacy switch (Windows
 10 1809+) is enforced INSIDE the Windows audio stack — when denied,
@@ -15,13 +15,15 @@ This module reads the consent store directly so the voice factory can
 loud-fail at startup with concrete remediation guidance instead of
 letting the deaf-capture path silently engage.
 
-Cross-platform scope:
+Cross-platform scope (:func:`check_microphone_permission` dispatches
+per OS):
 
-* **Windows** — full implementation (this module). Reads HKCU + HKLM
-  consent store keys.
-* **macOS** — TCC ``tccutil`` shell-out is tracked separately as MA2
-  (the macOS toolkit work). Returns :data:`MicPermissionStatus.UNKNOWN`
-  here.
+* **Windows** — reads the HKLM + HKCU Capability Access Manager
+  consent-store registry keys (this module, ``_check_windows``).
+* **macOS** — dispatches to the MA2 sqlite3 TCC.db reader
+  (:mod:`sovyx.voice.health._mic_permission_mac`), translating the
+  ``kTCCServiceMicrophone`` auth_value into GRANTED / DENIED /
+  UNKNOWN.
 * **Linux** — no OS-level mic-consent UI; returns
   :data:`MicPermissionStatus.GRANTED` (the OS layer is permissive,
   PulseAudio / PipeWire handle their own session ACLs separately).

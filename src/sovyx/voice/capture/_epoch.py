@@ -31,8 +31,9 @@ class EpochMixin:
 
     Pure-method mixin — exposes :meth:`samples_written_mark` and
     relies on the host class to maintain ``self._ring_state``
-    (typically ``AudioCaptureTask`` updates it from the audio
-    callback's ``call_soon_threadsafe`` enqueue path).
+    (on ``AudioCaptureTask`` it is written by ``RingMixin._ring_write``
+    from ``LoopMixin._consume_loop``, after normalization — and by
+    ``RingMixin._allocate_ring_buffer`` on every (re)allocation).
 
     The mixin pattern (vs a free function on the host class)
     isolates the "atomic LOAD_ATTR" contract in one place — any

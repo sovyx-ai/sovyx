@@ -39,7 +39,7 @@ inference (RNNoise) are reserved for v0.28.0+ via a custom
 ``librnnoise`` ctypes shim once production telemetry validates the
 SNR gap.
 
-Foundation phase scope (this commit, T4.11-T4.12 only):
+Module surface (T4.11-T4.12):
 
 * :class:`NoiseSuppressor` Protocol — interface contract.
 * :class:`NoiseSuppressionConfig` — tuning knobs.
@@ -47,17 +47,25 @@ Foundation phase scope (this commit, T4.11-T4.12 only):
 * :class:`SpectralGatingSuppressor` — engine="spectral_gating".
 * :func:`build_noise_suppressor` — factory keyed by config.
 
-Out of scope (later commits per ``feedback_staged_adoption``):
+Shipped in later commits (wired at HEAD):
 
-* T4.13 wire-up into :mod:`sovyx.voice._frame_normalizer`.
-* T4.14 default-flag flip planning (foundation default stays False).
-* T4.15 ``voice_noise_suppression_engine`` future-flag for Krisp.
-* T4.16 OTel ``voice.ns.engaged`` counter + suppression-dB
-  histogram.
+* T4.13 wire-up into :mod:`sovyx.voice._frame_normalizer` (the NS
+  stage runs per emission window when a suppressor is injected).
+* T4.15 ``voice_noise_suppression_engine`` selector (currently
+  ``"off"`` / ``"spectral_gating"``; no Krisp value yet).
+* T4.16 per-window counter + suppression-dB histogram
+  (``record_ns_window`` / ``record_ns_suppression_db``).
+* T4.18 + T4.20 OS-NS detection + opt-in OS DSP deference — the
+  factory's ``_build_noise_suppressor`` returns ``None`` and logs
+  ``voice.ns.deferred_to_os_dsp`` when the operator opts in and an
+  OS stack is active.
+
+Still pending:
+
+* T4.14 default-flag flip — ``voice_noise_suppression_enabled``
+  remains ``False``.
 * T4.17 NS-vs-VAD integration test (RNNoise output → Silero VAD).
-* T4.18 OS-NS detection + auto-disable.
 * T4.19 Trade-off documentation.
-* T4.20 Operator opt-in flag for OS DSP deference.
 """
 
 from __future__ import annotations

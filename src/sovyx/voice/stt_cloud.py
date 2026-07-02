@@ -18,19 +18,19 @@ operators who already instantiate ``CloudSTT`` directly, v0.32.4:
     ``from sovyx.voice.stt_cloud import CloudSTT`` for operators who
     DELIBERATELY want Whisper API STT (they pass ``CloudSTT`` to the
     factory's STT slot directly + provide their own ``api_key``).
-  * Documents the auto-fallback chain as a Phase 4+ feature target —
-    the wire-up requires:
-      a) a confidence-threshold gate around ``MoonshineSTT.transcribe``,
-      b) an API-key resolver (env / mind config / dashboard secret),
-      c) a fallback path that doesn't double-charge the operator on
-         every false-positive (Moonshine confidence is genuinely low
-         on noise even when speech IS present).
-    None of (a)/(b)/(c) ship today.
+  * Documented the auto-fallback chain as a Phase 4+ feature target.
+
+Status update (W2.1, shipped): an **opt-in** failover chain now
+exists. When ``EngineConfig.tuning.voice.stt_failover_enabled=True``
+(default ``False``) and ``OPENAI_API_KEY`` is set, ``bootstrap()``
+builds a ``CloudSTT`` secondary and the factory wraps the primary in
+:class:`sovyx.voice.stt_failover.FailoverSTTEngine`. Failover
+triggers on primary raise or timeout-count delta — NOT on Moonshine
+confidence; the confidence-threshold gate remains unimplemented.
 
 BYOK (Bring Your Own Key) integration with OpenAI's Whisper API.
-Used as a STAND-ALONE STT engine — pass to the factory's STT slot
-explicitly via custom integration code; not auto-engaged on
-Moonshine low-confidence.
+Also usable as a STAND-ALONE STT engine — pass to the factory's STT
+slot explicitly via custom integration code.
 
 Ref: SPE-010 §5 (STT), IMPL-SUP-008 (cloud infra),
 ``MISSION-voice-zero-defect-2026-05-08.md`` §P0.C1.

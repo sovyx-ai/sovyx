@@ -1,6 +1,6 @@
 """Validation thresholds + tuning-derived constants for ComboStore.
 
-All knobs that shape the 13 invalidation rules + the C2 auto-unpin
+All knobs that shape the 14 invalidation rules (R1-R14) + the C2 auto-unpin
 lifecycle live here, sourced from :class:`VoiceTuningConfig` where
 appropriate so ``SOVYX_TUNING__VOICE__*`` env vars override without
 reaching into module internals (anti-pattern #17).

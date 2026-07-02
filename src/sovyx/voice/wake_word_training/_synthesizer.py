@@ -29,10 +29,11 @@ Architecture:
   is async; running synchronously would block the event loop).
 * Uses dependency injection: tests pass a stub TTS that returns
   deterministic int16 audio without loading the real ONNX model.
-* Resamples 24 kHz → 16 kHz (the wake-word target) via
-  scipy.signal.resample if available, else a linear-interp
-  fallback (no extra deps; same quality as the existing
-  ``voice/audio.py`` resampler for the wizard test-record).
+* Resamples 24 kHz → 16 kHz (the wake-word target) via a
+  linear-interp resampler (``np.interp``; no extra deps — same
+  quality as the existing ``voice/audio.py`` resampler for the
+  wizard test-record. scipy.signal.resample would be higher
+  quality but is deliberately not used).
 
 Reference: master mission ``MISSION-voice-final-skype-grade-2026.md``
 §Phase 8 / T8.13. Operator debt:

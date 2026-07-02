@@ -7,8 +7,9 @@ ADR §4.4.2:
 * Call :func:`RegisterDeviceNotification` with
   ``DBT_DEVTYP_DEVICEINTERFACE`` filtered to ``KSCATEGORY_AUDIO`` so we
   only get notified about audio endpoints — not every USB key insertion.
-* Pump :func:`PeekMessage` / :func:`DispatchMessage` until the window
-  procedure receives ``WM_QUIT`` from :meth:`stop`.
+* Pump :func:`GetMessageW` / :func:`DispatchMessageW` until
+  :meth:`stop` posts ``WM_CLOSE`` and the window procedure calls
+  :func:`PostQuitMessage` (making ``GetMessageW`` return 0).
 * On ``DBT_DEVICEARRIVAL`` / ``DBT_DEVICEREMOVECOMPLETE`` translate the
   :class:`DEV_BROADCAST_DEVICEINTERFACE` payload into a
   :class:`~sovyx.voice.health.contract.HotplugEvent` and marshal it onto
@@ -17,9 +18,11 @@ ADR §4.4.2:
 The implementation is intentionally robust against the two common
 degraded states:
 
-1. ``pywin32`` is not installed (slim CI runners or a user who purged
-   it). :func:`build_windows_hotplug_listener` returns
-   :class:`NoopHotplugListener` and logs a WARNING.
+1. USER32 is unavailable via :mod:`ctypes` (``ctypes.windll.user32``
+   lookup fails — non-Windows host or a stripped-down SKU).
+   :func:`build_windows_hotplug_listener` returns
+   :class:`NoopHotplugListener` and logs a WARNING. The listener has
+   no ``pywin32`` dependency — everything goes through ``ctypes``.
 2. ``CreateWindowEx`` / ``RegisterDeviceNotification`` fails (for
    example on Windows Nano Server where the USER32 window-manager
    subsystem is absent). The worker thread emits a WARNING + the
@@ -161,7 +164,7 @@ class WindowsHotplugListener:
     so the worker can post events back via ``call_soon_threadsafe``.
 
     :meth:`stop` is cooperative: it posts ``WM_CLOSE`` to the worker
-    window so :func:`PeekMessage` unblocks, then joins the thread with
+    window so :func:`GetMessageW` unblocks, then joins the thread with
     a 2 s ceiling. If the join times out we log ERROR and detach — the
     thread is a daemon, so the process can still exit.
     """

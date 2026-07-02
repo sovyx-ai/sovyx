@@ -49,7 +49,8 @@ logger = get_logger(__name__)
 
 
 _FALLBACK_INT16_FULLSCALE = 32_768.0
-"""int16 normalisation factor — matches :data:`vad._INT16_SCALE`.
+"""int16 normalisation factor — matches the ``/ 32768.0`` divisor
+inlined in :meth:`SileroVAD.process_frame`.
 
 The fallback runs the same int16 → float32 normalisation path the
 real Silero takes for input frames; matching the divisor keeps RMS

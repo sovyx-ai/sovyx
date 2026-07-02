@@ -174,17 +174,15 @@ class STTWakeWordDetector:
     :class:`~sovyx.voice._wake_word_router.WakeWordRouter` expects
     so it slots into the router transparently.
 
-    State machine (mirrors ONNX detector for uniform router
-    semantics):
-      IDLE → STT_PENDING → IDLE (on no-match)
-                       → COOLDOWN → IDLE (on match)
+    State machine (two states of the shared ``WakeWordState`` enum;
+    the ONNX detector's intermediate STAGE1_TRIGGERED is never used
+    here — the periodic STT call happens while remaining IDLE):
+      IDLE → IDLE (on no-match)
+      IDLE → COOLDOWN → IDLE (on match, after cooldown_frames)
 
-    Note: STT_PENDING is conceptually equivalent to the ONNX
-    detector's STAGE1_TRIGGERED but represents "STT call returned
-    a transcript and we matched a variant" rather than "stage-1
-    score crossed threshold". The post-match transition to
-    COOLDOWN matches the ONNX detector exactly so cross-detector
-    cooldown semantics are consistent.
+    The post-match transition to COOLDOWN matches the ONNX
+    detector exactly so cross-detector cooldown semantics are
+    consistent.
     """
 
     def __init__(
@@ -261,8 +259,8 @@ class STTWakeWordDetector:
         """Process one audio frame; periodically run STT.
 
         Returns a :class:`WakeWordEvent` with detection flag +
-        score (always 0.0 for STT-path; the ONNX score field is
-        repurposed to a boolean signal here) + state.
+        score (the ONNX score field carries a boolean signal here:
+        0.0 on non-detection, 1.0 on a variant match) + state.
 
         Raises:
             ValueError: If frame has wrong length.

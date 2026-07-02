@@ -10,8 +10,8 @@ Layered design (per CLAUDE.md anti-pattern #16 "god files"):
   is "no backend registered" → clear error; operators wire
   OpenWakeWord / Sherpa / custom backends via the Protocol.
 * :mod:`._orchestrator` — state machine + cancel/resume +
-  hot-reload coordination. (Pending — landing in a follow-up
-  focused mini-mission once a default backend is ratified.)
+  hot-reload coordination (shipped; :class:`TrainingOrchestrator`
+  is re-exported below).
 
 The hot-reload primitive is **already shipped**: the
 :class:`~sovyx.voice._wake_word_router.WakeWordRouter.register_mind`

@@ -7,8 +7,9 @@ What a "good" meter does:
 * **Peak-hold** — the peak marker latches at a peak for ``hold_ms``, then
   decays at a fixed ``decay_db_per_sec``. This is the classic analogue-VU
   ballistic that makes transient peaks visible despite the 30 Hz frame rate.
-* **Clipping** — any sample at or above ``clipping_db`` (default -0.3 dBFS,
-  which catches 32_678/32_768 saturation in int16). Sticky for one frame.
+* **Clipping** — any sample at or above ``clipping_db`` (default -0.3 dBFS
+  ≈ 31_656/32_768 linear amplitude, which catches near-full-scale int16
+  saturation). Sticky for one frame.
 * **VAD trigger** — RMS crossing ``vad_trigger_db`` signals "voice detected"
   so the UI can show its threshold marker.
 

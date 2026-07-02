@@ -4,8 +4,11 @@ Stage 1: OpenWakeWord ONNX model detects "hey sovyx" (fast, may false-positive).
 Stage 2: Verify with STT transcription of the same audio segment.
 Two-stage verification reduces false positives ~10x (IMPL-004 §ADR).
 
-Architecture (3-layer ONNX):
-    Audio → MelSpectrogram (ONNX) → Feature Embedding (ONNX) → Wake Word Model (ONNX)
+Inference contract: ONE ``ort.InferenceSession`` built from a single
+``model_path``, fed raw 1280-sample (80 ms @ 16 kHz) float32 frames
+reshaped to ``(1, -1)``. There are no separate mel-spectrogram or
+embedding stages in this code — any such preprocessing must be fused
+inside the ONNX checkpoint itself.
 
 Ref: SPE-010 §4, IMPL-004 §2.5 (OpenWakeWord 2-stage)
 """

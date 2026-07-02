@@ -2,7 +2,7 @@
 
 See :mod:`sovyx.voice.health` and ADR-combo-store-schema.md for the
 full design. The combo store owns the on-disk shape, atomic writes,
-cross-process file lock, and the 13 invalidation rules that make the
+cross-process file lock, and the 14 invalidation rules (R1-R14) that make the
 fast path safe against drift (driver updates, OS cumulative updates,
 new APO chains, hardware changes).
 

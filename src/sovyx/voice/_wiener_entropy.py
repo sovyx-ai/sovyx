@@ -26,19 +26,23 @@ waste CPU on lost-cause data. Master mission spec:
     if entropy > 0.5 (signal already destroyed; resampling won't
     help)
 
-Foundation phase scope (this commit, T4.44 only):
+Module surface (T4.44):
 
 * :func:`compute_wiener_entropy` — pure-DSP per-frame measurement.
 * :func:`is_signal_destroyed` — predicate using a configurable
   threshold.
 * :class:`WienerEntropyConfig` — tuning snapshot.
 
-Out of scope (later commits):
+Shipped in later commits (wired at HEAD):
 
-* T4.44.b — wire-up into :class:`FrameNormalizer` resample stage
-  to skip resample on destroyed signals.
-* T4.44.c — observability: ``voice.audio.wiener_entropy``
-  histogram + ``voice.audio.signal_destroyed`` counter.
+* T4.44.b — FrameNormalizer wire-up, **observe-only**: when
+  ``voice_wiener_entropy_skip_enabled=True`` the entropy is
+  computed pre-resample and the ``voice.audio.signal_destroyed``
+  counter is emitted, but the destroyed signal still flows through
+  resample + AEC + NS + emission (the skip-action awaits production
+  data validating the threshold).
+* T4.44.c — partially: the ``voice.audio.signal_destroyed`` counter
+  ships; the ``voice.audio.wiener_entropy`` histogram does not.
 
 The metric is bin-by-bin (all FFT bins included with an epsilon
 floor so ``log(0)`` doesn't blow up). Computing on the FULL

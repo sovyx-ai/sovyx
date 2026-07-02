@@ -88,9 +88,13 @@ class WindowsWASAPIExclusiveBypass:
 
     Eligibility:
         * ``platform_key == "win32"``
-        * ``host_api_name`` looks like a WASAPI endpoint (substring
-          match on ``"WASAPI"``, case-insensitive, so both the bare
-          ``"WASAPI"`` label and PortAudio's ``"Windows WASAPI"`` pass).
+        * ``host_api_name`` exact-matches the canonical allowlist
+          :data:`_WASAPI_HOST_API_LABELS` after ``strip().lower()``
+          normalisation (both the bare ``"WASAPI"`` label and
+          PortAudio's ``"Windows WASAPI"`` are in the allowlist;
+          substring impersonators like ``"WASAPI Compatibility Mode
+          (DirectSound)"`` are rejected — see the hardening comment
+          above the allowlist).
 
     Apply:
         Delegates to

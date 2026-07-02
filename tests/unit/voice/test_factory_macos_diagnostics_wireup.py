@@ -1,9 +1,10 @@
 """Tests for the MA1+MA5+MA6 macOS diagnostics factory wire-up (Step 5).
 
-Mission §1.5: invoke the macOS audio diagnostic trio at boot when on
-darwin + system_profiler is available. Default ON for read-only
-observability. Each probe failure is isolated so a single broken
-detector cannot block the other two from running.
+Mission §1.5: invoke the macOS audio diagnostics at boot when on
+darwin + system_profiler is available (originally the MA1/MA5/MA6
+trio; the production function now runs six probes). Default ON for
+read-only observability. Each probe failure is isolated so a single
+broken detector cannot block the others from running.
 
 Three contracts pinned per probe (HAL / entitlement / Bluetooth):
 

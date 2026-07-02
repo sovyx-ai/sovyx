@@ -322,7 +322,7 @@ async def scan_recent_linux_driver_watchdog_events(
     Returns:
         :class:`LinuxDriverWatchdogScan` with the observed events.
         ``scan_attempted=False`` on non-Linux or on subprocess
-        spawn failure (systemctl missing). ``scan_failed=True``
+        spawn failure (journalctl missing). ``scan_failed=True``
         when the subprocess spawned but timed out or produced
         unparseable output.
     """

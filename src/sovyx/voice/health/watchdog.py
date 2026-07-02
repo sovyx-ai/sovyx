@@ -130,6 +130,13 @@ _DEFAULT_AUDIO_SERVICE_RESTART_TIMEOUT_S = _VoiceTuning().watchdog_audio_service
 """§4.4.5 ceiling — when ``audiosrv`` stays DOWN past this, go DEGRADED."""
 
 _DEFAULT_APO_RECHECK_INTERVAL_S = _VoiceTuning().apo_quarantine_recheck_interval_s
+"""§4.1 / Phase 1 — APO-quarantine recheck cadence.
+
+Zero or negative disables the recheck loop. The loop iterates the
+shared :class:`EndpointQuarantine` snapshot once per interval, re-probes
+every entry tagged ``reason="apo_degraded"``, and clears it on a
+HEALTHY verdict so the factory can pick the endpoint again on the next
+boot or hotplug."""
 
 _DEFAULT_DEGRADED_REPROBE_INTERVAL_S = _VoiceTuning().watchdog_degraded_reprobe_interval_s
 """T6.13 — interval between DEGRADED background re-cascades.
@@ -139,13 +146,6 @@ at import time so ``SOVYX_TUNING__VOICE__WATCHDOG_DEGRADED_REPROBE_INTERVAL_S``
 overrides without code changes (anti-pattern #17). Default 300 s
 (5 min) balances responsiveness against probe cost. ``0`` disables
 the loop entirely."""
-"""§4.1 / Phase 1 — APO-quarantine recheck cadence.
-
-Zero or negative disables the recheck loop. The loop iterates the
-shared :class:`EndpointQuarantine` snapshot once per interval, re-probes
-every entry tagged ``reason="apo_degraded"``, and clears it on a
-HEALTHY verdict so the factory can pick the endpoint again on the next
-boot or hotplug."""
 
 
 def build_platform_hotplug_listener(

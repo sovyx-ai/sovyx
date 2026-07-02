@@ -5,22 +5,41 @@ iterates a platform-filtered list of :class:`PlatformBypassStrategy`
 instances when a live capture stream degrades into
 :class:`~sovyx.voice.health.contract.IntegrityVerdict.APO_DEGRADED`.
 
-Shipped strategies:
+Shipped strategy modules (3 Windows + 5 Linux; no macOS strategies
+exist — macOS is detection-only, manual remediation):
 
 * :class:`WindowsWASAPIExclusiveBypass` — re-opens the capture stream
   in WASAPI exclusive mode, bypassing the Windows Voice Clarity /
   VocaEffectPack APO chain entirely.
+* :class:`WindowsRawCommunicationsBypass` — Tier 1 RAW +
+  Communications via ``IAudioClient3::SetClientProperties``.
+  Implemented but UNWIRED at v0.49.x (deprecated — superseded by
+  Tier-3 WASAPI-exclusive coverage; see the module docstring).
+* :class:`WindowsHostApiRotateThenExclusiveBypass` — Tier 2
+  rotate-to-WASAPI-then-exclusive for MME / DirectSound / WDM-KS
+  endpoints. Implemented but UNWIRED at v0.49.x (not in the
+  production Windows bypass ladder; see the module docstring).
 * :class:`LinuxALSAMixerResetBypass` — resets saturated pre-ADC gain
   controls (``Internal Mic Boost`` + ``Capture``) on the active Linux
   capture card, fixing the clipping pattern observed on laptop
   onboard codecs. Default-on.
+* :class:`LinuxALSACaptureSwitchBypass` — re-engages an ``[off]``
+  ALSA Capture switch + lifts zeroed Internal Mic Boost (exact-zero
+  PCM cure).
 * :class:`LinuxPipeWireDirectBypass` — opt-in; bypasses the Linux
   session manager (PipeWire / PulseAudio / JACK) by reopening the
   stream directly against the ALSA kernel device. Covers user-added
   filter chains and distro policies that insert DSP on the capture
   path.
+* :class:`LinuxSessionManagerEscapeBypass` — complementary inverse of
+  the PipeWire-direct strategy: escapes a contended ``hw:X,Y`` pin
+  toward the session-manager virtual PCM (``pipewire`` / ``pulse`` /
+  ``default``).
+* :class:`LinuxWirePlumberDefaultSourceBypass` — repoints a
+  WirePlumber default source that landed on a ``.monitor`` loop-back
+  or a muted real input.
 
-Phase 4 will add:
+Planned, never shipped (no current target version):
 
 * Windows ``DisableSysFx`` registry fallback for endpoints that cannot
   negotiate exclusive mode (driver limitation, policy gate).

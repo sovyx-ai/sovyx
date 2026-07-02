@@ -131,10 +131,16 @@ class LifecycleMixin:
 
         Emits ``audio.stream.closed`` with the cumulative xrun counts
         and frame total observed by the PortAudio callback for this
-        stream BEFORE tearing it down. ``reason`` is a stable tag
-        (``"shutdown"`` / ``"exclusive_restart"`` / ``"shared_restart"``
-        / ``"device_error"`` / ``"unknown"``) the dashboard uses to
-        distinguish operator-initiated tear-downs from device errors.
+        stream BEFORE tearing it down. ``reason`` is a stable tag the
+        dashboard uses to distinguish operator-initiated tear-downs
+        (``"shutdown"``) from device faults (``"device_error"``) and
+        the restart-strategy family (``"exclusive_restart"``,
+        ``"shared_restart"``, ``"alsa_hw_direct_restart"``,
+        ``"session_manager_restart"``, ``"host_api_rotate"``,
+        ``"device_change"``); ``"unknown"`` is the default. The
+        authoritative set is the call sites — grep
+        ``self._close_stream`` under ``voice/capture/`` +
+        ``voice/_capture_task.py`` before relying on this list.
         """
         stream = self._stream
         self._stream = None

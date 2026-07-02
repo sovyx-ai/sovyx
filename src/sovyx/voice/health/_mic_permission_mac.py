@@ -64,8 +64,9 @@ _TCC_AUTH_ALLOWED = 2
 _TCC_AUTH_LIMITED = 3
 """TCCAccessAuthValue constants from Apple's
 ``CoreServices/TCC.h``. Values stable across macOS releases since
-Big Sur 11. Bigger Sur (10.15) used a different schema (``allowed``
-boolean) which is no longer present on supported macOS versions."""
+Big Sur (11), where the ``auth_value`` column was introduced.
+Catalina (10.15) and earlier used the legacy ``allowed`` boolean
+schema, which is no longer present on supported macOS versions."""
 
 
 # ── Probe ─────────────────────────────────────────────────────────
