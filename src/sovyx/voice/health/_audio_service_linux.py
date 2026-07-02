@@ -5,8 +5,12 @@ polls the user-session systemd state of the audio-stack services
 and emits :class:`~sovyx.voice.health.contract.AudioServiceEvent`
 transitions when the aggregate goes Running ↔ Stopped.
 
-Services watched (all four — any that isn't installed on the host
-is excluded at factory time so it doesn't pollute the aggregate):
+Services watched (all four — any whose unit file isn't installed on
+the host is excluded at factory time via ``systemctl --user show -p
+LoadState`` (``LoadState=not-found``) so it doesn't pollute the
+aggregate; ``is-active`` alone CANNOT make that call because modern
+systemd prints ``inactive`` for not-found units — see
+:func:`_probe_existing_services`):
 
 * ``pipewire.service`` — the PipeWire daemon (audio graph + nodes).
 * ``wireplumber.service`` — session manager (routing policy).
@@ -109,7 +113,13 @@ def _query_service_state(service: str) -> str | None:
 
     * ``"active"`` (running)
     * ``"inactive"`` / ``"failed"`` / ``"activating"`` / ``"deactivating"``
-    * ``"unknown"`` (rare — systemctl couldn't decide)
+
+    IMPORTANT (verified on systemd 255): a unit whose unit FILE does
+    not exist also prints ``"inactive"`` (exit 4) — modern systemctl
+    never emits ``"unknown"`` for missing units, so this query CANNOT
+    distinguish "installed but stopped" from "not installed". That
+    distinction is owned by :func:`_query_service_load_state`
+    (``show -p LoadState``); see audit finding LINUX-2.
 
     A ``None`` return means the subprocess itself failed (systemctl
     missing, user bus inaccessible, timeout). Callers treat that as
@@ -137,33 +147,84 @@ def _query_service_state(service: str) -> str | None:
     return state[0].strip() or None
 
 
+def _query_service_load_state(service: str) -> str | None:
+    """Return the unit's ``LoadState`` value, or ``None`` on failure.
+
+    ``systemctl --user show -p LoadState <svc>`` prints exactly one
+    ``LoadState=<value>`` line (rc=0 even for missing units). Values
+    observed on systemd 255 (verified live):
+
+    * ``"loaded"`` — unit file present; the unit can run.
+    * ``"not-found"`` — no unit file installed (ghost unit).
+    * ``"masked"`` — deliberately disabled (``systemctl mask``); the
+      canonical state of ``pulseaudio.service`` on PipeWire distros.
+    * ``"bad-setting"`` / ``"error"`` — unit file present but unusable.
+
+    ``None`` means the subprocess itself failed (systemctl missing,
+    user bus inaccessible, timeout) — same semantics as
+    :func:`_query_service_state`.
+    """
+    try:
+        proc = subprocess.run(  # noqa: S603, S607 — fixed argv via PATH, no shell
+            [_SYSTEMCTL_EXE, "--user", "show", "-p", "LoadState", service],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_SYSTEMCTL_TIMEOUT_S,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in proc.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("LoadState="):
+            value = stripped.split("=", 1)[1].strip()
+            return value or None
+    return None
+
+
 def _probe_existing_services(
     candidates: tuple[str, ...] = _AUDIO_SERVICE_CANDIDATES,
     *,
-    query: Callable[[str], str | None] | None = None,
+    load_state_query: Callable[[str], str | None] | None = None,
 ) -> set[str]:
-    """Return the subset of ``candidates`` that systemd knows about.
+    """Return the subset of ``candidates`` whose unit file is installed
+    AND runnable (``LoadState=loaded``).
 
-    A service is "known" if :func:`_query_service_state` returns a
-    non-``None`` value for it — that covers ``"active"`` (running),
-    ``"inactive"`` / ``"failed"`` (unit installed but not running),
-    etc. A ``None`` means systemctl itself didn't respond (service
-    truly missing, user bus gone, timeout); those are excluded.
+    Pre-fix history (audit finding LINUX-2): this probe used
+    ``is-active`` output and excluded only the literal ``"unknown"`` —
+    but modern systemctl (>= ~v230; verified on systemd 255) prints
+    ``"inactive"`` for NOT-INSTALLED units too, so every candidate was
+    always "known". On any real host at least one candidate is a
+    permanently-inactive ghost (``pulseaudio.service`` on PipeWire
+    distros / ``pipewire.*`` on pure-PA), which made the aggregate
+    ``all(state == "active")`` permanently ``False`` and the DOWN/UP
+    transition detector structurally inert.
+
+    ``LoadState`` is the truthful installed-signal: ``not-found``
+    means no unit file; ``masked`` means deliberately disabled (never
+    startable — including it would recreate the permanently-inactive
+    ghost); only ``loaded`` units can ever reach ``active``.
+
+    ``load_state_query`` is injectable for tests (mirror REAL
+    systemctl behaviour when substituting — Debugging Rule #13). The
+    per-poll ``is-active`` query plays no role here: its output cannot
+    answer the installed question.
 
     The factory calls this once at startup to decide between the
     real monitor and Noop. An empty return → Noop (non-systemd
     system or no audio stack installed).
     """
-    q = query if query is not None else _query_service_state
+    lq = load_state_query if load_state_query is not None else _query_service_load_state
     found: set[str] = set()
     for service in candidates:
-        state = q(service)
-        if state is None:
+        load_state = lq(service)
+        if load_state is None:
+            # systemctl itself failed — treat as "not observable" and
+            # keep the watch set lean (empty set → Noop monitor).
             continue
-        # ``"unknown"`` is systemctl's fallback when it cannot
-        # determine state. Treat as "service not really installed"
-        # to keep the watch set lean.
-        if state.lower() == "unknown":
+        if load_state.lower() != "loaded":
             continue
         found.add(service)
     return found
@@ -407,12 +468,14 @@ class LinuxAudioServiceMonitor:
 def build_linux_audio_service_monitor(
     *,
     query: Callable[[str], str | None] | None = None,
+    load_state_query: Callable[[str], str | None] | None = None,
     poll_interval_s: float | None = None,
 ) -> AudioServiceMonitor:
     """Return a real monitor, or Noop when systemd-user is unavailable.
 
-    Fast-path probes which of the candidate audio services exist on
-    this host. An empty result means one of:
+    Fast-path probes which of the candidate audio services are
+    INSTALLED on this host (``LoadState=loaded`` — see
+    :func:`_probe_existing_services`). An empty result means one of:
 
     * Non-systemd distro (Alpine, void, gentoo-openrc).
     * Container without a user bus (``systemd-logind`` absent).
@@ -421,10 +484,12 @@ def build_linux_audio_service_monitor(
     In any of those cases the real monitor would never observe a
     transition, so we skip the poll loop entirely.
 
-    ``query`` is injectable so the daemon's boot sequence can
-    verify Noop behaviour in CI without needing a real systemctl.
+    ``query`` (per-poll ``is-active`` state) and ``load_state_query``
+    (one-shot installed probe) are injectable so the daemon's boot
+    sequence can verify Noop behaviour in CI without needing a real
+    systemctl.
     """
-    existing = _probe_existing_services(query=query)
+    existing = _probe_existing_services(load_state_query=load_state_query)
     if not existing:
         logger.warning(
             "voice_audio_service_monitor_unavailable",

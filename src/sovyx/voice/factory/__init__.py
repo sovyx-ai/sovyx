@@ -646,8 +646,12 @@ async def create_voice_pipeline(
     # UCM observability default ON (read-only, never mutates state).
     _maybe_check_mic_permission()
     await _maybe_check_llm_reachable()
-    _maybe_log_pipewire_status()
-    _maybe_log_alsa_ucm_status()
+    # AP #14 (audit finding LINUX-1d) — both probes bottom out in sync
+    # subprocess.run chains (pactl info + pactl list modules + pgrep;
+    # alsaucm x2 PER input card, 3 s timeouts each) and were running
+    # directly on the event loop during pipeline boot.
+    await asyncio.to_thread(_maybe_log_pipewire_status)
+    await asyncio.to_thread(_maybe_log_alsa_ucm_status)
     await _maybe_log_recent_audio_etw_events()
     await _maybe_log_macos_diagnostics()
     # Phase 5.C v0.32.6 — the four ``linux_mixer_*_fraction`` operator
@@ -1294,7 +1298,13 @@ async def create_voice_pipeline(
     if render_buffer is not None:
         pipeline.set_render_buffer(render_buffer)
     double_talk_detector = _build_double_talk_detector(tuning)
-    noise_suppressor = _build_noise_suppressor(
+    # AP #14 — when voice_use_os_dsp_when_available is on, the builder
+    # probes the OS DSP stack synchronously (detect_pipewire subprocess
+    # chain on Linux / detect_capture_apos registry walk on Windows /
+    # detect_hal_plugins on macOS); offload like the sibling
+    # _detect_voice_clarity_active call above.
+    noise_suppressor = await asyncio.to_thread(
+        _build_noise_suppressor,
         tuning,
         resolved_name=(resolved.name if resolved is not None else None),
     )
@@ -1406,8 +1416,19 @@ async def create_voice_pipeline(
         platform_key=platform_key,
         bypass_strategies=[s.name for s in strategies],
     )
-    _emit_capture_apo_detection(resolved_name=resolved.name if resolved is not None else None)
-    _emit_linux_capture_apo_detection(
+    # AP #14 (audit findings WINDOWS-11 + LINUX-1d) — the Windows emit
+    # walks the MMDevices registry (4+ reads per endpoint, plus DLL
+    # introspection I/O when enabled) and the Linux emit spawns pactl +
+    # pw-dump (2 s timeouts each); both are sync by design (the
+    # detectors' contract says async callers MUST asyncio.to_thread —
+    # the dashboard endpoints already comply) and were the two
+    # non-compliant call sites.
+    await asyncio.to_thread(
+        _emit_capture_apo_detection,
+        resolved_name=resolved.name if resolved is not None else None,
+    )
+    await asyncio.to_thread(
+        _emit_linux_capture_apo_detection,
         resolved_name=resolved.name if resolved is not None else None,
     )
     # Phase 5 / T5.46 + T5.47 — Windows Group Policy detection.

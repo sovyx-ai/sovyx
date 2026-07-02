@@ -1571,6 +1571,14 @@ class TestPlatformAudioServiceFactory:
         # deterministic instead of depending on the test host.
         from sovyx.voice.health import _audio_service_linux
 
+        # The installed-probe reads LoadState (LINUX-2): mirror real
+        # systemctl — "loaded" for the installed unit, "not-found" for
+        # the rest (Debugging Rule #13).
+        monkeypatch.setattr(
+            _audio_service_linux,
+            "_query_service_load_state",
+            lambda svc: "loaded" if svc == "pipewire.service" else "not-found",
+        )
         monkeypatch.setattr(
             _audio_service_linux,
             "_query_service_state",
@@ -1587,6 +1595,11 @@ class TestPlatformAudioServiceFactory:
         # Noop, so the wire-up is safe on non-systemd Linux hosts.
         from sovyx.voice.health import _audio_service_linux
 
+        monkeypatch.setattr(
+            _audio_service_linux,
+            "_query_service_load_state",
+            lambda _svc: None,
+        )
         monkeypatch.setattr(
             _audio_service_linux,
             "_query_service_state",

@@ -66,3 +66,61 @@ class TestProcCardsReadFailureLogLevel:
         assert not debug_records, (
             "linux_mixer_proc_cards_read_failed must NOT log at DEBUG (regression)"
         )
+
+
+class TestTuningThreading:
+    """LINUX-18 — a caller-supplied tuning must reach the classifier.
+
+    Pre-fix ``enumerate_alsa_mixer_snapshots`` built its own fresh
+    ``VoiceTuningConfig``, so a programmatic override classified with
+    env defaults while the caller reported the override values."""
+
+    _SCONTENTS = (
+        "Simple mixer control 'Internal Mic Boost',0\n"
+        "  Capabilities: volume\n"
+        "  Limits: 0 - 3\n"
+        "  Front Left: 2 [66%] [24.00dB]\n"
+        "  Front Right: 2 [66%] [24.00dB]\n"
+    )
+
+    _PROC_CARDS_TEXT = (
+        " 0 [Generic        ]: HDA-Intel - HD-Audio Generic\n"
+        "                      HD-Audio Generic at 0x10b8000 irq 88\n"
+    )
+
+    def _snapshots(self, tuning: object) -> list[object]:
+        from unittest.mock import MagicMock
+
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.stdout = self._SCONTENTS
+        completed.stderr = ""
+        proc_cards = MagicMock()
+        proc_cards.exists.return_value = True
+        proc_cards.read_text.return_value = self._PROC_CARDS_TEXT
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch("shutil.which", return_value="/usr/bin/amixer"),
+            patch.object(mod, "_PROC_CARDS", proc_cards),
+            patch.object(mod.subprocess, "run", return_value=completed),
+        ):
+            sys_mock.platform = "linux"
+            return mod.enumerate_alsa_mixer_snapshots(tuning=tuning)  # type: ignore[arg-type]
+
+    def test_caller_tuning_drives_saturation_classification(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        # Boost at 2/3 (ratio ~0.66). A strict override ceiling of 0.5
+        # must flag saturation_risk; a lax 0.9 must not.
+        strict = VoiceTuningConfig(linux_mixer_saturation_ratio_ceiling=0.5)
+        lax = VoiceTuningConfig(linux_mixer_saturation_ratio_ceiling=0.9)
+
+        strict_snaps = self._snapshots(strict)
+        lax_snaps = self._snapshots(lax)
+        assert strict_snaps and lax_snaps
+        assert strict_snaps[0].controls[0].saturation_risk is True  # type: ignore[attr-defined]
+        assert lax_snaps[0].controls[0].saturation_risk is False  # type: ignore[attr-defined]
+
+    def test_default_none_builds_fresh_tuning(self) -> None:
+        snaps = self._snapshots(None)
+        assert snaps  # legacy callers keep working with tuning=None

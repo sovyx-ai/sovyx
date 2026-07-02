@@ -22,6 +22,13 @@ Detection strategy (in order):
    both timed out). The detector returns ``has_grab=None`` and the
    caller renders a "could not determine" state.
 
+Sovyx's OWN capture streams are excluded from both detection paths
+(``os.getpid()`` plus direct children on the /proc path) — the
+endpoint is callable while the voice pipeline is live, and pre-fix it
+reported ``has_grab=True`` naming Sovyx's own python as the grabbing
+process (audit finding LINUX-9). A report whose only holders are the
+daemon itself is ``has_grab=False``.
+
 Never raises. Outermost ``try/except Exception`` wraps both the
 subprocess and the /proc scan; a broken detector must never block
 the dashboard or break ``sovyx doctor``.
@@ -50,6 +57,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 
 if TYPE_CHECKING:
     from sovyx.engine.config import VoiceTuningConfig
@@ -79,10 +87,12 @@ class SessionManagerGrabReport:
     """Outcome of :func:`detect_session_manager_grab`.
 
     Attributes:
-        has_grab: ``True`` — at least one process is capturing on a
-            source Sovyx would fight for. ``False`` — no contention
-            detected. ``None`` — inconclusive (detection tooling
-            absent or both methods failed / timed out).
+        has_grab: ``True`` — at least one OTHER process is capturing
+            on a source Sovyx would fight for (the daemon's own pid /
+            direct children are excluded — self-capture is not
+            contention). ``False`` — no contention detected.
+            ``None`` — inconclusive (detection tooling absent or both
+            methods failed / timed out).
         grabbing_processes: Best-effort list of processes responsible
             for the grab. May be empty even when ``has_grab`` is
             ``True`` (e.g. pactl returned one block but name parsing
@@ -180,6 +190,7 @@ async def _detect_via_pactl(
             timeout=tuning.detector_pactl_timeout_s,
             check=False,
             shell=False,
+            env=linux_tool_env(),
         )
     except FileNotFoundError:
         logger.debug("session_manager_detector_pactl_not_in_path")
@@ -205,11 +216,33 @@ async def _detect_via_pactl(
             evidence="pactl returned 0 source-outputs",
         )
 
+    own_pid = os.getpid()
     processes = _parse_pactl_source_outputs(stdout)
+    others = tuple(p for p in processes if p.pid != own_pid)
+    self_hits = len(processes) - len(others)
+    # Sections whose application.process.id could not be parsed are
+    # unattributable — treated as a grab (we never assume an unknown
+    # holder is us), preserving the pre-fix conservatism for foreign
+    # output shapes.
+    sections = [sec for sec in _PACTL_SECTION_SEPARATOR.split(stdout) if sec.strip()]
+    unattributed = sum(1 for sec in sections if _PACTL_PROCESS_ID_PATTERN.search(sec) is None)
+
+    if not others and unattributed == 0:
+        # Every source-output belongs to this daemon — self-capture,
+        # not contention (audit finding LINUX-9).
+        return SessionManagerGrabReport(
+            has_grab=False,
+            detection_method="pactl",
+            evidence=(
+                f"all {self_hits} source-output(s) belong to Sovyx itself "
+                f"(pid={own_pid}) — self-capture excluded"
+            ),
+        )
+
     evidence = stdout[: tuning.detector_evidence_max_chars]
     return SessionManagerGrabReport(
         has_grab=True,
-        grabbing_processes=tuple(processes),
+        grabbing_processes=others,
         detection_method="pactl",
         evidence=evidence,
     )
@@ -301,6 +334,7 @@ def _scan_proc_fds(
     evidence_bits: list[str] = []
     scanned = 0
 
+    own_pid = os.getpid()
     for pid_dir in proc_root.iterdir():
         if not pid_dir.name.isdigit():
             continue
@@ -308,6 +342,15 @@ def _scan_proc_fds(
             evidence_bits.append(f"(scan capped at {scanned} PIDs)")
             break
         scanned += 1
+
+        try:
+            pid = int(pid_dir.name)
+        except ValueError:
+            continue
+        if pid == own_pid:
+            # The daemon holding its own PCM node is self-capture,
+            # not contention (audit finding LINUX-9).
+            continue
 
         fd_dir = pid_dir / "fd"
         try:
@@ -321,10 +364,10 @@ def _scan_proc_fds(
             except (PermissionError, FileNotFoundError, OSError):
                 continue
             if _PCM_CAPTURE_PATTERN.search(target):
-                try:
-                    pid = int(pid_dir.name)
-                except ValueError:
-                    continue
+                if _proc_ppid(pid_dir) == own_pid:
+                    # Direct child of the daemon (worker subprocess) —
+                    # same self-capture exclusion as the parent pid.
+                    break
                 comm = _read_proc_comm(pid_dir)
                 grabbing.append(ProcessInfo(pid=pid, name=comm))
                 evidence_bits.append(f"pid={pid} {comm!r} → {target}")
@@ -352,6 +395,28 @@ def _read_proc_comm(pid_dir: Path) -> str:
             return fh.read().strip()
     except (PermissionError, FileNotFoundError, OSError):
         return ""
+
+
+def _proc_ppid(pid_dir: Path) -> int | None:
+    """Return the parent PID from ``/proc/<pid>/stat``, or ``None``.
+
+    Field 4 of ``stat``, read AFTER the last ``)`` so a comm containing
+    spaces/parens can't shift the split. Only consulted on capture-node
+    hits (rare), so the extra read is negligible.
+    """
+    try:
+        raw = (pid_dir / "stat").read_text(encoding="utf-8", errors="replace")
+    except (PermissionError, FileNotFoundError, OSError):
+        return None
+    _, _, tail = raw.rpartition(")")
+    fields = tail.split()
+    # tail = " <state> <ppid> ...": fields[0]=state, fields[1]=ppid.
+    if len(fields) < 2:  # noqa: PLR2004
+        return None
+    try:
+        return int(fields[1])
+    except ValueError:
+        return None
 
 
 __all__ = [

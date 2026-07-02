@@ -43,6 +43,7 @@ Reference: F1 inventory mission task F4; ALSA UCM docs
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import subprocess  # noqa: S404 — fixed-argv subprocess to trusted alsa-utils binary
 import sys
@@ -50,6 +51,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 
 logger = get_logger(__name__)
 
@@ -95,9 +97,12 @@ class UcmStatus(StrEnum):
     needed unless the active verb is sub-optimal."""
 
     UNKNOWN = "unknown"
-    """Detection failed (subprocess error, parse failure). Cascade
-    should treat as UNAVAILABLE for routing decisions but surface
-    UNKNOWN for telemetry attribution."""
+    """Detection could not run (``alsaucm`` spawn failure or timeout
+    while listing verbs). Distinct from :attr:`NO_PROFILE`, which is
+    ``alsaucm`` ANSWERING with "no use-case configuration for this
+    card" (non-zero exit) or an empty verb list. Cascade should treat
+    as UNAVAILABLE for routing decisions but surface UNKNOWN for
+    telemetry attribution."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +190,19 @@ def detect_ucm(card_id: str) -> UcmReport:
         )
 
     verbs = _enumerate_verbs(alsaucm_path, card_id, notes)
+    if verbs is None:
+        # Genuine probe failure (spawn error / timeout) — we could not
+        # ask the card anything, so claiming NO_PROFILE would be a
+        # truthfulness inversion. UNKNOWN was previously unreachable on
+        # every path despite its docstring (audit finding LINUX-3).
+        return UcmReport(
+            status=UcmStatus.UNKNOWN,
+            card_id=card_id,
+            alsaucm_available=True,
+            verbs=(),
+            active_verb=None,
+            notes=tuple(notes),
+        )
     active = _query_active_verb(alsaucm_path, card_id, notes)
 
     if not verbs:
@@ -218,7 +236,8 @@ def enumerate_verbs(card_id: str) -> tuple[str, ...]:
     alsaucm = shutil.which("alsaucm")
     if alsaucm is None:
         return ()
-    return tuple(_enumerate_verbs(alsaucm, card_id, []))
+    verbs = _enumerate_verbs(alsaucm, card_id, [])
+    return tuple(verbs) if verbs is not None else ()
 
 
 def get_active_verb(card_id: str) -> str | None:
@@ -263,6 +282,7 @@ async def set_verb(card_id: str, verb: str) -> None:
             text=True,
             timeout=_SET_VERB_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except subprocess.TimeoutExpired as exc:
         msg = f"alsaucm set _verb exceeded {_SET_VERB_TIMEOUT_S} s budget"
@@ -280,23 +300,46 @@ async def set_verb(card_id: str, verb: str) -> None:
 # ── Internal helpers ──────────────────────────────────────────────
 
 
+_VERB_ITEM_RE = re.compile(r"^\s*\d+:\s*(?P<name>\S.*?)\s*$")
+"""Matches one numbered list item emitted by ``alsaucm ... list _verbs``.
+
+Upstream alsa-utils prints each item as ``printf("  %i: %s\\n", i,
+name)`` (``alsaucm/usecase.c``, ``OM_LIST2``); an optional verb comment
+follows on its own MORE-indented line printed as ``printf("    %s\\n",
+comment)`` — comment lines never match this pattern because they carry
+no ``N:`` prefix."""
+
+
 def _enumerate_verbs(
     alsaucm_path: str,
     card_id: str,
     notes: list[str],
-) -> list[str]:
+) -> list[str] | None:
     """Run ``alsaucm -c <card> list _verbs`` and parse stdout.
 
-    Output format example::
+    Real ``alsaucm`` output (verified against upstream alsa-utils
+    ``alsaucm/usecase.c`` printf formats — audit finding LINUX-3; the
+    previously-documented ``Available verbs:`` / ``Name: Description``
+    shape is emitted by NO alsaucm version)::
 
-        Available verbs:
-            HiFi: Default high-fidelity playback / capture
-            VoiceCall: Hands-free / mobile telephony
-            HDMI: HDMI audio output
+          0: HiFi
+            Default high-fidelity playback / capture
+          1: VoiceCall
+            Hands-free / mobile telephony
 
-    Each verb is on its own line, name preceding the first colon.
-    Returns empty list on subprocess / parse failure (caller logs
-    the note via the shared ``notes`` accumulator)."""
+    An empty (but present) profile prints ``  list is empty`` with
+    rc=0; a card WITHOUT a UCM profile makes alsaucm exit non-zero
+    with a stderr diagnostic.
+
+    Returns:
+        * list of verb names — items matched from ``  N: Name`` lines
+          (comment continuation lines are skipped; ``list is empty``
+          matches nothing → empty list → NO_PROFILE upstream);
+        * ``[]`` also on non-zero exit (alsaucm answered: no profile);
+        * ``None`` on genuine probe failure (spawn error / timeout) so
+          :func:`detect_ucm` can report UNKNOWN instead of a phantom
+          verdict. Notes accumulate the diagnostic either way.
+    """
     try:
         result = subprocess.run(
             (alsaucm_path, "-c", card_id, "list", "_verbs"),
@@ -304,13 +347,14 @@ def _enumerate_verbs(
             text=True,
             timeout=_ALSAUCM_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except subprocess.TimeoutExpired:
         notes.append(f"alsaucm list _verbs (card={card_id}) timed out")
-        return []
+        return None
     except OSError as exc:
         notes.append(f"alsaucm spawn failed: {exc!r}")
-        return []
+        return None
     if result.returncode != 0:
         notes.append(
             f"alsaucm list _verbs exited {result.returncode}: {result.stderr.strip()[:120]}",
@@ -318,13 +362,12 @@ def _enumerate_verbs(
         return []
     verbs: list[str] = []
     for raw in result.stdout.splitlines():
-        line = raw.strip()
-        # Skip the header line + blank lines.
-        if not line or line.lower().startswith("available verbs"):
+        item = _VERB_ITEM_RE.match(raw)
+        if item is None:
+            # Header noise, blank lines, "  list is empty", and the
+            # more-indented per-verb comment lines all land here.
             continue
-        # Each verb line looks like "Name: Description".
-        # Some alsaucm versions omit the colon — accept either.
-        name = line.split(":", 1)[0].strip() if ":" in line else line
+        name = item.group("name")
         if name:
             verbs.append(name)
     return verbs
@@ -336,7 +379,14 @@ def _query_active_verb(
     notes: list[str],
 ) -> str | None:
     """Run ``alsaucm -c <card> get _verb`` and return the parsed
-    active verb, or ``None`` when none is set / probe failed."""
+    active verb, or ``None`` when none is set / probe failed.
+
+    Real output shape is ``  _verb=HiFi`` — upstream prints
+    ``printf("  %s=%s\\n", argv[0], value)`` (``usecase.c`` OM_GET).
+    Pre-fix the parser only stripped whitespace/quotes, so the active
+    verb came back as ``"_verb=HiFi"`` and could never equal a listed
+    verb name, making :attr:`UcmStatus.ACTIVE` unreachable (audit
+    finding LINUX-3)."""
     try:
         result = subprocess.run(
             (alsaucm_path, "-c", card_id, "get", "_verb"),
@@ -344,6 +394,7 @@ def _query_active_verb(
             text=True,
             timeout=_ALSAUCM_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except subprocess.TimeoutExpired:
         notes.append(f"alsaucm get _verb (card={card_id}) timed out")
@@ -354,8 +405,12 @@ def _query_active_verb(
     if result.returncode != 0:
         notes.append(f"alsaucm get _verb exited {result.returncode}")
         return None
-    # ``get _verb`` prints the verb name on stdout, possibly quoted.
-    stripped = result.stdout.strip().strip('"').strip("'")
+    # ``  _verb=HiFi`` → "HiFi". Tolerate a bare value (defensive) and
+    # legacy quoting.
+    stripped = result.stdout.strip()
+    if "=" in stripped:
+        stripped = stripped.split("=", 1)[1]
+    stripped = stripped.strip().strip('"').strip("'")
     return stripped or None
 
 

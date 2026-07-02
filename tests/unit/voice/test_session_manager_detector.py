@@ -197,6 +197,136 @@ Source Output #1
         assert report.has_grab is None
 
 
+class TestSelfCaptureExclusion:
+    """LINUX-9 regression: the daemon's own capture streams are not
+    contention — pre-fix /api/voice/capture-diagnostics reported
+    has_grab=True naming Sovyx's own python whenever the pipeline ran."""
+
+    @pytest.mark.asyncio()
+    async def test_only_own_pid_source_output_reports_no_grab(self) -> None:
+        import os
+
+        stdout = f"""
+Source Output #7
+  Properties:
+    application.name = "python3"
+    application.process.id = "{os.getpid()}"
+""".strip()
+        fake_result = MagicMock(returncode=0, stdout=stdout, stderr="")
+        with (
+            patch("sovyx.voice._session_manager_detector.sys.platform", "linux"),
+            patch(
+                "sovyx.voice._session_manager_detector.subprocess.run",
+                return_value=fake_result,
+            ),
+        ):
+            report = await detect_session_manager_grab(tuning=_TUNING)
+        assert report.has_grab is False
+        assert report.detection_method == "pactl"
+        assert report.grabbing_processes == ()
+        assert "self-capture excluded" in report.evidence
+
+    @pytest.mark.asyncio()
+    async def test_own_pid_plus_foreign_app_reports_only_the_foreign_app(self) -> None:
+        import os
+
+        stdout = f"""
+Source Output #7
+  Properties:
+    application.name = "python3"
+    application.process.id = "{os.getpid()}"
+
+Source Output #8
+  Properties:
+    application.name = "Firefox"
+    application.process.id = "4321"
+""".strip()
+        fake_result = MagicMock(returncode=0, stdout=stdout, stderr="")
+        with (
+            patch("sovyx.voice._session_manager_detector.sys.platform", "linux"),
+            patch(
+                "sovyx.voice._session_manager_detector.subprocess.run",
+                return_value=fake_result,
+            ),
+        ):
+            report = await detect_session_manager_grab(tuning=_TUNING)
+        assert report.has_grab is True
+        assert [p.pid for p in report.grabbing_processes] == [4321]
+
+    @pytest.mark.asyncio()
+    async def test_unattributed_section_stays_conservative(self) -> None:
+        # A section with no parsable application.process.id could be
+        # anyone — keep the pre-fix conservatism (has_grab=True).
+        stdout = """
+Source Output #9
+  Properties:
+    application.name = "MysteryApp"
+""".strip()
+        fake_result = MagicMock(returncode=0, stdout=stdout, stderr="")
+        with (
+            patch("sovyx.voice._session_manager_detector.sys.platform", "linux"),
+            patch(
+                "sovyx.voice._session_manager_detector.subprocess.run",
+                return_value=fake_result,
+            ),
+        ):
+            report = await detect_session_manager_grab(tuning=_TUNING)
+        assert report.has_grab is True
+
+    def test_proc_scan_skips_own_pid(self, tmp_path) -> None:  # noqa: ANN001
+        import os
+
+        from sovyx.voice._session_manager_detector import _scan_proc_fds
+
+        own = tmp_path / str(os.getpid()) / "fd"
+        own.mkdir(parents=True)
+        # A capture-node fd owned by ourselves; readlink on a real
+        # symlink is fiddly cross-platform, so patch os.readlink.
+        (own / "5").write_text("placeholder")
+        with patch(
+            "sovyx.voice._session_manager_detector.os.readlink",
+            return_value="/dev/snd/pcmC1D0c",
+        ):
+            report = _scan_proc_fds(tmp_path, _TUNING)
+        assert report.has_grab is False
+
+    def test_proc_scan_flags_foreign_pid(self, tmp_path) -> None:  # noqa: ANN001
+        from sovyx.voice._session_manager_detector import _scan_proc_fds
+
+        foreign = tmp_path / "4321"
+        (foreign / "fd").mkdir(parents=True)
+        (foreign / "fd" / "5").write_text("placeholder")
+        (foreign / "comm").write_text("firefox\n")
+        # stat with a non-Sovyx parent (ppid=1).
+        (foreign / "stat").write_text("4321 (firefox) S 1 4321 4321 0 -1 4194560\n")
+        with patch(
+            "sovyx.voice._session_manager_detector.os.readlink",
+            return_value="/dev/snd/pcmC1D0c",
+        ):
+            report = _scan_proc_fds(tmp_path, _TUNING)
+        assert report.has_grab is True
+        assert report.grabbing_processes[0].pid == 4321
+
+    def test_proc_scan_skips_direct_child_of_daemon(self, tmp_path) -> None:  # noqa: ANN001
+        import os
+
+        from sovyx.voice._session_manager_detector import _scan_proc_fds
+
+        child = tmp_path / "9999"
+        (child / "fd").mkdir(parents=True)
+        (child / "fd" / "5").write_text("placeholder")
+        (child / "comm").write_text("python3\n")
+        (child / "stat").write_text(
+            f"9999 (python3) S {os.getpid()} 9999 9999 0 -1 4194560\n",
+        )
+        with patch(
+            "sovyx.voice._session_manager_detector.os.readlink",
+            return_value="/dev/snd/pcmC1D0c",
+        ):
+            report = _scan_proc_fds(tmp_path, _TUNING)
+        assert report.has_grab is False
+
+
 class TestDetectSessionManagerGrabSwallowsExceptions:
     @pytest.mark.asyncio()
     async def test_unexpected_exception_returns_unavailable(self) -> None:

@@ -76,18 +76,6 @@ if TYPE_CHECKING:
     from sovyx.voice.device_enum import DeviceEntry
 
 
-SymlinkResolver = "Callable[[Path], Path]"
-"""Signature for the sysfs-symlink resolver.
-
-Production uses :meth:`pathlib.Path.resolve` strictly; tests inject
-a fake that returns a pre-constructed Path with the PCI BDF /
-USB bus segments embedded — without needing the underlying
-filesystem to support colons in directory names (Windows dev
-hosts). Keeps the production code path unchanged while enabling
-cross-platform unit tests.
-"""
-
-
 def _default_resolve_symlink(path: Path) -> Path:
     """Real sysfs resolver — used at production call sites."""
     return path.resolve(strict=True)

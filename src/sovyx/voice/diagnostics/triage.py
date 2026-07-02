@@ -404,6 +404,27 @@ def _endpoint_probed_and_failed(n: dict[str, Any]) -> bool:
     return dns_failed or tcp_failed
 
 
+def _read_selftest_status(summary: dict[str, Any], default: str | None = None) -> str | None:
+    """Read ``analyzer_selftest_status`` wherever the producer put it.
+
+    Producer shapes diverge (#40 class — audit finding LINUX-8): the
+    Windows-v2 producer writes the key TOP-LEVEL
+    (:data:`_schema.ANALYZER_SELFTEST_STATUS`, per the
+    ``WindowsSummaryV2`` TypedDict), while the Linux bash finalizer
+    (``_bash/lib/finalize.sh``) nests it under ``calibration`` with NO
+    top-level copy. Pre-fix, hypothesis H6 read only the top-level key
+    — structurally dead for every Linux tarball even though the header
+    rendering a few lines away already knew the nested path. This is
+    the single accessor both consumers now share.
+    """
+    nested = summary.get("calibration", {}) or {}
+    value = nested.get(
+        _schema.ANALYZER_SELFTEST_STATUS,
+        summary.get(_schema.ANALYZER_SELFTEST_STATUS, default),
+    )
+    return value if isinstance(value, str) else default
+
+
 def _evaluate_hypotheses(
     root: Path, summary: dict[str, Any], toolkit: str, alerts: list[dict[str, Any]]
 ) -> list[_HypothesisBuilder]:
@@ -424,12 +445,14 @@ def _evaluate_hypotheses(
     # coerces None → "" before the ``in`` substring check, avoiding
     # ``TypeError: argument of type 'NoneType' is not iterable``.
     # Same pattern as ``_detect_toolkit`` kernel_line handling above.
-    silence_alerts = [
-        a
-        for a in alerts
-        if "silence_across" in (a.get("message") or "")
-        or "voice_clarity_destroying" in (a.get("message") or "")
-    ]
+    # Only 'silence_across' exists as an alerts.jsonl producer token
+    # (Linux bash toolkit alerts.sh). A 'voice_clarity_destroying'
+    # branch used to sit here too, but NO producer ever writes that
+    # token into alerts.jsonl — the only real use of the string is the
+    # Windows-v2 live_captures VERDICT constant in SUMMARY.json, which
+    # H2 already consumes via _schema.WIN_LIVE_VERDICT_APO_CONFIRMED.
+    # Removed as undisclosed dead scaffolding (audit finding DOCTOR-10).
+    silence_alerts = [a for a in alerts if "silence_across" in (a.get("message") or "")]
     for a in silence_alerts:
         h1.add_for(f"alert: {a['message'][:200]}", weight=0.5)
     # Look at capture analysis files.
@@ -548,7 +571,7 @@ def _evaluate_hypotheses(
 
     # --- H6: Selftest failed (cross-OS, mid-confidence in EVERYTHING) ---
     h6 = get("H6", "Analyzer selftest failed — downstream metrics suspect")
-    if summary.get(_schema.ANALYZER_SELFTEST_STATUS) == "fail":
+    if _read_selftest_status(summary) == "fail":
         h6.add_for("analyzer_selftest_status=fail — analysis pipeline contaminated", weight=1.0)
 
     # --- H7: Network blocked LLM provider (cross-OS) ---
@@ -665,14 +688,15 @@ def _evaluate_hypotheses(
                 ax_content = ax_file.read_text(encoding="utf-8", errors="replace")
             if ax_content is None:
                 continue
-            # Pattern: 'Mic Boost',0  ... Front Left: 0 [0%]
-            mic_boost_zero = bool(
-                re.search(
-                    r"'Mic Boost'.*?Front Left:\s*0\s*\[0%\]",
-                    ax_content,
-                    re.DOTALL,
-                )
-            )
+            # Pattern: the 'Mic Boost' control block reads 0 [0%].
+            # The match is confined to ONE "Simple mixer control"
+            # block — the previous re.DOTALL '.*?' could span from a
+            # NON-zero Mic Boost into a later zeroed control ('Front
+            # Mic'/'Line' parked at 0 [0%] is common), false-flagging
+            # a healthy mixer (audit finding LINUX-20). Channel lines
+            # may carry the class prefix ('Front Left: Capture 0
+            # [0%]') — tolerated.
+            mic_boost_zero = _amixer_mic_boost_zeroed(ax_content)
             if mic_boost_zero:
                 h10.add_for(
                     f"amixer dump in {ax_file.name} shows 'Mic Boost' = 0/3 (zeroed)",
@@ -681,6 +705,24 @@ def _evaluate_hypotheses(
                 break
 
     return list(hyps.values())
+
+
+def _amixer_mic_boost_zeroed(ax_content: str) -> bool:
+    """True iff the ``'Mic Boost'`` simple-control block reads ``0 [0%]``.
+
+    Splits the ``amixer scontents`` dump on its ``Simple mixer
+    control`` headers (the same block discipline
+    ``_linux_mixer_probe._split_simple_control_blocks`` applies) and
+    tests only the ``'Mic Boost'`` block's channel lines, so a zeroed
+    UNRELATED control later in the dump cannot leak into the match.
+    """
+    for block in re.split(r"(?m)^(?=Simple mixer control ')", ax_content):
+        if not block.startswith("Simple mixer control 'Mic Boost',"):
+            continue
+        return bool(
+            re.search(r"Front Left:\s*(?:[A-Za-z]+\s+)?0\s*\[0%\]", block),
+        )
+    return False
 
 
 def _to_verdict(b: _HypothesisBuilder) -> HypothesisVerdict:
@@ -773,9 +815,7 @@ def triage_tarball(archive_or_dir: Path, *, is_extracted_dir: bool = False) -> T
         # Preserve the v0.30.13 quirk: list slice is rendered via repr().
         os_str = f"{toolkit} ({kline.split()[0:6] if kline else ''})"
 
-    selftest = (summary.get("calibration", {}) or {}).get(
-        "analyzer_selftest_status", summary.get("analyzer_selftest_status", "?")
-    )
+    selftest = _read_selftest_status(summary, default="?")
 
     return TriageResult(
         schema_version=int(summary.get("schema_version", 1) or 1),

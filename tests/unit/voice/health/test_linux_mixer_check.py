@@ -327,7 +327,10 @@ class TestEventLoopNotBlocked:
                 await asyncio.sleep(0.005)
                 parallel_progress.append(1)
 
-        def _slow_probe() -> list[MixerCardSnapshot]:
+        def _slow_probe(**_kwargs: object) -> list[MixerCardSnapshot]:
+            # Accepts the tuning= kwarg the check threads through
+            # (LINUX-18) without asserting on it — this test pins only
+            # the event-loop-not-blocked property.
             time.sleep(0.1)
             return []
 

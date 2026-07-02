@@ -13,6 +13,7 @@ Ref: SPE-028 §7, SPE-015 §doctor.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import importlib
 import json
@@ -1131,7 +1132,12 @@ class Doctor:
         results.append(_check_python_version())
         results.append(_check_dependency_versions())
         results.append(_check_data_dir_writable(self._data_dir))
-        results.append(_check_voice_capture_apo())
+        # AP #14 (audit finding WINDOWS-11) — the APO check walks the
+        # MMDevices registry synchronously (detect_capture_apos: 4+
+        # registry reads per endpoint, plus DLL introspection I/O when
+        # enabled); its contract requires async callers to offload via
+        # asyncio.to_thread like the dashboard endpoints do.
+        results.append(await asyncio.to_thread(_check_voice_capture_apo))
         results.append(_check_voice_kernel_invalidated())
 
         report = DiagnosticReport(results=tuple(results))
@@ -1206,7 +1212,8 @@ class Doctor:
             return _check_data_dir_writable(self._data_dir)
 
         async def _voice_capture_apo() -> DiagnosticResult:
-            return _check_voice_capture_apo()
+            # AP #14 — sync registry walk; see run_all for rationale.
+            return await asyncio.to_thread(_check_voice_capture_apo)
 
         async def _voice_capture_kernel_invalidated() -> DiagnosticResult:
             return _check_voice_kernel_invalidated()

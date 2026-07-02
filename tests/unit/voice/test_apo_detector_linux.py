@@ -212,10 +212,13 @@ class TestPipewireOnly:
 # ---------------------------------------------------------------------------
 
 
-class TestMixedSession:
-    """Both pactl and pw-dump reachable — classify as ``mixed``."""
+class TestBothToolsAnswer:
+    """pactl AND pw-dump both answering is the STANDARD PipeWire
+    desktop (pipewire-pulse serves pactl) — that is ``pipewire``, not
+    ``mixed``; ``mixed`` requires a REAL PulseAudio daemon process
+    (audit finding LINUX-19)."""
 
-    def test_mixed_classification_and_deduped_labels(self) -> None:
+    def test_standard_pipewire_desktop_classified_pipewire(self) -> None:
         pactl = _FakeCompleted(_pactl_output("module-echo-cancel"))
         pw = _FakeCompleted(
             _pw_dump_output(
@@ -225,6 +228,8 @@ class TestMixedSession:
                 },
             ),
         )
+        # pgrep absent from the dispatch table → FileNotFoundError →
+        # the hybrid discriminator reports no real PA daemon.
         with (
             patch.object(sys, "platform", "linux"),
             patch("shutil.which", _which_dispatch({"pactl", "pw-dump"})),
@@ -232,10 +237,44 @@ class TestMixedSession:
         ):
             reports = detect_capture_apos_linux()
         report = reports[0]
-        assert report.session_manager == "mixed"
+        assert report.session_manager == "pipewire"
         assert "PulseAudio Echo Cancel" in report.known_apos
         assert "PipeWire RNNoise" in report.known_apos
         assert report.echo_cancel_active is True
+
+    def test_compat_layer_pgrep_hit_still_pipewire(self) -> None:
+        # pgrep DOES match a pulseaudio process, but its cmdline names
+        # the PipeWire shim — not a real PA daemon.
+        pactl = _FakeCompleted(_pactl_output("module-echo-cancel"))
+        pw = _FakeCompleted(_pw_dump_output({"node.name": "effect.rnnoise.source"}))
+        pgrep = _FakeCompleted("812 /usr/bin/pipewire-pulse\n")
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", _which_dispatch({"pactl", "pw-dump", "pgrep"})),
+            patch(
+                "subprocess.run",
+                _run_dispatch({"pactl": pactl, "pw-dump": pw, "pgrep": pgrep}),
+            ),
+        ):
+            reports = detect_capture_apos_linux()
+        assert reports[0].session_manager == "pipewire"
+
+    def test_real_pulseaudio_daemon_coexisting_classified_mixed(self) -> None:
+        # A genuine dual-daemon pathology: pgrep finds a pulseaudio
+        # process whose cmdline does NOT mention pipewire.
+        pactl = _FakeCompleted(_pactl_output("module-echo-cancel"))
+        pw = _FakeCompleted(_pw_dump_output({"node.name": "effect.rnnoise.source"}))
+        pgrep = _FakeCompleted("1234 /usr/bin/pulseaudio --daemonize=no\n")
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", _which_dispatch({"pactl", "pw-dump", "pgrep"})),
+            patch(
+                "subprocess.run",
+                _run_dispatch({"pactl": pactl, "pw-dump": pw, "pgrep": pgrep}),
+            ),
+        ):
+            reports = detect_capture_apos_linux()
+        assert reports[0].session_manager == "mixed"
 
 
 # ---------------------------------------------------------------------------

@@ -58,6 +58,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 
 logger = get_logger(__name__)
 
@@ -112,7 +113,11 @@ class LinuxApoReport:
     Attributes:
         session_manager: ``"pulseaudio"`` | ``"pipewire"`` | ``"mixed"``
             | ``"unknown"``. The dominant daemon as observed by the
-            detection tools.
+            detection tools. On a standard PipeWire desktop BOTH tools
+            answer (``pipewire-pulse`` serves pactl; ``pw-dump`` is
+            native) — that is ``"pipewire"``, NOT ``"mixed"``;
+            ``"mixed"`` is reserved for a REAL PulseAudio daemon
+            process coexisting with PipeWire (audit finding LINUX-19).
         known_apos: Deduplicated friendly names recognised via
             :data:`_PULSE_MODULE_PATTERNS` or :data:`_PIPEWIRE_NODE_PATTERNS`,
             insertion order preserved.
@@ -147,9 +152,23 @@ def detect_capture_apos_linux() -> list[LinuxApoReport]:
     if not pulse_apos and not pw_apos and not pulse_raw and not pw_raw:
         return []
 
+    pulse_present = bool(pulse_raw) or bool(pulse_apos)
+    # "mixed" requires a REAL PulseAudio daemon, not the pipewire-pulse
+    # compat layer answering pactl (which it does on EVERY PipeWire
+    # desktop — pre-fix that classified the majority platform as
+    # "mixed"). Reuse the pgrep discriminator that the PipeWire
+    # detector already ships; only spend the subprocess when both
+    # signals are present (the only ambiguous case).
+    real_pulseaudio_daemon = False
+    if pw_present and pulse_present:
+        from sovyx.voice.health._pipewire import _detect_hybrid_pulseaudio_conflict
+
+        real_pulseaudio_daemon = _detect_hybrid_pulseaudio_conflict([])
+
     session_manager = _classify_session(
-        pulse_present=bool(pulse_raw) or bool(pulse_apos),
+        pulse_present=pulse_present,
         pipewire_present=pw_present,
+        real_pulseaudio_daemon=real_pulseaudio_daemon,
     )
 
     merged: list[str] = []
@@ -197,6 +216,7 @@ def _probe_pulse_modules() -> tuple[list[str], list[str]]:
             check=False,
             text=True,
             errors="replace",
+            env=linux_tool_env(),
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.debug("voice_apo_linux_pactl_failed", detail=str(exc))
@@ -270,6 +290,7 @@ def _probe_pipewire_nodes() -> tuple[list[str], list[str], bool]:
             check=False,
             text=True,
             errors="replace",
+            env=linux_tool_env(),
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.debug("voice_apo_linux_pwdump_failed", detail=str(exc))
@@ -321,8 +342,24 @@ def _probe_pipewire_nodes() -> tuple[list[str], list[str], bool]:
     return known, raw, True
 
 
-def _classify_session(*, pulse_present: bool, pipewire_present: bool) -> str:
-    if pipewire_present and pulse_present:
+def _classify_session(
+    *,
+    pulse_present: bool,
+    pipewire_present: bool,
+    real_pulseaudio_daemon: bool,
+) -> str:
+    """Classify the dominant session manager.
+
+    ``pw-dump`` answering (``pipewire_present``) is authoritative for
+    PipeWire; pactl answering alongside it is EXPECTED (the
+    ``pipewire-pulse`` compat layer), so it must not flip the verdict
+    to ``"mixed"``. ``"mixed"`` — the dual-daemon pathology — requires
+    ``real_pulseaudio_daemon`` (a pulseaudio process whose cmdline is
+    not the PipeWire shim; see
+    :func:`sovyx.voice.health._pipewire._detect_hybrid_pulseaudio_conflict`).
+    Audit finding LINUX-19.
+    """
+    if pipewire_present and real_pulseaudio_daemon:
         return "mixed"
     if pipewire_present:
         return "pipewire"

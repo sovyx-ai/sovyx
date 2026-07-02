@@ -8,7 +8,10 @@ cross-platform and deterministic. Validates:
 * Linux + socket + no pactl → RUNNING (foundational signal).
 * Linux + pactl info OK + no echo-cancel → RUNNING.
 * Linux + pactl info OK + echo-cancel loaded → RUNNING_WITH_ECHO_CANCEL.
-* pactl info timeout / non-zero → graceful UNKNOWN.
+* Classic-PulseAudio host (pactl answers, plain ``pulseaudio`` server
+  name, no PipeWire socket) → ABSENT, not RUNNING (LINUX-7).
+* pactl info probe failure (timeout / spawn error) with no socket →
+  UNKNOWN; a clean non-zero exit (tool answered "no server") → ABSENT.
 * Module enumeration parses tab-separated output correctly.
 * load_echo_cancel_module returns parsed module ID on success.
 * load_echo_cancel_module raises PipeWireRoutingError on subprocess
@@ -173,7 +176,10 @@ class TestLinuxDetection:
         assert report.echo_cancel_loaded is True
         assert "module-echo-cancel" in report.modules_loaded
 
-    def test_pactl_info_timeout_falls_back_to_absent(self, tmp_path: Path) -> None:
+    def test_pactl_info_timeout_returns_unknown(self, tmp_path: Path) -> None:
+        # No socket + the probe ITSELF failed (timeout) → we could not
+        # ask, so UNKNOWN — previously unreachable despite the module
+        # contract (audit finding LINUX-7).
         with (
             patch.object(sys, "platform", "linux"),
             patch("shutil.which", return_value="/usr/bin/pactl"),
@@ -183,9 +189,85 @@ class TestLinuxDetection:
             ),
         ):
             report = detect_pipewire(runtime_dir=tmp_path)
-        # No socket + pactl info timed out → ABSENT.
-        assert report.status is PipeWireStatus.ABSENT
+        assert report.status is PipeWireStatus.UNKNOWN
         assert any("timed out" in n for n in report.notes)
+
+    def test_pactl_info_clean_nonzero_returns_absent(self, tmp_path: Path) -> None:
+        # pactl ANSWERED "no server reachable" (clean non-zero exit) and
+        # no socket exists — evidence of absence, not a probe failure.
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/pactl"),
+            patch(
+                "subprocess.run",
+                side_effect=_fake_run(pactl_info_returncode=1),
+            ),
+        ):
+            report = detect_pipewire(runtime_dir=tmp_path)
+        assert report.status is PipeWireStatus.ABSENT
+
+    def test_classic_pulseaudio_host_returns_absent(self, tmp_path: Path) -> None:
+        # Real classic-PA fixture (captured live from a PulseAudio 17
+        # server: ``Server Name: pulseaudio``): pactl answers happily
+        # while the pipewire-0 socket is absent. Pre-fix this host was
+        # classified RUNNING ("PipeWire daemon is alive") — LINUX-7.
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/pactl"),
+            patch(
+                "subprocess.run",
+                side_effect=_fake_run(
+                    pactl_info_stdout=(
+                        "Server String: unix:/run/user/1000/pulse/native\n"
+                        "Server Name: pulseaudio\n"
+                        "Server Version: 17.0\n"
+                    ),
+                ),
+            ),
+        ):
+            report = detect_pipewire(runtime_dir=tmp_path)
+        assert report.status is PipeWireStatus.ABSENT
+        assert report.pactl_info_ok is True
+        assert report.server_name == "pulseaudio"
+        assert report.pipewire_version is None
+        assert any("classic_pulseaudio_server_detected" in n for n in report.notes)
+
+    def test_classic_pulseaudio_with_echo_cancel_still_absent(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # module-echo-cancel on classic PA must not resurrect a
+        # RUNNING_WITH_ECHO_CANCEL verdict — the field still reports
+        # the module so noise-suppression consumers keep working.
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/pactl"),
+            patch(
+                "subprocess.run",
+                side_effect=_fake_run(
+                    pactl_info_stdout="Server Name: pulseaudio\n",
+                    list_modules_stdout="5\tmodule-echo-cancel\taec_method=webrtc\n",
+                ),
+            ),
+        ):
+            report = detect_pipewire(runtime_dir=tmp_path)
+        assert report.status is PipeWireStatus.ABSENT
+        assert report.echo_cancel_loaded is True
+
+    def test_pipewire_server_name_without_socket_stays_running(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # Server name carries the PipeWire token but the socket path is
+        # unconventional (e.g. containerized XDG_RUNTIME_DIR) — the
+        # server-name evidence keeps the RUNNING verdict.
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/pactl"),
+            patch("subprocess.run", side_effect=_fake_run()),
+        ):
+            report = detect_pipewire(runtime_dir=tmp_path)
+        assert report.status is PipeWireStatus.RUNNING
 
     def test_pactl_info_nonzero_with_socket_returns_unknown(self, tmp_path: Path) -> None:
         (tmp_path / "pipewire-0").touch()

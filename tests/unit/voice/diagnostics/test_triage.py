@@ -380,6 +380,114 @@ class TestHypothesisH6SelftestFailed:
         assert "confidence=1.00" in out
 
 
+class TestSelftestStatusAccessor:
+    """LINUX-8 — analyzer_selftest_status lives TOP-LEVEL in the
+    Windows-v2 SUMMARY but NESTED under 'calibration' in the Linux
+    bash finalizer output; both must feed H6 via one accessor."""
+
+    def test_nested_calibration_shape_read(self) -> None:
+        from sovyx.voice.diagnostics.triage import _read_selftest_status
+
+        summary = {"calibration": {"analyzer_selftest_status": "fail"}}
+        assert _read_selftest_status(summary) == "fail"
+
+    def test_top_level_shape_read(self) -> None:
+        from sovyx.voice.diagnostics.triage import _read_selftest_status
+
+        assert _read_selftest_status({"analyzer_selftest_status": "pass"}) == "pass"
+
+    def test_nested_wins_over_top_level(self) -> None:
+        from sovyx.voice.diagnostics.triage import _read_selftest_status
+
+        summary = {
+            "calibration": {"analyzer_selftest_status": "fail"},
+            "analyzer_selftest_status": "pass",
+        }
+        assert _read_selftest_status(summary) == "fail"
+
+    def test_missing_returns_default(self) -> None:
+        from sovyx.voice.diagnostics.triage import _read_selftest_status
+
+        assert _read_selftest_status({}) is None
+        assert _read_selftest_status({}, default="?") == "?"
+
+    def test_h6_fires_for_linux_nested_shape(self, tmp_path: Path) -> None:
+        # LINUX-8 regression: real Linux tarballs nest the key under
+        # 'calibration' (finalize.sh) with NO top-level copy — pre-fix
+        # H6 accrued zero weight on every Linux tarball.
+        summary = _make_summary(
+            calibration={
+                "analyzer_selftest_status": "fail",
+                "guardian_status": "ok",
+                "operator_prompts_status": "ok",
+            },
+        )
+        tar = _make_linux_tarball(tmp_path, summary=summary)
+        rc, out, _ = _run_triage(tar)
+        assert rc == 0
+        assert "H6: Analyzer selftest failed" in out
+        assert "confidence=1.00" in out
+
+
+class TestH10AmixerBlockConfinement:
+    """LINUX-20 — the H10 amixer signature must be confined to the
+    'Mic Boost' control block; re.DOTALL spanning across blocks
+    false-positived on healthy mixers."""
+
+    _HEALTHY_BOOST_THEN_ZEROED_OTHER = (
+        "Simple mixer control 'Mic Boost',0\n"
+        "  Capabilities: volume\n"
+        "  Limits: 0 - 3\n"
+        "  Front Left: 3 [100%] [36.00dB]\n"
+        "  Front Right: 3 [100%] [36.00dB]\n"
+        "Simple mixer control 'Front Mic',0\n"
+        "  Capabilities: cvolume cswitch\n"
+        "  Limits: Capture 0 - 80\n"
+        "  Front Left: Capture 0 [0%] [-34.00dB] [off]\n"
+        "  Front Right: Capture 0 [0%] [-34.00dB] [off]\n"
+    )
+
+    _ZEROED_BOOST = (
+        "Simple mixer control 'Mic Boost',0\n"
+        "  Capabilities: volume\n"
+        "  Limits: 0 - 3\n"
+        "  Front Left: 0 [0%] [0.00dB]\n"
+        "  Front Right: 0 [0%] [0.00dB]\n"
+    )
+
+    def test_zeroed_mic_boost_detected(self) -> None:
+        from sovyx.voice.diagnostics.triage import _amixer_mic_boost_zeroed
+
+        assert _amixer_mic_boost_zeroed(self._ZEROED_BOOST) is True
+
+    def test_nonzero_boost_with_later_zeroed_control_not_flagged(self) -> None:
+        # The exact LINUX-20 false-positive shape: healthy Mic Boost at
+        # 100%, unused 'Front Mic' parked at 0 [0%] later in the dump.
+        from sovyx.voice.diagnostics.triage import _amixer_mic_boost_zeroed
+
+        assert _amixer_mic_boost_zeroed(self._HEALTHY_BOOST_THEN_ZEROED_OTHER) is False
+
+    def test_capture_prefixed_reading_detected(self) -> None:
+        from sovyx.voice.diagnostics.triage import _amixer_mic_boost_zeroed
+
+        dump = (
+            "Simple mixer control 'Mic Boost',0\n"
+            "  Limits: Capture 0 - 3\n"
+            "  Front Left: Capture 0 [0%] [0.00dB]\n"
+        )
+        assert _amixer_mic_boost_zeroed(dump) is True
+
+    def test_no_mic_boost_block_not_flagged(self) -> None:
+        from sovyx.voice.diagnostics.triage import _amixer_mic_boost_zeroed
+
+        dump = (
+            "Simple mixer control 'Front Mic',0\n"
+            "  Limits: Capture 0 - 80\n"
+            "  Front Left: Capture 0 [0%] [-34.00dB] [off]\n"
+        )
+        assert _amixer_mic_boost_zeroed(dump) is False
+
+
 class TestHypothesisH7NetworkBlocked:
     """H7 — Network unreachable to LLM provider."""
 

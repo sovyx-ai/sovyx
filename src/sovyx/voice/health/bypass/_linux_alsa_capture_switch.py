@@ -50,6 +50,7 @@ telemetry validation before strict mode flips on.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import re
 import shutil
@@ -58,6 +59,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.engine.config import VoiceTuningConfig
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 from sovyx.voice.health._alsa_input_cards import enumerate_input_card_ids
 from sovyx.voice.health.bypass._strategy import BypassApplyError, BypassRevertError
 from sovyx.voice.health.contract import Eligibility
@@ -283,14 +285,19 @@ class LinuxALSACaptureSwitchBypass:
 
         # Probe each input card; if ANY has a faulted control we're
         # applicable. (apply() will re-probe to pick the precise target
-        # set — eligibility is a yes/no decision.)
+        # set — eligibility is a yes/no decision.) _scan_card spawns a
+        # synchronous amixer subprocess (2 s cap) — offloaded via
+        # asyncio.to_thread per anti-pattern #14, mirroring the
+        # mutation helpers below which already did.
+        probe_failures = 0
         for card_index, card_id in cards:
             try:
-                scan = _scan_card(amixer_path, card_index, card_id)
+                scan = await asyncio.to_thread(_scan_card, amixer_path, card_index, card_id)
             except _ProbeError:
                 # One card failed — skip it but try others. Returning
                 # PROBE_FAILED on the FIRST card crash would mask a
                 # second healthy card with an actual fault.
+                probe_failures += 1
                 continue
             if _has_faulted_controls(scan):
                 return Eligibility(
@@ -298,6 +305,16 @@ class LinuxALSACaptureSwitchBypass:
                     reason="",
                     estimated_cost_ms=_APPLY_COST_MS,
                 )
+
+        if probe_failures and probe_failures == len(cards):
+            # EVERY card failed to probe — "could not measure" must not
+            # be reported as "measured healthy" (truthfulness inversion,
+            # AP #46/#48 class; audit finding LINUX-12).
+            return Eligibility(
+                applicable=False,
+                reason=_REASON_PROBE_FAILED,
+                estimated_cost_ms=0,
+            )
 
         return Eligibility(
             applicable=False,
@@ -329,7 +346,9 @@ class LinuxALSACaptureSwitchBypass:
         targets: list[tuple[_CardScan, _ControlState]] = []
         for card_index, card_id in cards:
             try:
-                scan = _scan_card(amixer_path, card_index, card_id)
+                # AP #14 — sync amixer subprocess offloaded to a worker
+                # thread (same rationale as probe_eligibility).
+                scan = await asyncio.to_thread(_scan_card, amixer_path, card_index, card_id)
             except _ProbeError:
                 continue
             for ctrl in _faulted_controls(scan):
@@ -381,7 +400,12 @@ class LinuxALSACaptureSwitchBypass:
         post_targets: list[tuple[int, str]] = []
         for scan, ctrl in targets:
             try:
-                post_scan = _scan_card(amixer_path, scan.card_index, scan.card_id)
+                post_scan = await asyncio.to_thread(
+                    _scan_card,
+                    amixer_path,
+                    scan.card_index,
+                    scan.card_id,
+                )
             except _ProbeError:
                 # Probe failed post-apply — be conservative + treat as
                 # verify failure (we can't confirm we fixed it).
@@ -449,9 +473,15 @@ class LinuxALSACaptureSwitchBypass:
                     reason=exc.reason,
                 )
 
+        # Snapshot the total BEFORE clearing — pre-fix the list was
+        # cleared first, so the all-failed comparison below compared
+        # against len([]) == 0 (BypassRevertError unreachable) and the
+        # success log always reported restored_count=0 (audit finding
+        # LINUX-5).
+        total = len(self._applied_targets)
         self._applied_targets = []
 
-        if failed and len(failed) == len(self._applied_targets):
+        if failed and len(failed) == total:
             # Every single revert failed — surface as BypassRevertError so
             # the coordinator emits voice.bypass.revert_failed.
             raise BypassRevertError(
@@ -463,7 +493,7 @@ class LinuxALSACaptureSwitchBypass:
             "bypass_strategy_revert_ok",
             strategy=_STRATEGY_NAME,
             endpoint_guid=context.endpoint_guid,
-            restored_count=len(self._applied_targets),
+            restored_count=total - len(failed),
             failed_count=len(failed),
         )
 
@@ -492,6 +522,7 @@ def _scan_card(amixer_path: str, card_index: int, card_id: str) -> _CardScan:
             text=True,
             timeout=_AMIXER_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         raise _ProbeError(str(exc)) from exc
@@ -676,13 +707,19 @@ def _run_amixer_sset(
     failure so the strategy's apply() can route the failure to the
     coordinator's structured outcome.
     """
+    # ``--`` terminates option parsing so a hostile / quirky codec
+    # exposing a control name beginning with ``-`` cannot smuggle a
+    # flag into our invocation — same hardening _linux_mixer_apply
+    # carries (paranoid-QA HIGH #5); this sibling was missed in that
+    # closure sweep (AP #11 / audit finding LINUX-11).
     try:
         result = subprocess.run(  # noqa: S603 — fixed argv to trusted amixer
-            (amixer_path, "-c", str(card_index), "sset", control_name, value),
+            (amixer_path, "-c", str(card_index), "--", "sset", control_name, value),
             capture_output=True,
             text=True,
             timeout=_AMIXER_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except subprocess.TimeoutExpired as exc:
         msg = (

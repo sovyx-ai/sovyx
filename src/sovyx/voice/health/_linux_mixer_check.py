@@ -119,7 +119,15 @@ def check_linux_mixer_sanity(
         # contested. The dashboard's preflight handler is async and
         # blocking it from inside FastAPI starves every other route +
         # the WebSocket broadcast loop. CLAUDE.md anti-pattern #14.
-        snapshots = await asyncio.to_thread(enumerate_alsa_mixer_snapshots)
+        # ``effective`` is threaded through so the classifier uses the
+        # SAME thresholds this check reports in ``details`` below —
+        # pre-fix the probe built its own fresh VoiceTuningConfig and a
+        # programmatic tuning override silently diverged from the
+        # reported values (audit finding LINUX-18).
+        snapshots = await asyncio.to_thread(
+            enumerate_alsa_mixer_snapshots,
+            tuning=effective,
+        )
         if not snapshots:
             return (
                 True,

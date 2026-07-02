@@ -433,34 +433,39 @@ class TestBuildWindowsAudioServiceMonitor:
 
 
 class TestLinuxProbeExistingServices:
-    """``_probe_existing_services`` filters candidates by systemctl
-    reachability — anything the fake query returns ``None`` for is
-    treated as not-installed; ``"unknown"`` state also excluded."""
+    """``_probe_existing_services`` filters candidates by unit-file
+    installation (``systemctl --user show -p LoadState``): only
+    ``loaded`` units join the watch set. ``is-active`` output CANNOT
+    drive this decision — real systemctl prints ``inactive`` even for
+    NOT-FOUND units (verified on systemd 255; audit finding LINUX-2),
+    which is exactly the fixture shape used below (Debugging Rule
+    #13)."""
 
     def test_empty_query_returns_empty_set(self) -> None:
-        probed = _probe_existing_services(query=lambda _svc: None)
+        probed = _probe_existing_services(load_state_query=lambda _svc: None)
         assert probed == set()
 
-    def test_filters_unknown_state(self) -> None:
-        def _q(svc: str) -> str | None:
-            return "active" if svc == "pipewire.service" else "unknown"
+    def test_filters_not_found_units(self) -> None:
+        def _lq(svc: str) -> str | None:
+            return "loaded" if svc == "pipewire.service" else "not-found"
 
-        probed = _probe_existing_services(query=_q)
+        probed = _probe_existing_services(load_state_query=_lq)
         assert probed == {"pipewire.service"}
 
-    def test_accepts_inactive_and_failed(self) -> None:
+    def test_accepts_loaded_units_regardless_of_active_state(self) -> None:
         """Installed-but-not-running services still count — the
-        monitor watches them for UP transitions."""
+        monitor watches them for UP transitions. Installation is a
+        LoadState question, not an is-active question."""
 
-        def _q(svc: str) -> str | None:
+        def _lq(svc: str) -> str | None:
             return {
-                "pipewire.service": "active",
-                "wireplumber.service": "inactive",
-                "pipewire-pulse.service": "failed",
-                "pulseaudio.service": None,
+                "pipewire.service": "loaded",
+                "wireplumber.service": "loaded",
+                "pipewire-pulse.service": "loaded",
+                "pulseaudio.service": "not-found",
             }[svc]
 
-        probed = _probe_existing_services(query=_q)
+        probed = _probe_existing_services(load_state_query=_lq)
         assert probed == {
             "pipewire.service",
             "wireplumber.service",
@@ -650,17 +655,19 @@ class TestBuildLinuxAudioServiceMonitor:
         assert isinstance(monitor, NoopAudioServiceMonitor)
 
     def test_returns_real_monitor_when_probe_finds_services(self) -> None:
-        def _q(svc: str) -> str | None:
-            return "active" if svc == "pipewire.service" else None
+        def _lq(svc: str) -> str | None:
+            return "loaded" if svc == "pipewire.service" else "not-found"
 
-        monitor = build_linux_audio_service_monitor(query=_q)
+        monitor = build_linux_audio_service_monitor(load_state_query=_lq)
         assert isinstance(monitor, LinuxAudioServiceMonitor)
 
-    def test_returns_noop_when_all_services_report_unknown(self) -> None:
-        """A broken systemctl that answers ``"unknown"`` for every
-        service should degrade to Noop, not spin a poll loop against
-        state we can't reason about."""
-        monitor = build_linux_audio_service_monitor(query=lambda _svc: "unknown")
+    def test_returns_noop_when_no_unit_file_is_loaded(self) -> None:
+        """A host where every candidate's unit file is missing should
+        degrade to Noop, not spin a poll loop against permanently
+        not-found units."""
+        monitor = build_linux_audio_service_monitor(
+            load_state_query=lambda _svc: "not-found",
+        )
         assert isinstance(monitor, NoopAudioServiceMonitor)
 
 

@@ -38,6 +38,7 @@ from pathlib import Path
 
 from sovyx.engine.config import VoiceTuningConfig
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 from sovyx.voice.health.contract import MixerCardSnapshot, MixerControlSnapshot
 
 logger = get_logger(__name__)
@@ -111,8 +112,21 @@ Examples this covers::
 """
 
 
-def enumerate_alsa_mixer_snapshots() -> list[MixerCardSnapshot]:
+def enumerate_alsa_mixer_snapshots(
+    *,
+    tuning: VoiceTuningConfig | None = None,
+) -> list[MixerCardSnapshot]:
     """Return one :class:`MixerCardSnapshot` per ALSA card with a mixer.
+
+    Args:
+        tuning: Optional tuning override. When ``None`` (every legacy
+            caller) a fresh :class:`VoiceTuningConfig` is built so env
+            overrides are read live. Callers that REPORT thresholds
+            alongside the snapshots (preflight step 9, the ALSA-mixer
+            bypass) MUST pass their own instance so the classifier
+            uses the same values they report — a programmatic override
+            otherwise silently diverges from the verdict (audit
+            finding LINUX-18).
 
     Completely stateless — every call re-enumerates. Empty list when:
 
@@ -146,10 +160,10 @@ def enumerate_alsa_mixer_snapshots() -> list[MixerCardSnapshot]:
         logger.warning("linux_mixer_proc_cards_read_failed", detail=str(exc))
         return []
 
-    tuning = VoiceTuningConfig()
+    effective = tuning if tuning is not None else VoiceTuningConfig()
     snapshots: list[MixerCardSnapshot] = []
     for card_index, card_id, card_longname in _parse_proc_cards(cards_text):
-        controls = _probe_card_controls(card_index, tuning=tuning)
+        controls = _probe_card_controls(card_index, tuning=effective)
         if not controls:
             continue
         aggregated_boost_db = 0.0
@@ -157,7 +171,7 @@ def enumerate_alsa_mixer_snapshots() -> list[MixerCardSnapshot]:
             if ctl.is_boost_control and ctl.current_db is not None:
                 aggregated_boost_db += ctl.current_db
         saturation_warning = any(c.saturation_risk for c in controls) or (
-            aggregated_boost_db > tuning.linux_mixer_aggregated_boost_db_ceiling
+            aggregated_boost_db > effective.linux_mixer_aggregated_boost_db_ceiling
         )
         snapshots.append(
             MixerCardSnapshot(
@@ -227,6 +241,7 @@ def _probe_card_controls(
             check=False,
             text=True,
             errors="replace",
+            env=linux_tool_env(),
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.debug(

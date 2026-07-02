@@ -38,6 +38,7 @@ linux-alsa-mixer-saturation-fix plan).
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from sovyx.engine.config import VoiceTuningConfig
@@ -76,7 +77,6 @@ breaking change.
 # reference them without string-literal drift.
 _REASON_NOT_LINUX = "not_linux_platform"
 _REASON_DISABLED_BY_TUNING = "alsa_mixer_reset_disabled_by_tuning"
-_REASON_NO_SATURATION_DETECTED = "no_saturated_controls_detected"
 _REASON_NO_FAULT_DETECTED = "no_saturation_or_attenuation_detected"
 _REASON_NO_AMIXER = "amixer_unavailable_on_host"
 _REASON_CARD_MATCH_AMBIGUOUS = "card_match_ambiguous"
@@ -157,7 +157,13 @@ class LinuxALSAMixerResetBypass:
                 reason=_REASON_DISABLED_BY_TUNING,
                 estimated_cost_ms=0,
             )
-        snapshots = enumerate_alsa_mixer_snapshots()
+        # AP #14 — enumerate_alsa_mixer_snapshots runs one synchronous
+        # ``amixer -c N scontents`` subprocess PER ALSA card (observed
+        # up to ~30 s on a contested 4-card host); offload so the
+        # coordinator's event loop stays responsive. ``tuning`` is
+        # threaded through so the classifier uses the same thresholds
+        # this strategy reports (finding LINUX-18).
+        snapshots = await asyncio.to_thread(enumerate_alsa_mixer_snapshots, tuning=tuning)
         if not snapshots:
             # Empty list covers both "not linux" and "amixer missing"
             # and "no controls probed" — on the linux branch we treat
@@ -205,7 +211,8 @@ class LinuxALSAMixerResetBypass:
             host_api=context.host_api_name,
         )
         tuning = _tuning_from_context()
-        snapshots = enumerate_alsa_mixer_snapshots()
+        # AP #14 — same offload rationale as probe_eligibility.
+        snapshots = await asyncio.to_thread(enumerate_alsa_mixer_snapshots, tuning=tuning)
         if not snapshots:
             msg = (
                 "enumerate_alsa_mixer_snapshots returned empty at apply time — "
@@ -274,7 +281,7 @@ class LinuxALSAMixerResetBypass:
         # a different reason. Detect that here and roll back atomically
         # so the coordinator can mark this strategy as "applied but
         # ineffective" without leaving the mixer in a worse state.
-        post_snapshots = enumerate_alsa_mixer_snapshots()
+        post_snapshots = await asyncio.to_thread(enumerate_alsa_mixer_snapshots, tuning=tuning)
         post_target = next(
             (s for s in post_snapshots if s.card_index == target.card_index),
             None,

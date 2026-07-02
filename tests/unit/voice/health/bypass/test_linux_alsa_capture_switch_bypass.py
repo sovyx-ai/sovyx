@@ -103,7 +103,9 @@ class _FakeAmixer:
             stdout = self.scontents_per_card.get(card_index, "")
             self._scontents_call_count += 1
             return _completed(self.scontents_rc, stdout)
-        if len(argv) >= 4 and argv[1] == "-c" and argv[3] == "sset":
+        if len(argv) >= 5 and argv[1] == "-c" and argv[3] == "--" and argv[4] == "sset":
+            # Real argv shape carries the "--" option terminator
+            # (paranoid-QA HIGH #5 closure — audit finding LINUX-11).
             return _completed(self.sset_rc, "")
         return _completed(1, "", stderr=f"unhandled argv: {argv!r}")
 
@@ -530,6 +532,76 @@ class TestRevert:
         assert strategy._applied_targets == []
 
     @pytest.mark.asyncio()
+    async def test_revert_all_targets_failed_raises_revert_error(self) -> None:
+        # LINUX-5 regression: pre-fix revert() cleared _applied_targets
+        # BEFORE the all-failed comparison, so the right side was
+        # len([]) == 0 and BypassRevertError could never be raised —
+        # the coordinator never saw voice.bypass.revert_failed.
+        from sovyx.voice.health.bypass._linux_alsa_capture_switch import _AppliedTarget
+        from sovyx.voice.health.bypass._strategy import BypassRevertError
+
+        strategy = LinuxALSACaptureSwitchBypass()
+        strategy._applied_targets = [
+            _AppliedTarget(
+                card_index=1,
+                name="Capture",
+                was_switch_off=True,
+                previous_raw=0,
+            ),
+            _AppliedTarget(
+                card_index=1,
+                name="Internal Mic Boost",
+                was_switch_off=False,
+                previous_raw=0,
+            ),
+        ]
+        runner = _FakeAmixer(sset_rc=1)  # every sset fails
+        with (
+            patch.object(mod.shutil, "which", return_value="/usr/bin/amixer"),
+            patch.object(mod.subprocess, "run", side_effect=runner),
+            pytest.raises(BypassRevertError) as exc_info,
+        ):
+            await strategy.revert(_ctx())
+        assert exc_info.value.reason == "amixer_restore_failed"
+        # Idempotent even on the failure path.
+        assert strategy._applied_targets == []
+
+    @pytest.mark.asyncio()
+    async def test_revert_partial_failure_does_not_raise(self) -> None:
+        # One control fails, one succeeds → best-effort semantics:
+        # WARNING logged, no raise (all-failed is the only raise case).
+        from sovyx.voice.health.bypass._linux_alsa_capture_switch import _AppliedTarget
+
+        strategy = LinuxALSACaptureSwitchBypass()
+        strategy._applied_targets = [
+            _AppliedTarget(
+                card_index=1,
+                name="Capture",
+                was_switch_off=True,
+                previous_raw=0,
+            ),
+            _AppliedTarget(
+                card_index=1,
+                name="Internal Mic Boost",
+                was_switch_off=False,
+                previous_raw=0,
+            ),
+        ]
+
+        def _runner(argv, **_kwargs):  # type: ignore[no-untyped-def]
+            # sset on 'Capture' fails; everything else succeeds.
+            if "sset" in argv and "Capture" in argv:
+                return _completed(1, "", stderr="busy")
+            return _completed(0, "")
+
+        with (
+            patch.object(mod.shutil, "which", return_value="/usr/bin/amixer"),
+            patch.object(mod.subprocess, "run", side_effect=_runner),
+        ):
+            await strategy.revert(_ctx())  # Must not raise.
+        assert strategy._applied_targets == []
+
+    @pytest.mark.asyncio()
     async def test_revert_amixer_gone_logs_skip(self) -> None:
         strategy = LinuxALSACaptureSwitchBypass()
         from sovyx.voice.health.bypass._linux_alsa_capture_switch import _AppliedTarget
@@ -549,6 +621,55 @@ class TestRevert:
             await strategy.revert(_ctx())  # Must not raise.
         mock_run.assert_not_called()
         assert strategy._applied_targets == []
+
+
+class TestEligibilityProbeFailure:
+    @pytest.mark.asyncio()
+    async def test_all_cards_probe_failed_reports_probe_failed_reason(self) -> None:
+        # LINUX-12 regression: when cards exist but EVERY amixer scan
+        # fails, the pre-fix reason was 'no_capture_switch_off_or_
+        # boost_zero' — "could not measure" misreported as "measured
+        # healthy" (AP #46/#48 truthfulness class).
+        strategy = LinuxALSACaptureSwitchBypass()
+        runner = _FakeAmixer(scontents_rc=1)  # every scan exits non-zero
+        with (
+            patch.object(mod, "_tuning_from_context", return_value=_Tuning()),
+            patch.object(mod.shutil, "which", return_value="/usr/bin/amixer"),
+            patch.object(
+                mod,
+                "enumerate_input_card_ids",
+                return_value=[(0, "PCH"), (1, "Generic")],
+            ),
+            patch.object(mod.subprocess, "run", side_effect=runner),
+        ):
+            eligibility = await strategy.probe_eligibility(_ctx())
+        assert eligibility.applicable is False
+        assert eligibility.reason == "amixer_probe_failed_during_eligibility"
+
+    @pytest.mark.asyncio()
+    async def test_one_card_probe_failed_other_healthy_reports_all_ok(self) -> None:
+        # One card fails to scan but another scans healthy → the
+        # healthy measurement wins; NOT a probe failure.
+        strategy = LinuxALSACaptureSwitchBypass()
+
+        def _runner(argv, **_kwargs):  # type: ignore[no-untyped-def]
+            if argv[2] == "0":
+                return _completed(1, "", stderr="scan failed")
+            return _completed(0, _SCONTENTS_CAPTURE_HEALTHY)
+
+        with (
+            patch.object(mod, "_tuning_from_context", return_value=_Tuning()),
+            patch.object(mod.shutil, "which", return_value="/usr/bin/amixer"),
+            patch.object(
+                mod,
+                "enumerate_input_card_ids",
+                return_value=[(0, "PCH"), (1, "Generic")],
+            ),
+            patch.object(mod.subprocess, "run", side_effect=_runner),
+        ):
+            eligibility = await strategy.probe_eligibility(_ctx())
+        assert eligibility.applicable is False
+        assert eligibility.reason == "no_capture_switch_off_or_boost_zero"
 
 
 # ── Strategy contract sanity ────────────────────────────────────────

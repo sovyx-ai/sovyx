@@ -63,6 +63,7 @@ Source #59
 \tMute: no
 \tVolume: front-left: 65536 / 100% / 0.00 dB,
 \t        front-right: 65536 / 100% / 0.00 dB
+\tBase Volume: 65536 / 100% / 0.00 dB
 
 Source #60
 \tState: SUSPENDED
@@ -70,6 +71,7 @@ Source #60
 \tMute: yes
 \tVolume: front-left: 65536 / 100% / 0.00 dB,
 \t        front-right: 65536 / 100% / 0.00 dB
+\tBase Volume: 65536 / 100% / 0.00 dB
 """
 
 
@@ -82,6 +84,7 @@ Source #60
 \tMute: no
 \tVolume: front-left: 1310 / 2% / -65.69 dB,
 \t        front-right: 1310 / 2% / -65.69 dB
+\tBase Volume: 65536 / 100% / 0.00 dB
 """
 
 
@@ -93,6 +96,7 @@ Source #60
 \tMute: no
 \tVolume: front-left: 52428 / 80% / -5.18 dB,
 \t        front-right: 52428 / 80% / -5.18 dB
+\tBase Volume: 65536 / 100% / 0.00 dB
 """
 
 
@@ -250,6 +254,21 @@ class TestBlockParsing:
         )
         # 80% volume, threshold 5% → above
         assert _block_volume_below_threshold(block or "", 0.05) is False
+
+    def test_zero_volume_with_base_volume_line_detected(self) -> None:
+        # LINUX-4 regression: pactl always prints "Base Volume: ...
+        # 100% ..." in the source block. Pre-fix the parser scanned
+        # every "%" token, so that reference line guaranteed one
+        # >=threshold match and the near-zero-volume trigger could
+        # never fire — even for a source dragged to 0%.
+        zero_block = """Source #61
+\tState: RUNNING
+\tName: alsa_input.usb-mic
+\tMute: no
+\tVolume: mono: 0 / 0% / -inf dB
+\t        balance 0.00
+\tBase Volume: 65536 / 100% / 0.00 dB"""
+        assert _block_volume_below_threshold(zero_block, 0.05) is True
 
     def test_partial_below_threshold_returns_false(self) -> None:
         # Mixed: one channel 80%, one channel 2%. NOT all-channels-below

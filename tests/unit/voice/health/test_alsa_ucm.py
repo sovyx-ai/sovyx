@@ -2,6 +2,18 @@
 
 Mocks ``shutil.which`` + ``subprocess.run`` so the suite stays
 cross-platform and deterministic.
+
+Fixture truthfulness (Debugging Rule #13 / audit finding LINUX-3):
+the fake alsaucm output mirrors the REAL binary formats from upstream
+alsa-utils ``alsaucm/usecase.c``:
+
+* ``list _verbs`` → ``  0: HiFi`` numbered items, verb comment on a
+  following more-indented line, ``  list is empty`` for an empty list
+  (rc=0), non-zero exit + stderr when the card has no UCM profile.
+* ``get _verb`` → ``  _verb=HiFi``.
+
+The previously-fabricated ``Available verbs:\n  HiFi: Description``
+shape is emitted by NO alsaucm version and is deliberately absent.
 """
 
 from __future__ import annotations
@@ -27,13 +39,14 @@ from sovyx.voice.health._alsa_ucm import (
 def _fake_run(
     *,
     list_stdout: str = (
-        "Available verbs:\n"
-        "  HiFi: Default high-fidelity playback / capture\n"
-        "  VoiceCall: Hands-free / mobile telephony\n"
+        "  0: HiFi\n"
+        "    Default high-fidelity playback / capture\n"
+        "  1: VoiceCall\n"
+        "    Hands-free / mobile telephony\n"
     ),
     list_returncode: int = 0,
     list_raise: type[BaseException] | None = None,
-    get_stdout: str = "HiFi\n",
+    get_stdout: str = "  _verb=HiFi\n",
     get_returncode: int = 0,
     get_raise: type[BaseException] | None = None,
     set_stdout: str = "",
@@ -93,13 +106,41 @@ class TestLinuxDetection:
         assert r.alsaucm_available is False
         assert r.card_id == "PCH"
 
-    def test_no_verbs_shipped_returns_no_profile(self) -> None:
+    def test_empty_verb_list_returns_no_profile(self) -> None:
+        # Real alsaucm prints "  list is empty" with rc=0 when the
+        # profile exists but lists zero verbs. Pre-fix the parser
+        # accepted that literal line as a phantom verb name → false
+        # AVAILABLE (audit finding LINUX-3).
         with (
             patch.object(sys, "platform", "linux"),
             patch("shutil.which", return_value="/usr/bin/alsaucm"),
             patch(
                 "subprocess.run",
-                side_effect=_fake_run(list_stdout="Available verbs:\n", get_stdout=""),
+                side_effect=_fake_run(
+                    list_stdout="  list is empty\n",
+                    get_stdout="",
+                    get_returncode=1,
+                ),
+            ),
+        ):
+            r = detect_ucm("PCH")
+        assert r.status is UcmStatus.NO_PROFILE
+        assert r.verbs == ()
+
+    def test_card_without_profile_nonzero_exit_returns_no_profile(self) -> None:
+        # A card WITHOUT a UCM profile makes real alsaucm exit non-zero
+        # ("error failed to import hw:N use case configuration").
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/alsaucm"),
+            patch(
+                "subprocess.run",
+                side_effect=_fake_run(
+                    list_returncode=99,
+                    list_stdout="",
+                    get_stdout="",
+                    get_returncode=99,
+                ),
             ),
         ):
             r = detect_ucm("PCH")
@@ -112,20 +153,21 @@ class TestLinuxDetection:
             patch("shutil.which", return_value="/usr/bin/alsaucm"),
             patch(
                 "subprocess.run",
-                side_effect=_fake_run(get_stdout=""),
+                side_effect=_fake_run(get_stdout="", get_returncode=1),
             ),
         ):
             r = detect_ucm("PCH")
         assert r.status is UcmStatus.AVAILABLE
-        assert "HiFi" in r.verbs
-        assert "VoiceCall" in r.verbs
+        assert r.verbs == ("HiFi", "VoiceCall")
         assert r.active_verb is None
 
     def test_active_verb_in_list_returns_active(self) -> None:
+        # Real ``get _verb`` output is "  _verb=HiFi" — the parser must
+        # strip the "_verb=" prefix or ACTIVE is unreachable (LINUX-3).
         with (
             patch.object(sys, "platform", "linux"),
             patch("shutil.which", return_value="/usr/bin/alsaucm"),
-            patch("subprocess.run", side_effect=_fake_run(get_stdout="HiFi\n")),
+            patch("subprocess.run", side_effect=_fake_run(get_stdout="  _verb=HiFi\n")),
         ):
             r = detect_ucm("PCH")
         assert r.status is UcmStatus.ACTIVE
@@ -137,13 +179,18 @@ class TestLinuxDetection:
         with (
             patch.object(sys, "platform", "linux"),
             patch("shutil.which", return_value="/usr/bin/alsaucm"),
-            patch("subprocess.run", side_effect=_fake_run(get_stdout="GhostVerb\n")),
+            patch(
+                "subprocess.run",
+                side_effect=_fake_run(get_stdout="  _verb=GhostVerb\n"),
+            ),
         ):
             r = detect_ucm("PCH")
         assert r.status is UcmStatus.AVAILABLE
         assert r.active_verb == "GhostVerb"
 
     def test_quoted_active_verb_is_unquoted(self) -> None:
+        # Defensive legacy tolerance — quoting + bare values are not
+        # what real alsaucm emits but must not break the parser.
         with (
             patch.object(sys, "platform", "linux"),
             patch("shutil.which", return_value="/usr/bin/alsaucm"),
@@ -152,7 +199,10 @@ class TestLinuxDetection:
             r = detect_ucm("PCH")
         assert r.active_verb == "HiFi"
 
-    def test_list_timeout_returns_no_profile(self) -> None:
+    def test_list_timeout_returns_unknown(self) -> None:
+        # Genuine probe failure (timeout) — we could not ask the card,
+        # so NO_PROFILE would be a truthfulness inversion. UNKNOWN was
+        # previously unreachable on every path (LINUX-3).
         with (
             patch.object(sys, "platform", "linux"),
             patch("shutil.which", return_value="/usr/bin/alsaucm"),
@@ -162,8 +212,20 @@ class TestLinuxDetection:
             ),
         ):
             r = detect_ucm("PCH")
-        assert r.status is UcmStatus.NO_PROFILE
+        assert r.status is UcmStatus.UNKNOWN
         assert any("timed out" in n for n in r.notes)
+
+    def test_list_spawn_failure_returns_unknown(self) -> None:
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/alsaucm"),
+            patch(
+                "subprocess.run",
+                side_effect=_fake_run(list_raise=OSError),
+            ),
+        ):
+            r = detect_ucm("PCH")
+        assert r.status is UcmStatus.UNKNOWN
 
     def test_list_nonzero_returns_no_profile_with_note(self) -> None:
         with (
@@ -178,22 +240,25 @@ class TestLinuxDetection:
         assert r.status is UcmStatus.NO_PROFILE
         assert any("exited 1" in n for n in r.notes)
 
-    def test_verb_lines_without_colon_still_parse(self) -> None:
-        # Some alsaucm versions emit verb name without description.
+    def test_comment_lines_and_colons_do_not_pollute_verbs(self) -> None:
+        # Verb comments follow on their own more-indented line and may
+        # contain colons; verbs with spaces in the name must survive.
         with (
             patch.object(sys, "platform", "linux"),
             patch("shutil.which", return_value="/usr/bin/alsaucm"),
             patch(
                 "subprocess.run",
                 side_effect=_fake_run(
-                    list_stdout="Available verbs:\n  HiFi\n  VoiceCall\n",
+                    list_stdout=(
+                        "  0: HiFi\n    Play HiFi: quality music\n  1: Voice Call\n  2: HDMI\n"
+                    ),
                     get_stdout="",
+                    get_returncode=1,
                 ),
             ),
         ):
             r = detect_ucm("PCH")
-        assert "HiFi" in r.verbs
-        assert "VoiceCall" in r.verbs
+        assert r.verbs == ("HiFi", "Voice Call", "HDMI")
 
 
 # ── Standalone helpers ─────────────────────────────────────────────
@@ -229,6 +294,27 @@ class TestStandaloneHelpers:
             patch("subprocess.run", side_effect=_fake_run(get_stdout="'HiFi'\n")),
         ):
             assert get_active_verb("0") == "HiFi"
+
+    def test_get_active_verb_strips_real_key_value_prefix(self) -> None:
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/alsaucm"),
+            patch("subprocess.run", side_effect=_fake_run(get_stdout="  _verb=HiFi\n")),
+        ):
+            assert get_active_verb("0") == "HiFi"
+
+    def test_enumerate_verbs_returns_empty_on_probe_failure(self) -> None:
+        # Standalone helper keeps its ()-on-any-failure contract even
+        # though detect_ucm now distinguishes UNKNOWN.
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/alsaucm"),
+            patch(
+                "subprocess.run",
+                side_effect=_fake_run(list_raise=subprocess.TimeoutExpired),
+            ),
+        ):
+            assert enumerate_verbs("0") == ()
 
 
 # ── set_verb routing ───────────────────────────────────────────────

@@ -52,12 +52,14 @@ See ``docs-internal/missions/MISSION-voice-linux-silent-mic-remediation-2026-05-
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
 from sovyx.engine.config import VoiceTuningConfig
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 from sovyx.voice.health.bypass._strategy import BypassApplyError, BypassRevertError
 from sovyx.voice.health.contract import Eligibility
 
@@ -212,15 +214,19 @@ class LinuxWirePlumberDefaultSourceBypass:
 
         # PipeWire's pulse-shim must be reachable. We don't import
         # _pipewire._query_pactl_info to keep this module's dependency
-        # graph tight; reproduce the minimal probe inline.
-        if not _pactl_info_ok(pactl_path):
+        # graph tight; reproduce the minimal probe inline. Every sync
+        # pactl helper below is offloaded via asyncio.to_thread per
+        # CLAUDE.md anti-pattern #14 — each subprocess is bounded by
+        # _PACTL_TIMEOUT_S=3.0 s, which would otherwise stall the
+        # coordinator's event loop for up to 3 s PER CALL.
+        if not await asyncio.to_thread(_pactl_info_ok, pactl_path):
             return Eligibility(
                 applicable=False,
                 reason=_REASON_PIPEWIRE_NOT_RUNNING,
                 estimated_cost_ms=0,
             )
 
-        current_default = _query_default_source(pactl_path)
+        current_default = await _query_default_source_async(pactl_path)
         if current_default is None:
             return Eligibility(
                 applicable=False,
@@ -230,7 +236,7 @@ class LinuxWirePlumberDefaultSourceBypass:
 
         # Determine the reroute target: any real (non-monitor, non-stub)
         # input source. If none exist, no point in rerouting.
-        real_inputs = _enumerate_real_input_sources(pactl_path)
+        real_inputs = await asyncio.to_thread(_enumerate_real_input_sources, pactl_path)
         if not real_inputs:
             return Eligibility(
                 applicable=False,
@@ -241,9 +247,11 @@ class LinuxWirePlumberDefaultSourceBypass:
         # Eligibility decision: applicable iff current default is
         # broken (monitor / muted / near-zero) AND a healthy alternative
         # exists.
-        is_broken = _is_default_source_broken(
-            pactl_path=pactl_path,
-            default_name=current_default,
+        is_broken = await asyncio.to_thread(
+            lambda: _is_default_source_broken(
+                pactl_path=pactl_path,
+                default_name=current_default,
+            ),
         )
         if not is_broken:
             return Eligibility(
@@ -278,8 +286,9 @@ class LinuxWirePlumberDefaultSourceBypass:
 
         # Re-resolve target source — eligibility snapshot may be stale
         # by the time the coordinator reaches apply (mirrors the
-        # _linux_alsa_mixer.py:206-218 pattern).
-        target = _pick_reroute_target(pactl_path)
+        # _linux_alsa_mixer re-probe-at-apply pattern). Offloaded per
+        # anti-pattern #14 like every other pactl call in this method.
+        target = await asyncio.to_thread(_pick_reroute_target, pactl_path)
         if target is None:
             msg = (
                 "no real input source available at apply time — "
@@ -289,7 +298,7 @@ class LinuxWirePlumberDefaultSourceBypass:
 
         # Snapshot pre-apply default source for revert. Done BEFORE any
         # mutation so a partial apply still rolls back cleanly.
-        self._previous_default_source = _query_default_source(pactl_path)
+        self._previous_default_source = await _query_default_source_async(pactl_path)
 
         # Lenient mode: emit telemetry + return the synthetic outcome
         # WITHOUT mutating any state. Counts as an attempt (the
@@ -316,8 +325,11 @@ class LinuxWirePlumberDefaultSourceBypass:
             )
             return _OUTCOME_LENIENT_NO_REPAIR
 
-        # Strict mode — actually mutate. Each subprocess call wrapped
-        # in asyncio.to_thread per CLAUDE.md anti-pattern #14.
+        # Strict mode — actually mutate. Every subprocess call in this
+        # strategy (probe helpers above AND the mutation helpers below)
+        # is offloaded via asyncio.to_thread per CLAUDE.md anti-pattern
+        # #14; the helpers below additionally translate failures into
+        # BypassApplyError with structured reasons.
         await _set_default_source(pactl_path, target)
         await _unmute_default_source(pactl_path)
         await _set_default_source_volume(pactl_path, _TARGET_APPLY_VOLUME_PCT)
@@ -404,6 +416,7 @@ def _pactl_info_ok(pactl_path: str) -> bool:
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except (subprocess.TimeoutExpired, OSError):
         return False
@@ -423,6 +436,7 @@ def _query_default_source(pactl_path: str) -> str | None:
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -439,8 +453,6 @@ async def _query_default_source_async(pactl_path: str) -> str | None:
     #14 — subprocess invocations from async paths must offload to a
     worker thread so the event loop stays responsive.
     """
-    import asyncio
-
     return await asyncio.to_thread(_query_default_source, pactl_path)
 
 
@@ -483,6 +495,7 @@ def _enumerate_real_input_sources(pactl_path: str) -> list[_SourceTarget]:
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except (subprocess.TimeoutExpired, OSError):
         return []
@@ -530,6 +543,7 @@ def _is_default_source_broken(*, pactl_path: str, default_name: str) -> bool:
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except (subprocess.TimeoutExpired, OSError):
         return False  # Can't classify → default to "not broken".
@@ -583,11 +597,21 @@ def _block_volume_below_threshold(block: str, fraction_threshold: float) -> bool
     pair) and compare against ``fraction_threshold * 100``. Returns
     True only when EVERY channel is below threshold (a single channel
     above threshold is enough audio to NOT trigger this branch).
+
+    The ``Base Volume: 65536 / 100% / 0.00 dB`` line that pactl prints
+    in every source block is EXCLUDED: it describes the device's
+    reference volume, not the current channel volumes, and it is
+    (near-)always 100 % — scanning it made this trigger structurally
+    dead (a muted-at-0 % source still "saw" one >= threshold token).
+    Audit finding LINUX-4.
     """
     threshold_pct = fraction_threshold * 100.0
     found_volumes = False
     for line in block.splitlines():
         stripped = line.strip()
+        # Reference volume, not a channel volume — see docstring.
+        if stripped.startswith("Base Volume:"):
+            continue
         # Continuation lines from the multi-channel Volume block also
         # carry "<channel-name>: NNNN / NN% / NN.NN dB" syntax.
         if "%" not in stripped:
@@ -627,8 +651,6 @@ async def _set_default_source(pactl_path: str, target: _SourceTarget) -> None:
     (some embedded distros ship pipewire without the WirePlumber CLI
     bindings).
     """
-    import asyncio
-
     wpctl_path = shutil.which("wpctl")
     if wpctl_path is not None:
         try:
@@ -639,6 +661,7 @@ async def _set_default_source(pactl_path: str, target: _SourceTarget) -> None:
                 text=True,
                 timeout=_PACTL_TIMEOUT_S,
                 check=False,
+                env=linux_tool_env(),
             )
         except subprocess.TimeoutExpired as exc:
             msg = f"wpctl set-default {target.source_id!r} timed out after {_PACTL_TIMEOUT_S} s"
@@ -665,8 +688,6 @@ async def _set_default_source_by_name(pactl_path: str, source_name: str) -> None
     revert (which restores by name, not id, since ids are not stable
     across PipeWire restarts).
     """
-    import asyncio
-
     try:
         result = await asyncio.to_thread(
             subprocess.run,
@@ -675,6 +696,7 @@ async def _set_default_source_by_name(pactl_path: str, source_name: str) -> None
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except subprocess.TimeoutExpired as exc:
         msg = f"pactl set-default-source {source_name!r} timed out after {_PACTL_TIMEOUT_S} s"
@@ -692,8 +714,6 @@ async def _set_default_source_by_name(pactl_path: str, source_name: str) -> None
 
 async def _unmute_default_source(pactl_path: str) -> None:
     """Run ``pactl set-source-mute @DEFAULT_SOURCE@ 0``."""
-    import asyncio
-
     try:
         result = await asyncio.to_thread(
             subprocess.run,
@@ -702,6 +722,7 @@ async def _unmute_default_source(pactl_path: str) -> None:
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         msg = f"pactl set-source-mute @DEFAULT_SOURCE@ 0 failed: {exc!r}"
@@ -719,8 +740,6 @@ async def _set_default_source_volume(pactl_path: str, percent: int) -> None:
     is still a working mic. Logged at WARNING + apply continues so
     the strategy reports overall success.
     """
-    import asyncio
-
     arg_pct = f"{percent}%"
     try:
         result = await asyncio.to_thread(
@@ -730,6 +749,7 @@ async def _set_default_source_volume(pactl_path: str, percent: int) -> None:
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning(

@@ -21,9 +21,11 @@ Capabilities:
 
 Design contract:
 
-* **Never raises from detection**. Subprocess / parsing failures
-  collapse into ``UNKNOWN`` with structured ``notes`` so the cascade
-  can keep advancing through the remaining layers.
+* **Never raises from detection**. A ``pactl info`` probe failure
+  (spawn error / timeout) with no other PipeWire evidence collapses
+  into ``UNKNOWN`` with structured ``notes``; secondary parse/module
+  failures degrade into ``notes`` without changing the verdict. The
+  cascade keeps advancing through the remaining layers either way.
 * **Loading is explicit**. Detection alone NEVER loads a module —
   layer 1 reports the verdict; the operator (or a future opt-in
   factory wire-up) decides whether to actually load echo-cancel.
@@ -48,6 +50,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 
 logger = get_logger(__name__)
 
@@ -93,9 +96,10 @@ class PipeWireStatus(StrEnum):
     cascade should treat this as a success and skip layers 2-4."""
 
     UNKNOWN = "unknown"
-    """Detection failed (pactl missing, subprocess error, parse
-    failure). Cascade should treat as ABSENT for routing decisions
-    but surface UNKNOWN for telemetry attribution."""
+    """Detection could not run: the ``pactl info`` probe itself failed
+    (spawn error / timeout) AND no PipeWire socket was found — we have
+    no evidence either way. Cascade should treat as ABSENT for routing
+    decisions but surface UNKNOWN for telemetry attribution."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,10 +232,15 @@ def detect_pipewire(*, runtime_dir: Path | None = None) -> PipeWireReport:
     # require str.
 
     # ── Step 3: pactl info ─────────────────────────────────────────
-    info_ok, server_name = _query_pactl_info(pactl_path, notes)
+    info_ok, server_name, probe_error = _query_pactl_info(pactl_path, notes)
     if not info_ok and not socket_present:
+        # No answer AND no socket. Distinguish "the tool answered: no
+        # server" (→ ABSENT, evidence of absence) from "the probe
+        # itself failed" (→ UNKNOWN, no evidence either way) — the
+        # UNKNOWN verdict was previously unreachable on every path
+        # despite the module contract (audit finding LINUX-7).
         return PipeWireReport(
-            status=PipeWireStatus.ABSENT,
+            status=PipeWireStatus.UNKNOWN if probe_error else PipeWireStatus.ABSENT,
             socket_present=False,
             pactl_available=True,
             notes=tuple(notes),
@@ -241,12 +250,28 @@ def detect_pipewire(*, runtime_dir: Path | None = None) -> PipeWireReport:
     modules = _enumerate_modules(pactl_path, notes)
     echo_cancel = "module-echo-cancel" in modules
 
-    if echo_cancel:
+    # Classic-PulseAudio disambiguation (audit finding LINUX-7): on a
+    # pure-PA host ``pactl info`` answers happily while the PipeWire
+    # socket is absent — pre-fix that host was classified RUNNING
+    # ("PipeWire daemon is alive"). PipeWire's pulse shim identifies
+    # itself via ``Server Name: PulseAudio (on PipeWire X.Y.Z)``;
+    # classic PA reports a plain ``pulseaudio`` server name with no
+    # PipeWire token. Socket presence outranks the server-name check —
+    # a hybrid session (real PA answering the pulse protocol alongside
+    # a live PipeWire socket) is covered by
+    # ``hybrid_pulseaudio_conflict`` below.
+    server_is_pipewire = server_name is not None and "pipewire" in server_name.lower()
+    classic_pulseaudio = info_ok and not socket_present and not server_is_pipewire
+
+    if classic_pulseaudio:
+        notes.append(
+            f"classic_pulseaudio_server_detected: server_name={server_name!r}",
+        )
+        verdict = PipeWireStatus.ABSENT
+    elif echo_cancel:
         verdict = PipeWireStatus.RUNNING_WITH_ECHO_CANCEL
-    elif info_ok or socket_present:
-        verdict = PipeWireStatus.RUNNING
     else:
-        verdict = PipeWireStatus.UNKNOWN
+        verdict = PipeWireStatus.RUNNING
 
     # Phase 5 / T5.31 — version extraction from the server
     # name string. Format: "PulseAudio (on PipeWire 1.0.5)".
@@ -423,6 +448,7 @@ async def load_echo_cancel_module(
             text=True,
             timeout=_LOAD_MODULE_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except subprocess.TimeoutExpired as exc:
         msg = f"pactl load-module exceeded {_LOAD_MODULE_TIMEOUT_S} s budget"
@@ -487,9 +513,19 @@ def _xdg_runtime_dir() -> Path | None:
     return Path(raw)
 
 
-def _query_pactl_info(pactl_path: str, notes: list[str]) -> tuple[bool, str | None]:
-    """Run ``pactl info`` with the standard timeout. Returns
-    ``(ok, server_name)``."""
+def _query_pactl_info(
+    pactl_path: str,
+    notes: list[str],
+) -> tuple[bool, str | None, bool]:
+    """Run ``pactl info`` with the standard timeout.
+
+    Returns ``(ok, server_name, probe_error)``. ``probe_error`` is
+    ``True`` only when the subprocess itself failed (spawn error /
+    timeout) — i.e. we could not ASK. A clean non-zero exit means the
+    tool answered "no server reachable", which is evidence of absence,
+    not a probe failure; the distinction is what makes
+    :attr:`PipeWireStatus.UNKNOWN` reachable (audit finding LINUX-7).
+    """
     try:
         result = subprocess.run(
             (pactl_path, "info"),
@@ -497,18 +533,19 @@ def _query_pactl_info(pactl_path: str, notes: list[str]) -> tuple[bool, str | No
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except subprocess.TimeoutExpired:
         notes.append("pactl info timed out")
-        return False, None
+        return False, None, True
     except OSError as exc:
         notes.append(f"pactl info failed to spawn: {exc!r}")
-        return False, None
+        return False, None, True
     if result.returncode != 0:
         notes.append(f"pactl info exited {result.returncode}")
-        return False, None
+        return False, None, False
     server_name = _parse_server_name(result.stdout)
-    return True, server_name
+    return True, server_name, False
 
 
 def _parse_server_name(stdout: str) -> str | None:
@@ -538,6 +575,7 @@ def _enumerate_modules(pactl_path: str, notes: list[str]) -> set[str]:
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            env=linux_tool_env(),
         )
     except subprocess.TimeoutExpired:
         notes.append("pactl list modules timed out")

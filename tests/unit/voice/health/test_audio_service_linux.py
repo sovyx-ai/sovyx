@@ -9,9 +9,13 @@ test coverage — every code path was only exercised transitively via
   TimeoutExpired / OSError. Non-zero ``returncode`` with valid
   stdout is the documented ``is-active`` semantic — must read state
   from stdout regardless of exit code.
-* ``_probe_existing_services`` candidate filtering: all-present /
-  subset-present / none-present / ``"unknown"`` excluded /
-  custom-candidates injection.
+* ``_query_service_load_state`` parser branches: ``loaded`` /
+  ``not-found`` / ``masked`` / spawn failures.
+* ``_probe_existing_services`` candidate filtering by ``LoadState``
+  (fixtures mirror REAL systemctl behaviour — verified live on
+  systemd 255: ``is-active`` prints ``inactive`` even for NOT-FOUND
+  units, so installation is probed via ``show -p LoadState``; audit
+  finding LINUX-2 / Debugging Rule #13).
 * ``LinuxAudioServiceMonitor.__init__`` validation: empty services
   rejected, zero / negative interval rejected.
 * ``start`` / ``stop`` lifecycle mirroring the Windows path.
@@ -39,6 +43,7 @@ from sovyx.voice.health._audio_service_linux import (
     _AUDIO_SERVICE_CANDIDATES,
     LinuxAudioServiceMonitor,
     _probe_existing_services,
+    _query_service_load_state,
     _query_service_state,
     build_linux_audio_service_monitor,
 )
@@ -75,12 +80,14 @@ class TestQueryServiceState:
         with self._patch_run(returncode=3, stdout="failed\n"):
             assert _query_service_state("pulseaudio.service") == "failed"
 
-    def test_unknown_state(self) -> None:
-        # systemctl returns "unknown" when it can't determine — the
-        # query function returns the literal string; _probe_existing_services
-        # filters it out at the higher layer.
-        with self._patch_run(returncode=4, stdout="unknown\n"):
-            assert _query_service_state("ghost.service") == "unknown"
+    def test_not_installed_unit_reports_inactive(self) -> None:
+        # REAL systemctl behaviour (verified on systemd 255): a unit
+        # whose unit file does NOT exist prints "inactive" with exit 4
+        # — "unknown" is never emitted. This is exactly why is-active
+        # cannot drive the installed-probe (audit finding LINUX-2);
+        # the parser must still return the literal state.
+        with self._patch_run(returncode=4, stdout="inactive\n"):
+            assert _query_service_state("ghost.service") == "inactive"
 
     def test_empty_stdout_returns_none(self) -> None:
         with self._patch_run(returncode=0, stdout=""):
@@ -130,70 +137,134 @@ class TestQueryServiceState:
 # ── _probe_existing_services ─────────────────────────────────────────
 
 
-class TestProbeExistingServices:
-    def test_all_candidates_active(self) -> None:
-        # Every candidate returns "active" → all included.
-        def _q(_svc: str) -> str:
-            return "active"
+class TestQueryServiceLoadState:
+    """systemctl --user show -p LoadState parser — real output shapes."""
 
-        result = _probe_existing_services(query=_q)
+    def _patch_run(self, *, returncode: int, stdout: str) -> Any:  # noqa: ANN401
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.returncode = returncode
+        completed.stdout = stdout
+        return patch(
+            "sovyx.voice.health._audio_service_linux.subprocess.run",
+            return_value=completed,
+        )
+
+    def test_loaded_unit(self) -> None:
+        # Real fixture: `systemctl --user show -p LoadState dbus.service`
+        # → "LoadState=loaded" rc=0 (captured on systemd 255).
+        with self._patch_run(returncode=0, stdout="LoadState=loaded\n"):
+            assert _query_service_load_state("dbus.service") == "loaded"
+
+    def test_not_found_unit(self) -> None:
+        # Real fixture: nonexistent unit → "LoadState=not-found" rc=0.
+        with self._patch_run(returncode=0, stdout="LoadState=not-found\n"):
+            assert _query_service_load_state("ghost.service") == "not-found"
+
+    def test_masked_unit(self) -> None:
+        with self._patch_run(returncode=0, stdout="LoadState=masked\n"):
+            assert _query_service_load_state("pulseaudio.service") == "masked"
+
+    def test_missing_key_returns_none(self) -> None:
+        with self._patch_run(returncode=0, stdout="Other=thing\n"):
+            assert _query_service_load_state("x.service") is None
+
+    def test_nonzero_returncode_returns_none(self) -> None:
+        with self._patch_run(returncode=1, stdout=""):
+            assert _query_service_load_state("x.service") is None
+
+    def test_spawn_failure_returns_none(self) -> None:
+        with patch(
+            "sovyx.voice.health._audio_service_linux.subprocess.run",
+            side_effect=FileNotFoundError("systemctl"),
+        ):
+            assert _query_service_load_state("x.service") is None
+
+    def test_timeout_returns_none(self) -> None:
+        with patch(
+            "sovyx.voice.health._audio_service_linux.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("systemctl", 3.0),
+        ):
+            assert _query_service_load_state("x.service") is None
+
+
+def _load_states(mapping: dict[str, str | None]) -> Callable[[str], str | None]:
+    """Fixture builder — mirrors real `show -p LoadState` values."""
+
+    def _lq(svc: str) -> str | None:
+        return mapping.get(svc)
+
+    return _lq
+
+
+class TestProbeExistingServices:
+    def test_all_candidates_loaded(self) -> None:
+        result = _probe_existing_services(
+            load_state_query=_load_states(dict.fromkeys(_AUDIO_SERVICE_CANDIDATES, "loaded")),
+        )
         assert result == set(_AUDIO_SERVICE_CANDIDATES)
 
-    def test_subset_present(self) -> None:
-        # Modern PipeWire host: pipewire+wireplumber+pipewire-pulse;
-        # legacy pulseaudio NOT installed → query returns None.
-        def _q(svc: str) -> str | None:
-            if svc == "pulseaudio.service":
-                return None  # systemctl says "no such unit"
-            return "active"
-
-        result = _probe_existing_services(query=_q)
+    def test_pipewire_only_host_excludes_not_found_pulseaudio(self) -> None:
+        # Modern PipeWire host: real systemctl reports the uninstalled
+        # pulseaudio.service as LoadState=not-found (NOT a None/other
+        # sentinel — Debugging Rule #13; audit finding LINUX-2). The
+        # ghost unit must be excluded or the aggregate is permanently
+        # False and DOWN/UP never fires.
+        result = _probe_existing_services(
+            load_state_query=_load_states(
+                {
+                    "pipewire.service": "loaded",
+                    "wireplumber.service": "loaded",
+                    "pipewire-pulse.service": "loaded",
+                    "pulseaudio.service": "not-found",
+                },
+            ),
+        )
         assert result == {
             "pipewire.service",
             "wireplumber.service",
             "pipewire-pulse.service",
         }
 
-    def test_none_present_returns_empty(self) -> None:
-        # Non-systemd or no audio stack installed.
-        def _q(_svc: str) -> str | None:
-            return None
+    def test_masked_unit_excluded(self) -> None:
+        # `systemctl --user mask pulseaudio.service` is the canonical
+        # PipeWire-distro state — a masked unit can never become
+        # active, so watching it would recreate the stuck-False bug.
+        result = _probe_existing_services(
+            load_state_query=_load_states(
+                {
+                    "pipewire.service": "loaded",
+                    "wireplumber.service": "loaded",
+                    "pipewire-pulse.service": "loaded",
+                    "pulseaudio.service": "masked",
+                },
+            ),
+        )
+        assert "pulseaudio.service" not in result
+        assert "pipewire.service" in result
 
-        result = _probe_existing_services(query=_q)
+    def test_pure_pulseaudio_host(self) -> None:
+        result = _probe_existing_services(
+            load_state_query=_load_states(
+                {
+                    "pipewire.service": "not-found",
+                    "wireplumber.service": "not-found",
+                    "pipewire-pulse.service": "not-found",
+                    "pulseaudio.service": "loaded",
+                },
+            ),
+        )
+        assert result == {"pulseaudio.service"}
+
+    def test_systemctl_unavailable_returns_empty(self) -> None:
+        # Non-systemd host / no user bus → every load-state query is
+        # None → empty set → factory routes to Noop.
+        result = _probe_existing_services(load_state_query=lambda _svc: None)
         assert result == set()
 
-    def test_unknown_state_excluded(self) -> None:
-        # systemctl returns "unknown" for units with confused state →
-        # filtered out so the watch set only tracks real installations.
-        def _q(svc: str) -> str | None:
-            if svc == "pipewire.service":
-                return "active"
-            return "unknown"
-
-        result = _probe_existing_services(query=_q)
-        assert result == {"pipewire.service"}
-
-    def test_inactive_units_still_included(self) -> None:
-        # An installed-but-stopped unit IS in the watch set — its
-        # later transition to active is a meaningful UP signal.
-        def _q(svc: str) -> str | None:
-            if svc == "pipewire.service":
-                return "inactive"
-            if svc == "wireplumber.service":
-                return "failed"
-            return None
-
-        result = _probe_existing_services(query=_q)
-        assert result == {"pipewire.service", "wireplumber.service"}
-
     def test_custom_candidates_parameter(self) -> None:
-        # Caller can narrow the probe set — useful for testbeds.
-        def _q(_svc: str) -> str:
-            return "active"
-
         result = _probe_existing_services(
             candidates=("pipewire.service",),
-            query=_q,
+            load_state_query=_load_states({"pipewire.service": "loaded"}),
         )
         assert result == {"pipewire.service"}
 
@@ -594,6 +665,65 @@ class TestAggregateTransitions:
         await monitor.stop()
 
 
+class TestPipeWireOnlyHostRegression:
+    """LINUX-2 end-to-end regression: on a PipeWire-only host the
+    monitor must watch ONLY the installed units, so a pipewire death
+    fires DOWN and its recovery fires UP. Pre-fix the not-found
+    pulseaudio.service ghost was included in the watch set with a
+    permanently-"inactive" reading, pinning the aggregate to False and
+    making the monitor structurally inert on every real host."""
+
+    @pytest.mark.asyncio()
+    async def test_pipewire_death_and_recovery_fire_down_then_up(self) -> None:
+        candidates = _AUDIO_SERVICE_CANDIDATES
+        load_states = {
+            "pipewire.service": "loaded",
+            "wireplumber.service": "loaded",
+            "pipewire-pulse.service": "loaded",
+            "pulseaudio.service": "not-found",  # real systemctl shape
+        }
+        watched = _probe_existing_services(
+            candidates,
+            load_state_query=lambda svc: load_states.get(svc),
+        )
+        assert watched == {
+            "pipewire.service",
+            "wireplumber.service",
+            "pipewire-pulse.service",
+        }
+
+        # Real is-active semantics for the poll: the ghost unit would
+        # answer "inactive" forever — but it is no longer watched.
+        query = _MultiServiceQuery(
+            [
+                {},  # round 0: baseline, all watched units active.
+                {"pipewire.service": "inactive"},  # round 1: daemon died.
+                {"pipewire.service": "active"},  # round 2: recovered.
+            ],
+            set(watched),
+        )
+        capture = _EventCapture()
+        monitor = LinuxAudioServiceMonitor(
+            services_to_monitor=frozenset(watched),
+            poll_interval_s=0.001,
+            query=query,
+        )
+        from unittest.mock import AsyncMock
+
+        monitor._post_up_health_check = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        await _drive_polls(
+            monitor,
+            capture,
+            expected_rounds=3,
+            query=query,
+            services=set(watched),
+        )
+        assert [e.kind for e in capture.events] == [
+            AudioServiceEventKind.DOWN,
+            AudioServiceEventKind.UP,
+        ]
+
+
 # ── Factory ───────────────────────────────────────────────────────────
 
 
@@ -615,12 +745,23 @@ class TestFactory:
         assert isinstance(monitor, LinuxAudioServiceMonitor)
 
     def test_factory_propagates_query_injection_to_real_monitor(self) -> None:
-        # When the factory builds the real monitor, the same injected
-        # query must flow through so the daemon's startup probe and
-        # the running monitor share one stub in tests.
+        # When the factory builds the real monitor, the injected
+        # is-active query must flow through to the monitor while the
+        # injected load-state query drives the installed-probe.
         def _q(_svc: str) -> str:
             return "active"
 
-        monitor = build_linux_audio_service_monitor(query=_q)
+        monitor = build_linux_audio_service_monitor(
+            query=_q,
+            load_state_query=lambda _svc: "loaded",
+        )
         assert isinstance(monitor, LinuxAudioServiceMonitor)
         assert monitor._query is _q  # noqa: SLF001
+
+    def test_factory_noop_on_ghost_only_host(self) -> None:
+        # Every candidate LoadState=not-found (real systemctl shape for
+        # a host with no audio units) → Noop.
+        monitor = build_linux_audio_service_monitor(
+            load_state_query=lambda _svc: "not-found",
+        )
+        assert isinstance(monitor, NoopAudioServiceMonitor)
