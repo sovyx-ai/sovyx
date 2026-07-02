@@ -87,19 +87,32 @@ jobs:
     # cells finish in 8-10 min). Sibling of CLAUDE.md anti-pattern #22
     # (Windows timing noise) at the CI level.
     timeout-minutes: 35
-    # windows-latest is ADVISORY (continue-on-error), NOT a release-blocking
-    # gate. The GitHub-hosted Windows runner is slow/contended and has
-    # repeatedly surfaced Windows-CI-ONLY flakes — asyncio "Event loop is
-    # closed" teardown and tight wall-clock perf bounds (CLAUDE.md Debugging
-    # Rule #12 / anti-patterns #22, #30) — that blocked legitimate releases
+    # windows-latest AND macos-latest are ADVISORY (continue-on-error), NOT
+    # release-blocking gates. Both GitHub-hosted legs have repeatedly
+    # surfaced hosted-runner-ONLY failures that blocked legitimate releases
     # passing on every other leg. The canonical runner is sovyx-4core
-    # (3.11 + 3.12); macOS + all discipline gates remain HARD gates.
-    # windows-latest still RUNS for signal/visibility (a genuine Windows
-    # regression is visible here, just non-blocking); flip the expression to
-    # `false` to re-block if Windows ever becomes release-critical.
-    # (macOS history: one soft-launch run surfaced 24 macOS failures, all
-    # test-side, fixed in ebf0baf/8af0d03 — macOS stays a hard gate.)
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    # (3.11 + 3.12); it and all discipline gates remain HARD gates. Both
+    # advisory legs still RUN for signal/visibility (a genuine platform
+    # regression stays visible here, just non-blocking); remove an OS from
+    # the expression to re-block it if that platform becomes
+    # release-critical.
+    #
+    # windows-latest demoted v0.49.54 (2026-06-01): asyncio "Event loop is
+    # closed" teardown + tight wall-clock perf bounds (Debugging Rule #12 /
+    # anti-patterns #22, #30).
+    #
+    # macos-latest demoted 2026-07-02 (post-v0.49.59): nondeterministic
+    # NATIVE segfault — faulthandler showed the crashing thread with
+    # "<no Python frame>" (CoreAudio/PortAudio-layer background thread on a
+    # hardware-less runner) while the main thread was in pure-Python FastAPI
+    # route registration; the IDENTICAL tree had passed the publish macOS
+    # leg 16 minutes earlier. Surfaced on the macos-26-arm64 images
+    # (macos-latest label migrating to macOS 26 since 2026-06-15). Cannot be
+    # root-caused without Mac hardware (same block as mission W4.1); flip
+    # back to hard once a Mac is available and the segfault class is fixed.
+    # (Earlier macOS history: one soft-launch run surfaced 24 test-side
+    # failures, fixed in ebf0baf/8af0d03.)
+    continue-on-error: ${{ matrix.os == 'windows-latest' || matrix.os == 'macos-latest' }}
     strategy:
       # See every failing cell in one run — with strict fail-fast a Linux
       # flake would hide a real Windows/macOS regression. Affordable
