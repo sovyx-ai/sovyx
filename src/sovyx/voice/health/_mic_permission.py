@@ -138,9 +138,11 @@ class MicPermissionReport:
             return (
                 "Microphone permission state could not be determined "
                 "(TCC.db unreadable — likely needs Full Disk Access for "
-                "the Terminal / IDE running Sovyx). If audio capture is "
-                "silent, check System Settings → Privacy & Security → "
-                "Microphone manually."
+                "the Terminal / IDE running Sovyx — or the existing "
+                "microphone grants belong to other apps, not the one "
+                "hosting Sovyx). If audio capture is silent, check "
+                "System Settings → Privacy & Security → Microphone "
+                "manually for the app hosting Sovyx."
             )
         return (
             "Microphone permission state could not be determined "

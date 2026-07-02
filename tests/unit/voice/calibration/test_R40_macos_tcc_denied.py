@@ -135,6 +135,23 @@ class TestRuleIdentity:
         assert rule.rule_id == "R40_macos_tcc_denied"
         assert rule.priority == 70
 
+    def test_declares_unreachable_at_head(self) -> None:
+        # MACOS-3 / W1.3 disclosure (anti-pattern #48): R40's gate is
+        # structurally closed at HEAD (distro_id never "macos" + no
+        # Darwin triage producer). The rule must self-declare so the
+        # --evaluate-rules preview discloses it; wiring a Darwin
+        # producer must remove the marker (test_rule_reachability.py
+        # locks the set).
+        reason = getattr(rule, "unreachable_reason", None)
+        assert reason is not None and reason.strip()
+        assert "macos" in reason.lower()
+
+    def test_disclosed_by_iter_unreachable_rules(self) -> None:
+        from sovyx.voice.calibration.rules import iter_unreachable_rules
+
+        declared = {rule_id for rule_id, _ in iter_unreachable_rules()}
+        assert "R40_macos_tcc_denied" in declared
+
 
 class TestApplies:
     def test_fires_on_macos_h5(self) -> None:
@@ -164,3 +181,22 @@ class TestEvaluate:
         value = evaluation.decisions[0].value
         assert "Privacy" in value
         assert "Microphone" in value
+
+    def test_advice_routes_to_macos_supported_verification_path(self) -> None:
+        # MACOS-3: `--calibrate` is Linux-only, so the advice must NOT
+        # send macOS operators there; `sovyx doctor platform` is the
+        # supported verification surface.
+        evaluation = rule.evaluate(_ctx())
+        value = evaluation.decisions[0].value
+        assert "sovyx doctor platform" in value
+        assert "--calibrate" not in value
+
+    def test_rationale_states_condition_not_fabricated_evidence(self) -> None:
+        # AP #48: the old rationale claimed evidence the rule never
+        # reads (bash-diag E_portaudio captures + HAL-side logs). The
+        # rationale must describe the gate condition, not invent
+        # forensic artifacts.
+        evaluation = rule.evaluate(_ctx())
+        rationale = evaluation.decisions[0].rationale
+        assert "E_portaudio" not in rationale
+        assert "AVCaptureDevice" not in rationale

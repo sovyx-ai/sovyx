@@ -34,13 +34,23 @@ none of them changes OS state:
   (`~/Library/Application Support/com.apple.TCC/TCC.db`) *before*
   creating the pipeline; on DENIED it raises `VoicePermissionError`
   carrying the literal System Settings path instead of booting a
-  pipeline that captures silence. Caveat: reading TCC.db requires
+  pipeline that captures silence. The verdict is scoped to the app
+  actually hosting the process (bundle ID from the environment,
+  terminal/IDE ancestry, or the interpreter path) — a grant for an
+  unrelated app (Zoom, Chrome) never reports GRANTED, and when the
+  microphone rows all belong to other apps the probe reports UNKNOWN
+  with an explanatory note. Caveat: reading TCC.db requires
   Full Disk Access — without it the probe reports UNKNOWN (with a
   structured note) and the cascade's deaf-detection covers the rest.
 * **Bluetooth A2DP-vs-HFP profile** (`voice/_bluetooth_profile_mac.py`)
-  — spawns `system_profiler` (~2–5 s cold start) to flag A2DP-only
-  inputs; surfaced via the boot diagnostic log line
-  `voice.macos.bluetooth_profile_detected`.
+  — spawns `system_profiler` (~2–5 s cold start; `-json` first, text
+  fallback) to flag A2DP-only inputs; surfaced via the boot
+  diagnostic log line `voice.macos.bluetooth_profile_detected` and
+  the dashboard's platform-diagnostics Bluetooth card, which renders
+  a warn pill + remediation hint for A2DP-only devices. Note: the
+  `-json` output does not expose the active A2DP/HFP state, so on
+  current macOS connected devices may report `unknown` (inconclusive)
+  rather than a definitive profile.
 * **HFP/SCO guard** (`voice/_hfp_guard.py`) — identifies when the
   active capture device is a narrow-band HFP-mode BT headset, whose
   signal quality collapses wake-word detection.

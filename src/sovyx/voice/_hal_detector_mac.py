@@ -93,9 +93,11 @@ class HalPluginCategory(StrEnum):
 
 
 # Curated catalogue. Substring matching against the bundle FILENAME
-# (case-insensitive). Known vendor patterns; this is intentionally
-# small — unknown plugins still surface via the UNKNOWN category
-# with their raw bundle name.
+# (case-insensitive: ``_classify`` lowercases the bundle name, so
+# every needle here MUST be lowercase — a mixed-case needle can never
+# match; the catalogue-hygiene test pins this invariant). Known
+# vendor patterns; this is intentionally small — unknown plugins
+# still surface via the UNKNOWN category with their raw bundle name.
 _PLUGIN_CATALOGUE: tuple[tuple[str, str, HalPluginCategory], ...] = (
     ("blackhole", "BlackHole (virtual audio bus)", HalPluginCategory.VIRTUAL_AUDIO),
     ("loopback", "Loopback (Rogue Amoeba)", HalPluginCategory.VIRTUAL_AUDIO),
@@ -107,7 +109,7 @@ _PLUGIN_CATALOGUE: tuple[tuple[str, str, HalPluginCategory], ...] = (
     ("boom", "Boom 3D / Boom 2", HalPluginCategory.AUDIO_ENHANCEMENT),
     ("krisp", "Krisp (noise suppression)", HalPluginCategory.AUDIO_ENHANCEMENT),
     ("realtek", "Realtek HAL driver", HalPluginCategory.VENDOR),
-    ("appleHDA", "Apple HDA boot camp", HalPluginCategory.VENDOR),
+    ("applehda", "Apple HDA boot camp", HalPluginCategory.VENDOR),
     ("samsung", "Samsung audio driver", HalPluginCategory.VENDOR),
 )
 

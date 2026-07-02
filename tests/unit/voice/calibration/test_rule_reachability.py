@@ -19,6 +19,7 @@ from sovyx.voice.calibration.rules import iter_rules, iter_unreachable_rules
 # declaration can never silently rot back into "looks live".
 _KNOWN_UNREACHABLE = {
     "R20_windows_apo_active",  # fingerprint.apo_active hardcoded False (no producer)
+    "R40_macos_tcc_denied",  # distro_id never "macos" + no Darwin triage producer (MACOS-3)
     "R70_capture_mode_exclusive",  # latency/jitter measurements hardcoded 0.0
     "R80_aec_engine",  # echo_correlation_db hardcoded None
 }

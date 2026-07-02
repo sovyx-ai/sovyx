@@ -1222,10 +1222,15 @@ export const HalPayloadSchema = z.object({
   audio_enhancement_active: z.boolean(),
 });
 
+// Mirrors src/sovyx/voice/_bluetooth_profile_mac.py::BluetoothAudioProfile
+// (StrEnum) — the backend route sends .value verbatim. MACOS-1: the
+// previous tokens ('a2dp'/'hfp') never matched the backend emission, so
+// every device failed safeParse and the A2DP warn pill could not render.
 export const BluetoothAudioProfileTokenSchema = z.enum([
-  "a2dp",
-  "hfp",
+  "a2dp_only",
+  "hfp_active",
   "unknown",
+  "not_connected",
 ]);
 
 export const BluetoothDevicePayloadSchema = z.object({

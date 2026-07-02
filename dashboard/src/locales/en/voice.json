@@ -486,6 +486,7 @@
       "bluetoothEmpty": "No Bluetooth audio devices paired.",
       "bluetoothDevice": "Device",
       "bluetoothProfile": "Profile",
+      "bluetoothA2dpHint": "{{name}} is in playback-only (A2DP) mode — its microphone is off, so Sovyx cannot hear you even though playback works. Switch the headset to a hands-free/call profile in System Settings → Bluetooth (or disconnect and reconnect it), then retry.",
       "bluetoothInput": "Input",
       "bluetoothOutput": "Output",
       "codeSigningTitle": "Hardened Runtime entitlement",

@@ -284,6 +284,45 @@ class TestClassificationRobustness:
             assert report.plugins[0].category is HalPluginCategory.VIRTUAL_AUDIO
 
 
+# ── Catalogue hygiene (MACOS-9 regression) ────────────────────────
+
+
+class TestCatalogueHygiene:
+    def test_every_needle_is_lowercase(self) -> None:
+        # ``_classify`` lowercases the bundle name before substring
+        # matching, so a mixed-case needle can NEVER match (MACOS-9:
+        # 'appleHDA' was dead for its entire life). Pin the invariant.
+        from sovyx.voice._hal_detector_mac import _PLUGIN_CATALOGUE
+
+        for needle, _label, _category in _PLUGIN_CATALOGUE:
+            assert needle == needle.lower(), (
+                f"catalogue needle {needle!r} contains uppercase — it can "
+                f"never match a lowercased bundle name"
+            )
+
+    def test_apple_hda_classified_as_vendor(self) -> None:
+        # Regression for MACOS-9: Boot Camp Apple HDA driver bundles
+        # (e.g. ``AppleHDA.driver``) must classify as VENDOR with the
+        # friendly label, not fall through to UNKNOWN.
+        for variant in ("AppleHDA", "applehda", "AppleHDA-BootCamp"):
+            with (
+                patch.object(sys, "platform", "darwin"),
+                patch(
+                    "sovyx.voice._hal_detector_mac._SYSTEM_HAL_DIR",
+                    _mock_path_with_drivers(variant),
+                ),
+                patch(
+                    "sovyx.voice._hal_detector_mac._user_hal_dir",
+                    return_value=_mock_path_with_drivers(exists=False),
+                ),
+            ):
+                report = detect_hal_plugins()
+            assert report.plugins[0].category is HalPluginCategory.VENDOR, (
+                f"variant {variant} should classify as VENDOR"
+            )
+            assert report.plugins[0].friendly_label == "Apple HDA boot camp"
+
+
 # ── Report contract ──────────────────────────────────────────────
 
 

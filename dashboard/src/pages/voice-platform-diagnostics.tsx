@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import type {
+  BluetoothDevicePayload,
   EtwChannelPayload,
   EtwEventLevelToken,
   HalPayload,
@@ -77,6 +78,26 @@ function etwLevelTone(level: EtwEventLevelToken): Tone {
     case "information":
       return "neutral";
     case "verbose":
+    case "unknown":
+    default:
+      return "neutral";
+  }
+}
+
+function bluetoothProfileTone(
+  profile: BluetoothDevicePayload["profile"],
+): Tone {
+  // Tokens mirror the backend BluetoothAudioProfile StrEnum (MACOS-1).
+  // a2dp_only is THE operator-actionable state (playback-only — the
+  // headset mic is off while capture looks healthy) → warn.
+  // not_connected / unknown are informative → neutral, matching the
+  // page's tone conventions for inconclusive states.
+  switch (profile) {
+    case "a2dp_only":
+      return "warn";
+    case "hfp_active":
+      return "ok";
+    case "not_connected":
     case "unknown":
     default:
       return "neutral";
@@ -499,18 +520,30 @@ function MacOSBranchCard({ branch }: { branch: PlatformMacOSBranch }) {
             {branch.bluetooth.devices.map((d) => (
               <li
                 key={d.address || d.name}
-                className="flex items-center justify-between gap-3 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] p-2"
+                className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] p-2"
               >
-                <div>
-                  <p className="font-semibold">{d.name}</p>
-                  <p className="font-mono text-[10px] text-[var(--svx-color-text-tertiary)]">
-                    {d.address}
-                  </p>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">{d.name}</p>
+                    <p className="font-mono text-[10px] text-[var(--svx-color-text-tertiary)]">
+                      {d.address}
+                    </p>
+                  </div>
+                  <StatusPill
+                    tone={bluetoothProfileTone(d.profile)}
+                    label={d.profile}
+                  />
                 </div>
-                <StatusPill
-                  tone={d.profile === "a2dp" ? "warn" : "neutral"}
-                  label={d.profile}
-                />
+                {d.profile === "a2dp_only" && (
+                  <p
+                    className="mt-2 text-xs text-[var(--svx-color-status-amber)]"
+                    data-testid="bluetooth-a2dp-hint"
+                  >
+                    {t("platform.macosSection.bluetoothA2dpHint", {
+                      name: d.name,
+                    })}
+                  </p>
+                )}
               </li>
             ))}
           </ul>

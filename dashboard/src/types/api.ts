@@ -1539,10 +1539,13 @@ export interface HalPayload {
   audio_enhancement_active: boolean;
 }
 
+// Mirrors src/sovyx/voice/_bluetooth_profile_mac.py::BluetoothAudioProfile
+// (StrEnum values sent verbatim by the backend route) — MACOS-1.
 export type BluetoothAudioProfileToken =
-  | "a2dp"
-  | "hfp"
-  | "unknown";
+  | "a2dp_only"
+  | "hfp_active"
+  | "unknown"
+  | "not_connected";
 
 export interface BluetoothDevicePayload {
   name: string;

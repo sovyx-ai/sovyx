@@ -486,6 +486,7 @@
       "bluetoothEmpty": "Ningún dispositivo de audio Bluetooth emparejado.",
       "bluetoothDevice": "Dispositivo",
       "bluetoothProfile": "Perfil",
+      "bluetoothA2dpHint": "{{name}} está en modo solo-reproducción (A2DP) — su micrófono está apagado, así que Sovyx no puede oírte aunque la reproducción funcione. Cambia el auricular a un perfil manos-libres/llamada en Ajustes del Sistema → Bluetooth (o desconéctalo y vuelve a conectarlo) e inténtalo de nuevo.",
       "bluetoothInput": "Entrada",
       "bluetoothOutput": "Salida",
       "codeSigningTitle": "Hardened Runtime entitlement",

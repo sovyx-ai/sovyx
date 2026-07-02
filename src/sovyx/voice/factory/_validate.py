@@ -101,8 +101,10 @@ def _maybe_check_mic_permission() -> None:
 
     Never raises on UNKNOWN — the OS-level probe couldn't decide,
     and the cascade's own deaf-detection covers the residual case.
-    Never raises on non-Windows when the gate is enabled — Linux
-    has no OS gate, macOS UNKNOWN is the deferred MA2 case.
+    Linux never raises (no OS gate — always GRANTED). macOS raises
+    only on an explicit TCC deny for the client actually hosting the
+    process (MA2 probe; since MACOS-2, grants/denies for unrelated
+    apps resolve to UNKNOWN, never GRANTED or DENIED).
     """
     from sovyx.engine.config import VoiceTuningConfig
 

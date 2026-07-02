@@ -7,6 +7,10 @@
  *   - Successful render — Linux / Windows / macOS branches paint per
  *     the platform field; non-host branches are absent.
  *   - Mic permission status pill colour-coded by status token.
+ *   - Bluetooth profile pills use the real backend StrEnum tokens
+ *     (a2dp_only/hfp_active/unknown/not_connected — MACOS-1): warn
+ *     pill + i18n remediation hint for a2dp_only (MACOS-5), neutral
+ *     for not_connected.
  *   - Probe-failure isolation — a branch with empty/note-only payload
  *     still renders without throwing.
  *   - Refresh button triggers a second GET.
@@ -149,11 +153,22 @@ const DARWIN_RESPONSE: PlatformDiagnosticsResponse = {
     bluetooth: {
       devices: [
         {
+          // Real backend StrEnum literal (MACOS-1) — the backend
+          // route sends BluetoothAudioProfile.value verbatim; the
+          // old fixture's "a2dp" was a token the backend can never
+          // emit, which masked the drifted warn-pill check.
           name: "AirPods Pro",
           address: "AA:BB:CC:DD:EE:FF",
-          profile: "a2dp",
+          profile: "a2dp_only",
           is_input_capable: true,
           is_output_capable: true,
+        },
+        {
+          name: "Magic Keyboard",
+          address: "99:88:77:66:55:44",
+          profile: "not_connected",
+          is_input_capable: false,
+          is_output_capable: false,
         },
       ],
       notes: [],
@@ -321,8 +336,47 @@ describe("VoicePlatformDiagnosticsPage — macOS branch", () => {
     // BlackHole appears in both the friendly_label heading and the
     // path subtitle of the same plug-in card.
     expect(screen.getAllByText(/BlackHole/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/AirPods Pro/)).toBeInTheDocument();
+    expect(screen.getAllByText(/AirPods Pro/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/unsigned/).length).toBeGreaterThan(0);
+  });
+
+  it("renders the warn pill for a device in a2dp_only mode (MACOS-1)", async () => {
+    mockGet.mockResolvedValueOnce(DARWIN_RESPONSE);
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("platform-macos-card")).toBeInTheDocument();
+    });
+    // The pill carries the raw backend token as its label and the
+    // amber warn tone — the whole point of MA6 is that this state is
+    // operator-visible.
+    const pill = screen.getByText("a2dp_only");
+    expect(pill).toHaveClass("text-[var(--svx-color-status-amber)]");
+  });
+
+  it("renders the A2DP remediation hint for a2dp_only devices (MACOS-5)", async () => {
+    mockGet.mockResolvedValueOnce(DARWIN_RESPONSE);
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("platform-macos-card")).toBeInTheDocument();
+    });
+    const hint = screen.getByTestId("bluetooth-a2dp-hint");
+    // Interpolates the device name + names the OS path to walk.
+    expect(hint).toHaveTextContent(/AirPods Pro/);
+    expect(hint).toHaveTextContent(/System Settings/);
+    expect(hint).toHaveTextContent(/Bluetooth/);
+  });
+
+  it("renders not_connected devices with a neutral pill and no hint", async () => {
+    mockGet.mockResolvedValueOnce(DARWIN_RESPONSE);
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("platform-macos-card")).toBeInTheDocument();
+    });
+    const pill = screen.getByText("not_connected");
+    expect(pill).not.toHaveClass("text-[var(--svx-color-status-amber)]");
+    // Exactly one hint — the a2dp_only device's; not_connected is
+    // informative-neutral (MACOS-1 tone contract).
+    expect(screen.getAllByTestId("bluetooth-a2dp-hint")).toHaveLength(1);
   });
 });
 
