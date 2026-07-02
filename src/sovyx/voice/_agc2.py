@@ -480,15 +480,20 @@ class AGC2:
         """Reset the controller to its initial state.
 
         Clears the speech-level estimate (back to target), the
-        applied gain (back to 0 dB), and the lifetime counters.
-        Call between unrelated capture sessions so the prior
-        session's adaptation doesn't bias the next session's first
-        frame.
+        applied gain (back to 0 dB), and all four lifetime counters
+        (``frames_processed`` / ``frames_silenced`` /
+        ``frames_vad_silenced`` / ``frames_clipped``) — the T4.52
+        gate-rate ratio (``frames_vad_silenced / frames_processed``)
+        would mix sessions (and could exceed 1.0) if the VAD-veto
+        counter survived while its denominator reset. Call between
+        unrelated capture sessions so the prior session's adaptation
+        doesn't bias the next session's first frame.
         """
         self._current_gain_db = 0.0
         self._speech_level_dbfs = self._config.target_dbfs
         self._frames_processed = 0
         self._frames_silenced = 0
+        self._frames_vad_silenced = 0
         self._frames_clipped = 0
 
     def lift_speech_level(self, delta_db: float) -> float:

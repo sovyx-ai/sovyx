@@ -6,6 +6,7 @@ flow, streaming, error handling, and config validation without real models.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
@@ -723,6 +724,71 @@ class TestStreamingListenerThreadSafety:
         assert len(results) == 7
         assert sum(1 for r in results if r.is_final) == 1
         assert stt.state == STTState.READY
+
+
+class TestOneShotDuplicateCompletion:
+    """ENGINES-18 — duplicate ``on_line_completed`` race hardening.
+
+    Two completed lines firing back-to-back on the native worker thread
+    can BOTH pass the racy native-thread ``done()`` pre-filter before
+    the event loop runs the first scheduled resolver. The loop-side
+    callback must therefore be idempotent — pre-fix the second scheduled
+    ``set_result`` raised ``InvalidStateError`` inside a loop callback.
+    """
+
+    @staticmethod
+    def _make_double_completion_transcriber() -> MagicMock:
+        transcriber = MagicMock()
+
+        def _create_stream(update_interval: float = 0.3) -> MagicMock:  # noqa: ARG001
+            stream = MagicMock()
+            listeners: list[Any] = []
+
+            def _stop() -> None:
+                # Both completions fire on the to_thread worker while the
+                # loop is suspended awaiting it — both callbacks are
+                # scheduled before the loop can resolve the first one,
+                # reproducing the race deterministically.
+                for text in ("first result", "second result"):
+                    for lis in listeners:
+                        event = MagicMock()
+                        event.line.text = text
+                        lis.on_line_completed(event)
+
+            stream.add_listener = listeners.append
+            stream.add_audio = MagicMock()
+            stream.stop = _stop
+            stream.start = MagicMock()
+            stream.close = MagicMock()
+            return stream
+
+        transcriber.create_stream = _create_stream
+        return transcriber
+
+    @pytest.mark.asyncio
+    async def test_first_result_wins_without_invalid_state_error(self) -> None:
+        transcriber = self._make_double_completion_transcriber()
+        mock_mv = _make_mock_moonshine_voice(transcriber)
+        stt = MoonshineSTT()
+
+        # Capture loop-callback exceptions — an InvalidStateError raised
+        # inside a call_soon_threadsafe callback never propagates to the
+        # test body; it lands in the loop exception handler.
+        captured: list[dict[str, Any]] = []
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, ctx: captured.append(ctx))
+        try:
+            with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+                await stt.initialize()
+                result = await stt.transcribe(np.zeros(1600, dtype=np.float32))
+            # Give the loop one tick to run any straggler callbacks.
+            await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        assert result.text == "first result"
+        assert captured == []
 
 
 # ---------------------------------------------------------------------------

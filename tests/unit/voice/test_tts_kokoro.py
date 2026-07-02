@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -403,6 +404,74 @@ class TestInitialization:
             await tts.initialize()
 
     @pytest.mark.asyncio
+    async def test_initialize_runs_model_load_off_the_event_loop(self, tmp_path: Path) -> None:
+        """ENGINES-1 / anti-pattern #14 — the ONNX session construction
+        (88-300 MB load) and the Kokoro voices ingest MUST run in ONE
+        worker-thread dispatch, never on the event loop thread."""
+        _setup_model_dir(tmp_path)
+        tts = KokoroTTS(tmp_path)
+        loop_thread = threading.current_thread()
+        seen: dict[str, threading.Thread] = {}
+
+        def _capture_session(*_args: object, **_kwargs: object) -> MagicMock:
+            seen["session"] = threading.current_thread()
+            return MagicMock()
+
+        def _capture_from_session(_session: object, _voices: str) -> MagicMock:
+            seen["kokoro"] = threading.current_thread()
+            return _make_mock_kokoro()
+
+        mock_module = MagicMock(
+            Kokoro=MagicMock(from_session=MagicMock(side_effect=_capture_from_session)),
+        )
+        with (
+            patch.dict("sys.modules", {"kokoro_onnx": mock_module}),
+            patch.object(onnxruntime, "InferenceSession", side_effect=_capture_session),
+        ):
+            await tts.initialize()
+
+        assert tts.is_initialized
+        assert seen["session"] is not loop_thread
+        assert seen["kokoro"] is not loop_thread
+        # Both loads share ONE to_thread dispatch (single worker call).
+        assert seen["session"] is seen["kokoro"]
+
+    @pytest.mark.asyncio
+    async def test_self_heal_retry_load_also_runs_off_the_event_loop(self, tmp_path: Path) -> None:
+        """ENGINES-1 — the re-load after a corrupt-cache re-download goes
+        through initialize() again, so it must be offloaded too."""
+        model_dir = tmp_path / "kokoro"
+        model_dir.mkdir()
+        _setup_model_dir(model_dir)
+        tts = KokoroTTS(model_dir)
+        loop_thread = threading.current_thread()
+        retry_threads: list[threading.Thread] = []
+
+        def _fail_then_capture(*_args: object, **_kwargs: object) -> MagicMock:
+            retry_threads.append(threading.current_thread())
+            if len(retry_threads) == 1:
+                msg = "corrupt model"
+                raise OSError(msg)
+            return MagicMock()
+
+        mock_module = MagicMock(
+            Kokoro=MagicMock(from_session=MagicMock(return_value=_make_mock_kokoro())),
+        )
+        with (
+            patch.dict("sys.modules", {"kokoro_onnx": mock_module}),
+            patch.object(onnxruntime, "InferenceSession", side_effect=_fail_then_capture),
+            patch(
+                "sovyx.voice.model_registry.ensure_kokoro_tts",
+                new=AsyncMock(),
+            ),
+        ):
+            await tts.initialize()
+
+        assert tts.is_initialized
+        assert len(retry_threads) == 2
+        assert all(t is not loop_thread for t in retry_threads)
+
+    @pytest.mark.asyncio
     async def test_close(self, tmp_path: Path) -> None:
         tts, _ = _build_kokoro(tmp_path)
         assert tts.is_initialized
@@ -656,6 +725,36 @@ class TestSynthesizeStreaming:
             chunks.append(chunk)
 
         assert len(chunks) == 2  # Two sentences
+
+    @pytest.mark.asyncio
+    async def test_streaming_never_yields_empty_chunk(self, tmp_path: Path) -> None:
+        """ENGINES-6 sibling — the TTSEngine ABC contract forbids yielding
+        an empty AudioChunk; a sentence whose synthesis produced zero
+        samples (degenerate model output) is skipped, not yielded."""
+        tts, mock = _build_kokoro(tmp_path)
+        rng = np.random.default_rng(7)
+
+        def _create(
+            text: str,
+            voice: str = "af_bella",
+            speed: float = 1.0,
+            lang: str = "en-us",
+        ) -> tuple[np.ndarray, int]:
+            if "empty" in text:
+                return np.array([], dtype=np.float32), 24000
+            return rng.uniform(-0.5, 0.5, 4800).astype(np.float32), 24000
+
+        mock.create = MagicMock(side_effect=_create)
+
+        async def _stream() -> AsyncIterator[str]:
+            yield "Hello there. This is empty. Goodbye."
+
+        chunks = []
+        async for chunk in tts.synthesize_streaming(_stream()):
+            chunks.append(chunk)
+
+        assert len(chunks) == 2  # the zero-sample sentence was skipped
+        assert all(c.audio.size > 0 for c in chunks)
 
 
 # ---------------------------------------------------------------------------

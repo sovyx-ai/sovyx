@@ -174,3 +174,27 @@ class TestAgc2VadFeedbackEnabled:
         agc2.process(loud)
         # Fallback → estimator updates as in pre-T4.52.
         assert agc2.frames_vad_silenced == 0
+
+
+class TestAgc2ResetClearsVadCounter:
+    """ENGINES-16 — reset() clears ALL four lifetime counters."""
+
+    def test_reset_clears_frames_vad_silenced(self) -> None:
+        """The T4.52 VAD-veto counter must reset with its
+        ``frames_processed`` denominator, or the gate-rate ratio
+        (``frames_vad_silenced / frames_processed``) mixes capture
+        sessions and can exceed 1.0 after a reset."""
+        import time as _time
+
+        agc2 = AGC2(AGC2Config(), vad_feedback_enabled=True)
+        set_last_verdict(is_speech=False, monotonic=_time.monotonic())
+        agc2.process(_frame_at_dbfs(-25.0))
+        assert agc2.frames_vad_silenced == 1
+        assert agc2.frames_processed == 1
+
+        agc2.reset()
+
+        assert agc2.frames_vad_silenced == 0
+        assert agc2.frames_processed == 0
+        assert agc2.frames_silenced == 0
+        assert agc2.frames_clipped == 0

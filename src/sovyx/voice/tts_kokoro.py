@@ -233,13 +233,19 @@ class KokoroTTS(TTSEngine):
         with unstable GPU drivers. We construct the session ourselves and pass
         it via :meth:`Kokoro.from_session` to match the Piper pinning policy.
 
+        The session construction (~88-300 MB model read + CPU graph
+        allocation) plus the ~27 MB voices-bin load are CPU/IO-bound and
+        run inside ONE :func:`asyncio.to_thread` dispatch (``_load``), so
+        the shared daemon loop stays responsive during pipeline start
+        (Jarvis pre-cache) and lazy mid-turn initialization — CLAUDE.md
+        anti-pattern #14 names Kokoro explicitly. The corrupt-cache
+        self-heal retry re-enters this method, so the re-load after a
+        re-download is offloaded the same way.
+
         Raises:
             FileNotFoundError: If model or voice files are missing.
             RuntimeError: If kokoro-onnx fails to initialize.
         """
-        import onnxruntime as ort
-        from kokoro_onnx import Kokoro
-
         model_path = self._resolve_model_path()
         voices_path = self._model_dir / _VOICES_FILE
 
@@ -247,22 +253,40 @@ class KokoroTTS(TTSEngine):
             msg = f"Kokoro voices file not found: {voices_path}"
             raise FileNotFoundError(msg)
 
-        opts = ort.SessionOptions()
-        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        def _load() -> Any:  # noqa: ANN401 — returns an opaque kokoro_onnx.Kokoro instance
+            """Sync loader — runs in a worker thread (anti-pattern #14).
 
-        try:
+            Mirrors ``MoonshineSTT._load_transcriber``: everything heavy
+            (imports of the ONNX/kokoro stacks, session construction,
+            voices ingest) lives here, off the event loop.
+            """
+            import onnxruntime as ort  # noqa: PLC0415 — heavy import deferred to worker
+            from kokoro_onnx import Kokoro  # noqa: PLC0415 — heavy import deferred to worker
+
+            opts = ort.SessionOptions()
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             session = ort.InferenceSession(
                 str(model_path),
                 sess_options=opts,
                 providers=["CPUExecutionProvider"],
             )
             # Mission H4 §T2.3 — register session for cohort observability.
+            # The registry guards its state with an internal threading lock,
+            # so the pairing (#47) stays adjacent to construction inside the
+            # worker thread.
             from sovyx.observability._resource_registry import (  # noqa: PLC0415 — lazy import
                 register_onnx_session,
             )
 
             register_onnx_session(label="voice.tts.kokoro", session=session)
-            self._kokoro = Kokoro.from_session(session, str(voices_path))
+            return Kokoro.from_session(session, str(voices_path))
+
+        try:
+            self._kokoro = await asyncio.to_thread(_load)
+        except ImportError:
+            # Dependency absent — not a corrupt-cache case. Surface raw
+            # (pre-offload behaviour: the imports ran before the try).
+            raise
         except Exception as exc:  # noqa: BLE001
             # G-P2-4 — one-shot SHA-verified self-heal at LOAD time. The
             # download-path self-heal (ModelDownloader SHA re-download) only
@@ -575,7 +599,9 @@ class KokoroTTS(TTSEngine):
             text_stream: Async iterator yielding text chunks.
 
         Yields:
-            AudioChunk per complete sentence.
+            AudioChunk per complete sentence. Empty chunks are never
+            yielded (ABC contract) — a sentence whose synthesis produced
+            zero samples is skipped with a debug log.
         """
         if not self._initialized:
             await self.initialize()
@@ -592,14 +618,33 @@ class KokoroTTS(TTSEngine):
                 stripped = sentence.strip()
                 if stripped:
                     chunk = await self.synthesize(stripped)
-                    yield chunk
+                    if chunk.audio.size:
+                        yield chunk
+                    else:
+                        # ABC contract: the stream MUST NOT yield an empty
+                        # AudioChunk. The DROP stage event already fired
+                        # inside synthesize; log the skip per #27.
+                        logger.debug(
+                            "voice.tts.streaming_empty_chunk_skipped",
+                            engine="kokoro",
+                            text_chars=len(stripped),
+                        )
 
             # Keep last (potentially incomplete) sentence in buffer
             buffer = sentences[-1] if sentences else ""
 
         # Final sentence
         if buffer.strip():
-            yield await self.synthesize(buffer.strip())
+            final = buffer.strip()
+            chunk = await self.synthesize(final)
+            if chunk.audio.size:
+                yield chunk
+            else:
+                logger.debug(
+                    "voice.tts.streaming_empty_chunk_skipped",
+                    engine="kokoro",
+                    text_chars=len(final),
+                )
 
     def list_voices(self) -> list[str]:
         """List available voices from the loaded Kokoro model.

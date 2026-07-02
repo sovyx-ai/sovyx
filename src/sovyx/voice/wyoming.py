@@ -301,6 +301,14 @@ def build_service_info(config: WyomingConfig) -> dict[str, Any]:
     """Build the Wyoming ``info`` response describing Sovyx capabilities.
 
     Returns the ``data`` dict for an ``info`` event.
+
+    Capability honesty (AP #48): every handler in
+    :class:`WyomingClientHandler` is strictly batch — ``_handle_transcribe``
+    buffers the full audio turn and emits ONE final transcript,
+    ``_handle_synthesize`` synthesizes the full text before chunking the
+    finished audio, and ``_handle_intent`` awaits the complete response.
+    The three ``supports_*_streaming`` flags are therefore ``False``; flip
+    them only alongside real incremental handlers.
     """
     return {
         "asr": [
@@ -320,7 +328,7 @@ def build_service_info(config: WyomingConfig) -> dict[str, Any]:
                         "languages": ["en"],
                     },
                 ],
-                "supports_transcript_streaming": True,
+                "supports_transcript_streaming": False,
             },
         ],
         "tts": [
@@ -340,7 +348,7 @@ def build_service_info(config: WyomingConfig) -> dict[str, Any]:
                         "languages": ["en"],
                     },
                 ],
-                "supports_synthesize_streaming": True,
+                "supports_synthesize_streaming": False,
             },
         ],
         "wake": [
@@ -380,7 +388,7 @@ def build_service_info(config: WyomingConfig) -> dict[str, Any]:
                         "languages": ["en"],
                     },
                 ],
-                "supports_handled_streaming": True,
+                "supports_handled_streaming": False,
             },
         ],
         "satellite": {
@@ -418,6 +426,57 @@ def pcm_bytes_to_ndarray(pcm: bytes, width: int = _MIC_WIDTH) -> np.ndarray:
         raise ValueError(msg)
     samples = np.frombuffer(pcm, dtype=np.int16)
     return samples.astype(np.float32) / 32768.0
+
+
+def convert_pcm_for_stt(
+    pcm: bytes,
+    *,
+    source_rate: int,
+    source_channels: int,
+    target_rate: int,
+) -> np.ndarray:
+    """Convert 16-bit PCM to the STT contract: float32 mono at ``target_rate``.
+
+    ENGINES-8 — Wyoming clients declare their stream format on
+    ``audio-start``; a satellite streaming e.g. 48 kHz stereo must be
+    downmixed + resampled before it reaches the STT engine, or the
+    transcription is silently garbage (decoded at the wrong speed).
+    Resampling reuses the same polyphase primitive as the capture path
+    (:mod:`sovyx.voice._frame_normalizer` — ``scipy.signal.resample_poly``).
+
+    CPU-bound for long buffers — callers on the event loop MUST dispatch
+    via :func:`asyncio.to_thread` (anti-pattern #14).
+
+    Raises:
+        ValueError: on a non-16-bit width upstream
+            (:func:`pcm_bytes_to_ndarray`) or non-positive
+            rate/channel declarations.
+    """
+    if source_rate <= 0 or source_channels <= 0:
+        msg = f"Invalid declared audio format: rate={source_rate}, channels={source_channels}"
+        raise ValueError(msg)
+
+    audio = pcm_bytes_to_ndarray(pcm, _MIC_WIDTH)
+
+    if source_channels > 1:
+        # Interleaved frames — drop any trailing partial frame, then
+        # average channels to mono.
+        usable = audio.size - (audio.size % source_channels)
+        audio = audio[:usable].reshape(-1, source_channels).mean(axis=1).astype(np.float32)
+
+    if source_rate != target_rate and audio.size > 0:
+        from math import gcd  # noqa: PLC0415 — trivial stdlib import
+
+        from scipy.signal import resample_poly  # noqa: PLC0415 — heavy import deferred
+
+        divisor = gcd(source_rate, target_rate)
+        audio = resample_poly(
+            audio,
+            target_rate // divisor,
+            source_rate // divisor,
+        ).astype(np.float32)
+
+    return audio
 
 
 def ndarray_to_pcm_bytes(audio: np.ndarray) -> bytes:
@@ -590,7 +649,17 @@ class WyomingClientHandler:
         await self._write_event(WyomingEvent(type="info", data=info))
 
     async def _handle_transcribe(self, event: WyomingEvent) -> None:
-        """Handle STT: collect audio chunks → transcribe → return transcript."""
+        """Handle STT: collect audio chunks → convert to STT contract → transcribe.
+
+        ENGINES-8 — honours the client-declared ``rate``/``width``/
+        ``channels`` from the ``audio-start`` (or first ``audio-chunk``)
+        event data. Non-16 kHz / stereo streams are downmixed + resampled
+        to the STT contract via :func:`convert_pcm_for_stt` (offloaded to
+        a worker thread); an unsupported width fails the turn loudly with
+        an ``error`` event instead of producing garbage transcription.
+        A stream that declares nothing keeps the legacy behaviour
+        (assume the configured mic contract).
+        """
         if self._stt is None:
             logger.warning("wyoming_stt_not_available")
             await self._write_event(
@@ -600,6 +669,26 @@ class WyomingClientHandler:
 
         language = event.data.get("language", "en")
         audio_buffer = bytearray()
+        declared_rate = self._config.mic_rate
+        declared_width = self._config.mic_width
+        declared_channels = self._config.mic_channels
+        format_declared = False
+
+        def _read_declared_format(data: dict[str, Any]) -> None:
+            nonlocal declared_rate, declared_width, declared_channels, format_declared
+            if not any(key in data for key in ("rate", "width", "channels")):
+                return
+            try:
+                rate = int(data.get("rate", declared_rate))
+                width = int(data.get("width", declared_width))
+                channels = int(data.get("channels", declared_channels))
+            except (TypeError, ValueError):
+                # Malformed declaration — keep the configured contract
+                # (all-or-nothing so a half-parsed format can't apply).
+                logger.warning("wyoming_malformed_audio_format", data=data)
+                return
+            declared_rate, declared_width, declared_channels = rate, width, channels
+            format_declared = True
 
         # Read audio stream until audio-stop — same payload cap + idle
         # timeout as the main loop (see _read_substream_event), plus a
@@ -612,7 +701,10 @@ class WyomingClientHandler:
 
             if chunk_event.type == "audio-start":
                 audio_buffer.clear()
+                _read_declared_format(chunk_event.data)
             elif chunk_event.type == "audio-chunk":
+                if not format_declared:
+                    _read_declared_format(chunk_event.data)
                 if len(audio_buffer) + len(chunk_event.payload) > _MAX_TRANSCRIBE_AUDIO_BYTES:
                     logger.warning(
                         "wyoming_transcribe_audio_cap_exceeded",
@@ -631,8 +723,47 @@ class WyomingClientHandler:
             elif chunk_event.type == "audio-stop":
                 break
 
-        # Convert PCM to float32 ndarray
-        audio_np = pcm_bytes_to_ndarray(bytes(audio_buffer), self._config.mic_width)
+        # Convert PCM to the STT contract (float32 mono @ mic_rate).
+        # Exotic widths / degenerate declarations fail the turn loudly —
+        # feeding a garbage decode to the LLM is worse than an error.
+        if declared_width != _MIC_WIDTH:
+            logger.warning(
+                "wyoming_unsupported_audio_width",
+                width=declared_width,
+                supported_width=_MIC_WIDTH,
+            )
+            await self._write_event(
+                WyomingEvent(
+                    type="error",
+                    data={
+                        "code": "unsupported-audio-format",
+                        "text": (
+                            f"Unsupported audio width {declared_width} — "
+                            "only 16-bit signed PCM is supported."
+                        ),
+                    },
+                ),
+            )
+            return
+        try:
+            # Downmix + polyphase resample are CPU-bound for long turns —
+            # offload per anti-pattern #14.
+            audio_np = await asyncio.to_thread(
+                convert_pcm_for_stt,
+                bytes(audio_buffer),
+                source_rate=declared_rate,
+                source_channels=declared_channels,
+                target_rate=self._config.mic_rate,
+            )
+        except ValueError as exc:
+            logger.warning("wyoming_unsupported_audio_format", error=str(exc))
+            await self._write_event(
+                WyomingEvent(
+                    type="error",
+                    data={"code": "unsupported-audio-format", "text": str(exc)},
+                ),
+            )
+            return
 
         # Transcribe. W2.2 / G-P1-5 — a transient STT engine error (timeout,
         # ONNX failure, I/O) must complete the HA turn with an EMPTY transcript
@@ -652,8 +783,21 @@ class WyomingClientHandler:
         # Extract text (handle both string and object results)
         text = result.text if hasattr(result, "text") else str(result)
 
+        # ENGINES-21 — echo the language the ENGINE actually transcribed
+        # in (TranscriptionResult.language), not the client's request. An
+        # English Moonshine transcript labeled "pt" because HA asked for
+        # pt is a semantic lie on the wire (AP #48). Falls back to the
+        # requested language only when the engine result carries none.
+        result_language = getattr(result, "language", None)
+        response_language = (
+            result_language if isinstance(result_language, str) and result_language else language
+        )
+
         await self._write_event(
-            WyomingEvent(type="transcript", data={"text": text, "language": language}),
+            WyomingEvent(
+                type="transcript",
+                data={"text": text, "language": response_language},
+            ),
         )
 
     async def _handle_synthesize(self, event: WyomingEvent) -> None:

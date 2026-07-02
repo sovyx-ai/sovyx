@@ -26,6 +26,7 @@ from sovyx.voice.wyoming import (
     WyomingConfig,
     WyomingEvent,
     build_service_info,
+    convert_pcm_for_stt,
     get_local_ip,
     ndarray_to_pcm_bytes,
     pcm_bytes_to_ndarray,
@@ -39,10 +40,16 @@ from sovyx.voice.wyoming import (
 
 @dataclass
 class MockTranscriptionResult:
-    """Mock STT result."""
+    """Mock STT result.
+
+    ``language`` mirrors ``TranscriptionResult.language`` — the language
+    the ENGINE transcribed in. ``None`` models a minimal result object
+    (handler falls back to echoing the client's requested language).
+    """
 
     text: str
     confidence: float = 0.95
+    language: str | None = None
 
 
 @dataclass
@@ -334,6 +341,43 @@ class TestAudioConversion:
         np.testing.assert_allclose(result, original, atol=1)
 
 
+class TestConvertPcmForStt:
+    """ENGINES-8 — declared-format → STT-contract conversion helper."""
+
+    def test_passthrough_when_format_matches_contract(self) -> None:
+        pcm = np.arange(320, dtype=np.int16).tobytes()
+        out = convert_pcm_for_stt(pcm, source_rate=16_000, source_channels=1, target_rate=16_000)
+        assert out.dtype == np.float32
+        assert len(out) == 320
+
+    def test_stereo_downmix_averages_channels(self) -> None:
+        # L=1000, R=3000 interleaved → mono mean 2000/32768.
+        frames = 100
+        stereo = np.empty(frames * 2, dtype=np.int16)
+        stereo[0::2] = 1000
+        stereo[1::2] = 3000
+        out = convert_pcm_for_stt(
+            stereo.tobytes(), source_rate=16_000, source_channels=2, target_rate=16_000
+        )
+        assert len(out) == frames
+        np.testing.assert_allclose(out, 2000 / 32768.0, atol=1e-4)
+
+    def test_resample_48k_to_16k_preserves_duration(self) -> None:
+        pcm = np.zeros(4800, dtype=np.int16).tobytes()  # 0.1 s @ 48 kHz
+        out = convert_pcm_for_stt(pcm, source_rate=48_000, source_channels=1, target_rate=16_000)
+        assert len(out) == 1600  # 0.1 s @ 16 kHz
+
+    def test_invalid_declared_format_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid declared audio format"):
+            convert_pcm_for_stt(b"", source_rate=0, source_channels=1, target_rate=16_000)
+        with pytest.raises(ValueError, match="Invalid declared audio format"):
+            convert_pcm_for_stt(b"", source_rate=16_000, source_channels=0, target_rate=16_000)
+
+    def test_empty_payload_returns_empty(self) -> None:
+        out = convert_pcm_for_stt(b"", source_rate=48_000, source_channels=2, target_rate=16_000)
+        assert len(out) == 0
+
+
 # ---------------------------------------------------------------------------
 # WyomingConfig
 # ---------------------------------------------------------------------------
@@ -394,22 +438,32 @@ class TestBuildServiceInfo:
         assert "satellite" in info
 
     def test_asr_details(self) -> None:
-        """ASR service has correct name and model."""
+        """ASR service has correct name and model.
+
+        ENGINES-7 / AP #48 — ``supports_transcript_streaming`` MUST be
+        False: ``_handle_transcribe`` is strictly batch (one final
+        transcript event, no incremental transcript emission).
+        """
         info = build_service_info(WyomingConfig())
         asr = info["asr"][0]
         assert asr["name"] == "sovyx-stt"
         assert asr["installed"] is True
-        assert asr["supports_transcript_streaming"] is True
+        assert asr["supports_transcript_streaming"] is False
         assert len(asr["models"]) == 1
         assert asr["models"][0]["name"] == "moonshine-tiny"
         assert "en" in asr["models"][0]["languages"]
 
     def test_tts_details(self) -> None:
-        """TTS service has correct voice info."""
+        """TTS service has correct voice info.
+
+        ENGINES-7 / AP #48 — ``supports_synthesize_streaming`` MUST be
+        False: ``_handle_synthesize`` runs the batch synthesize and only
+        chunks the finished audio.
+        """
         info = build_service_info(WyomingConfig())
         tts = info["tts"][0]
         assert tts["name"] == "sovyx-tts"
-        assert tts["supports_synthesize_streaming"] is True
+        assert tts["supports_synthesize_streaming"] is False
         assert len(tts["voices"]) == 1
 
     def test_wake_details(self) -> None:
@@ -421,11 +475,15 @@ class TestBuildServiceInfo:
         assert wake["models"][0]["phrase"] == "hey sovyx"
 
     def test_handle_details(self) -> None:
-        """Handle service references cogloop."""
+        """Handle service references cogloop.
+
+        ENGINES-7 / AP #48 — ``supports_handled_streaming`` MUST be
+        False: ``_handle_intent`` awaits the full ``generate_response``.
+        """
         info = build_service_info(WyomingConfig())
         handle = info["handle"][0]
         assert handle["name"] == "sovyx-cogloop"
-        assert handle["supports_handled_streaming"] is True
+        assert handle["supports_handled_streaming"] is False
 
     def test_satellite_details(self) -> None:
         """Satellite info includes VAD and wake word support."""
@@ -574,6 +632,149 @@ class TestHandlerSTT:
 
         audio_arg = stt.transcribe.call_args[0][0]
         assert len(audio_arg) == 160  # Only new chunk
+
+    @pytest.mark.asyncio
+    async def test_transcribe_honors_declared_48k_stereo_format(self) -> None:
+        """ENGINES-8 — a client declaring 48 kHz stereo on audio-start
+        must be downmixed to mono + resampled to the 16 kHz STT contract
+        before transcription (pre-fix: fed raw at an assumed 16 kHz →
+        garbage decode at 3x speed)."""
+        stt = AsyncMock()
+        stt.transcribe = AsyncMock(return_value=MockTranscriptionResult(text="resampled"))
+
+        # 0.1 s of 48 kHz stereo: 4800 frames x 2 channels, int16.
+        frames = 4800
+        mono = (np.sin(2 * np.pi * 440 * np.arange(frames) / 48_000) * 10_000).astype(np.int16)
+        stereo = np.repeat(mono, 2)  # interleave L/R with identical content
+        pcm = stereo.tobytes()
+
+        handler, _, writer = _make_handler(
+            events=[
+                WyomingEvent(type="transcribe", data={"language": "en"}),
+                WyomingEvent(
+                    type="audio-start",
+                    data={"rate": 48_000, "width": 2, "channels": 2},
+                ),
+                WyomingEvent(
+                    type="audio-chunk",
+                    data={"rate": 48_000, "width": 2, "channels": 2},
+                    payload=pcm,
+                ),
+                WyomingEvent(type="audio-stop"),
+            ],
+            stt_engine=stt,
+        )
+        await handler.run()
+
+        stt.transcribe.assert_called_once()
+        audio_arg = stt.transcribe.call_args[0][0]
+        rate_arg = stt.transcribe.call_args[0][1]
+        # 4800 frames @ 48 kHz → 1600 mono samples @ 16 kHz (same 0.1 s).
+        assert len(audio_arg) == 1600
+        assert audio_arg.ndim == 1  # mono
+        assert rate_arg == 16_000
+        transcript = [e for e in writer.get_events() if e.type == "transcript"]
+        assert transcript[0].data["text"] == "resampled"
+
+    @pytest.mark.asyncio
+    async def test_transcribe_undeclared_format_keeps_legacy_contract(self) -> None:
+        """A stream that declares no format keeps the configured mic
+        contract (16 kHz mono) with no conversion — legacy behaviour."""
+        stt = AsyncMock()
+        stt.transcribe = AsyncMock(return_value=MockTranscriptionResult(text="ok"))
+
+        pcm = np.zeros(320, dtype=np.int16).tobytes()
+        handler, _, _writer = _make_handler(
+            events=[
+                WyomingEvent(type="transcribe", data={}),
+                WyomingEvent(type="audio-start"),
+                WyomingEvent(type="audio-chunk", payload=pcm),
+                WyomingEvent(type="audio-stop"),
+            ],
+            stt_engine=stt,
+        )
+        await handler.run()
+
+        audio_arg = stt.transcribe.call_args[0][0]
+        assert len(audio_arg) == 320
+        assert stt.transcribe.call_args[0][1] == 16_000
+
+    @pytest.mark.asyncio
+    async def test_transcribe_unsupported_width_fails_loudly(self) -> None:
+        """ENGINES-8 — an exotic sample width (e.g. 32-bit) must fail the
+        turn with an error event instead of decoding garbage."""
+        stt = AsyncMock()
+        stt.transcribe = AsyncMock(return_value=MockTranscriptionResult(text="never"))
+
+        handler, _, writer = _make_handler(
+            events=[
+                WyomingEvent(type="transcribe", data={"language": "en"}),
+                WyomingEvent(
+                    type="audio-start",
+                    data={"rate": 16_000, "width": 4, "channels": 1},
+                ),
+                WyomingEvent(type="audio-chunk", payload=bytes(640)),
+                WyomingEvent(type="audio-stop"),
+            ],
+            stt_engine=stt,
+        )
+        await handler.run()
+
+        stt.transcribe.assert_not_called()
+        errors = [e for e in writer.get_events() if e.type == "error"]
+        assert len(errors) == 1
+        assert errors[0].data["code"] == "unsupported-audio-format"
+
+    @pytest.mark.asyncio
+    async def test_transcript_echoes_engine_language_not_request(self) -> None:
+        """ENGINES-21 — the transcript event carries the language the
+        ENGINE transcribed in (TranscriptionResult.language), not the
+        client's requested language (English Moonshine output must not
+        be labeled 'pt' because HA asked for pt)."""
+        stt = AsyncMock()
+        stt.transcribe = AsyncMock(
+            return_value=MockTranscriptionResult(text="hello", language="en"),
+        )
+
+        pcm = bytes(640)
+        handler, _, writer = _make_handler(
+            events=[
+                WyomingEvent(type="transcribe", data={"language": "pt"}),
+                WyomingEvent(type="audio-start", data={"rate": 16000}),
+                WyomingEvent(type="audio-chunk", payload=pcm),
+                WyomingEvent(type="audio-stop"),
+            ],
+            stt_engine=stt,
+        )
+        await handler.run()
+
+        transcript = [e for e in writer.get_events() if e.type == "transcript"]
+        assert len(transcript) == 1
+        assert transcript[0].data["language"] == "en"
+
+    @pytest.mark.asyncio
+    async def test_transcript_falls_back_to_requested_language(self) -> None:
+        """A result object without a language attribute keeps echoing the
+        requested language (backward-compatible fallback)."""
+        stt = AsyncMock()
+        stt.transcribe = AsyncMock(
+            return_value=MockTranscriptionResult(text="hello", language=None),
+        )
+
+        pcm = bytes(640)
+        handler, _, writer = _make_handler(
+            events=[
+                WyomingEvent(type="transcribe", data={"language": "pt"}),
+                WyomingEvent(type="audio-start", data={"rate": 16000}),
+                WyomingEvent(type="audio-chunk", payload=pcm),
+                WyomingEvent(type="audio-stop"),
+            ],
+            stt_engine=stt,
+        )
+        await handler.run()
+
+        transcript = [e for e in writer.get_events() if e.type == "transcript"]
+        assert transcript[0].data["language"] == "pt"
 
     @pytest.mark.asyncio
     async def test_transcribe_engine_error_emits_empty_transcript(self) -> None:

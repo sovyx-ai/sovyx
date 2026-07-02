@@ -929,12 +929,28 @@ class MoonshineSTT(STTEngine):
         loop = asyncio.get_running_loop()
         result_future: asyncio.Future[str] = loop.create_future()
 
+        def _resolve_first_result(text: str) -> None:
+            """Loop-side idempotent resolver — first completed line wins.
+
+            The ``done()`` check MUST live here, on the event loop: two
+            ``on_line_completed`` callbacks firing back-to-back on the
+            native C++ worker thread can BOTH pass a native-thread
+            ``done()`` pre-filter before the loop runs the first
+            scheduled callback, and the second ``set_result`` would then
+            raise ``InvalidStateError`` inside a loop callback.
+            """
+            if not result_future.done():
+                result_future.set_result(text)
+
         class _OneShotListener(TranscriptEventListener):  # type: ignore[misc]
             def on_line_completed(self, event: object) -> None:
                 """Called when a transcription line is finalized."""
+                # Native-thread done() read is only a cheap racy
+                # pre-filter; the authoritative guard runs on the loop
+                # inside _resolve_first_result.
                 if not result_future.done():
                     loop.call_soon_threadsafe(
-                        result_future.set_result,
+                        _resolve_first_result,
                         event.line.text,  # type: ignore[attr-defined]
                     )
 

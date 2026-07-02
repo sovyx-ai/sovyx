@@ -287,12 +287,18 @@ class PiperTTS(TTSEngine):
     async def initialize(self) -> None:
         """Load ONNX model and voice configuration.
 
+        The voice-config JSON read + ONNX session construction (~15-60 MB
+        model read + CPU graph allocation) are IO/CPU-bound and run inside
+        ONE :func:`asyncio.to_thread` dispatch (``_load``), so the shared
+        daemon loop stays responsive during pipeline start (Jarvis
+        pre-cache) and lazy mid-turn initialization — CLAUDE.md
+        anti-pattern #14 names Piper explicitly. Mirrors
+        ``MoonshineSTT._load_transcriber``.
+
         Raises:
             FileNotFoundError: If model or config files are missing.
             RuntimeError: If ONNX session creation fails.
         """
-        import onnxruntime as ort
-
         model_path = self._model_dir / f"{self._config.voice}.onnx"
         config_path = self._model_dir / f"{self._config.voice}.onnx.json"
 
@@ -303,31 +309,42 @@ class PiperTTS(TTSEngine):
             msg = f"Piper config not found: {config_path}"
             raise FileNotFoundError(msg)
 
-        # Load voice configuration (phoneme map, audio settings, etc.)
-        with open(config_path, encoding="utf-8") as f:
-            self._voice_config = json.load(f)
+        def _load() -> tuple[dict[str, Any], Any]:
+            """Sync loader — runs in a worker thread (anti-pattern #14)."""
+            import onnxruntime as ort  # noqa: PLC0415 — heavy import deferred to worker
 
-        # Create optimized ONNX session
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = 2
-        opts.inter_op_num_threads = 1
-        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            # Load voice configuration (phoneme map, audio settings, etc.)
+            with open(config_path, encoding="utf-8") as f:
+                voice_config: dict[str, Any] = json.load(f)
 
-        try:
-            self._session = ort.InferenceSession(
-                str(model_path),
-                sess_options=opts,
-                providers=["CPUExecutionProvider"],
-            )
-            # Mission H4 §T2.3 — register session for cohort observability.
-            from sovyx.observability._resource_registry import (  # noqa: PLC0415 — lazy import
-                register_onnx_session,
-            )
+            # Create optimized ONNX session
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = 2
+            opts.inter_op_num_threads = 1
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-            register_onnx_session(label="voice.tts.piper", session=self._session)
-        except Exception as exc:  # noqa: BLE001
-            msg = f"Failed to create Piper ONNX session: {exc}"
-            raise RuntimeError(msg) from exc
+            try:
+                session = ort.InferenceSession(
+                    str(model_path),
+                    sess_options=opts,
+                    providers=["CPUExecutionProvider"],
+                )
+                # Mission H4 §T2.3 — register session for cohort
+                # observability. The registry guards its state with an
+                # internal threading lock, so the pairing (#47) stays
+                # adjacent to construction inside the worker thread.
+                from sovyx.observability._resource_registry import (  # noqa: PLC0415 — lazy import
+                    register_onnx_session,
+                )
+
+                register_onnx_session(label="voice.tts.piper", session=session)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"Failed to create Piper ONNX session: {exc}"
+                raise RuntimeError(msg) from exc
+
+            return voice_config, session
+
+        self._voice_config, self._session = await asyncio.to_thread(_load)
 
         self._initialized = True
         logger.info(
@@ -520,7 +537,15 @@ class PiperTTS(TTSEngine):
             silence = np.zeros(silence_samples, dtype=np.int16)
 
             all_audio: list[np.ndarray] = []
-            sentence_phonemes = self._phonemize(text)
+            # espeak-ng phonemization (piper_phonemize C binding) is a
+            # synchronous CPU-bound call and MUST NOT run on the event
+            # loop (anti-pattern #14) — pre-fix only the per-sentence
+            # ONNX inference below was offloaded. One worker dispatch
+            # covers the whole text; espeak does its own sentence
+            # splitting, so phonemization cannot merge into the
+            # per-sentence inference dispatches without changing
+            # phonemizer semantics.
+            sentence_phonemes = await asyncio.to_thread(self._phonemize, text)
 
             gen_start = time.monotonic()
             for phonemes in sentence_phonemes:
@@ -684,7 +709,10 @@ class PiperTTS(TTSEngine):
             text_stream: Async iterator yielding text chunks.
 
         Yields:
-            AudioChunk per complete sentence.
+            AudioChunk per complete sentence. Empty chunks are never
+            yielded (ABC contract) — a sentence the phonemiser rejected
+            (``no_phonemes``, e.g. emoji-only) is skipped with a debug
+            log instead of leaking an ``audio.size == 0`` chunk.
         """
         if not self._initialized:
             await self.initialize()
@@ -701,14 +729,33 @@ class PiperTTS(TTSEngine):
                 stripped = sentence.strip()
                 if stripped:
                     chunk = await self.synthesize(stripped)
-                    yield chunk
+                    if chunk.audio.size:
+                        yield chunk
+                    else:
+                        # ABC contract: the stream MUST NOT yield an empty
+                        # AudioChunk. The DROP stage event already fired
+                        # inside synthesize; log the skip per #27.
+                        logger.debug(
+                            "voice.tts.streaming_empty_chunk_skipped",
+                            engine="piper",
+                            text_chars=len(stripped),
+                        )
 
             # Keep last (potentially incomplete) sentence in buffer
             buffer = sentences[-1] if sentences else ""
 
         # Final sentence
         if buffer.strip():
-            yield await self.synthesize(buffer.strip())
+            final = buffer.strip()
+            chunk = await self.synthesize(final)
+            if chunk.audio.size:
+                yield chunk
+            else:
+                logger.debug(
+                    "voice.tts.streaming_empty_chunk_skipped",
+                    engine="piper",
+                    text_chars=len(final),
+                )
 
     def list_voices(self) -> list[str]:
         """List available voice models in the model directory.

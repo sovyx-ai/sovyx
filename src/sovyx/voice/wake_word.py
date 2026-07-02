@@ -571,10 +571,15 @@ class WakeWordDetector:
         # set in ObservabilitySamplingConfig.wake_word_score_rate). The
         # cooldown_ms_remaining field is non-zero only while we're
         # actively suppressing — every other frame reports 0 so the
-        # dashboard can render cooldown windows as solid bands.
+        # dashboard can render cooldown windows as solid bands. The
+        # countdown consults ``_effective_cooldown_frames`` — the SAME
+        # field the FSM exit test in :meth:`_handle_cooldown` uses — so
+        # adaptive cooldown (T7.8) renders the full suppression window
+        # instead of clamping to zero once the static ``cooldown_frames``
+        # elapses (AP #51 twin-freshness class).
         cooldown_ms_remaining = 0
         if self._state == WakeWordState.COOLDOWN:
-            remaining_frames = max(0, self._config.cooldown_frames - self._frame_counter)
+            remaining_frames = max(0, self._effective_cooldown_frames - self._frame_counter)
             cooldown_ms_remaining = remaining_frames * self._frame_ms
         logger.info(
             "voice.wake_word.score",

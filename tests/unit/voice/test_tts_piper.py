@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -448,6 +449,33 @@ class TestInitialization:
             await piper.initialize()
 
     @pytest.mark.asyncio
+    async def test_initialize_runs_model_load_off_the_event_loop(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """ENGINES-1 / anti-pattern #14 — voice-config JSON read + ONNX
+        session construction MUST run in a worker thread, never on the
+        event loop thread."""
+        piper = _build_uninitialized_piper(tmp_path)
+        loop_thread = threading.current_thread()
+        seen: dict[str, threading.Thread] = {}
+
+        def _capture(*_args: object, **_kwargs: object) -> MagicMock:
+            seen["session"] = threading.current_thread()
+            return MagicMock()
+
+        mock_ort = MagicMock()
+        mock_ort.SessionOptions.return_value = MagicMock()
+        mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
+        mock_ort.InferenceSession = MagicMock(side_effect=_capture)
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+            await piper.initialize()
+
+        assert piper.is_initialized
+        assert seen["session"] is not loop_thread
+
+    @pytest.mark.asyncio
     async def test_close(self, tmp_path: Path) -> None:
         piper = _build_piper(tmp_path)
         assert piper.is_initialized
@@ -692,6 +720,31 @@ class TestSynthesize:
         assert chunk.duration_ms > 0
 
     @pytest.mark.asyncio
+    async def test_synthesize_runs_phonemization_off_the_event_loop(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """ENGINES-1 / anti-pattern #14 — espeak-ng phonemization is a
+        synchronous C call and must not run on the event loop thread
+        (pre-fix only the per-sentence ONNX inference was offloaded)."""
+        piper = _build_piper(tmp_path, audio_length=2205)
+        loop_thread = threading.current_thread()
+        seen: dict[str, threading.Thread] = {}
+
+        def _phonemize(_text: str, _voice: str) -> list[list[str]]:
+            seen["phonemize"] = threading.current_thread()
+            return [["h", "ɛ", "l", "oʊ"]]
+
+        fn = MagicMock(side_effect=_phonemize)
+        mod = MagicMock(phonemize_espeak=fn)
+
+        with patch.dict("sys.modules", {"piper_phonemize": mod}):
+            chunk = await piper.synthesize("Hello")
+
+        assert len(chunk.audio) > 0
+        assert seen["phonemize"] is not loop_thread
+
+    @pytest.mark.asyncio
     async def test_synthesize_empty_phonemes(
         self,
         tmp_path: Path,
@@ -859,6 +912,32 @@ class TestSynthesizeStreaming:
                 chunks.append(chunk)
 
         assert piper.is_initialized
+
+    @pytest.mark.asyncio
+    async def test_streaming_never_yields_empty_chunk_for_phonemeless_sentence(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """ENGINES-6 — a phonemiser-rejected sentence (no_phonemes, e.g.
+        punctuation/emoji-only) mixed into a stream must be SKIPPED; the
+        TTSEngine ABC contract forbids yielding an empty AudioChunk."""
+        piper = _build_piper(tmp_path, audio_length=2205)
+
+        def _phonemize(text: str, _voice: str) -> list[list[str]]:
+            if "hello" in text.lower():
+                return [["h", "ɛ", "l", "oʊ"]]
+            return [[]]  # phonemiser produced nothing usable
+
+        mod = MagicMock(phonemize_espeak=MagicMock(side_effect=_phonemize))
+
+        with patch.dict("sys.modules", {"piper_phonemize": mod}):
+            chunks: list[AudioChunk] = []
+            gen = _async_text_gen("Hello there. ", "!!! ??? ", "Hello again.")
+            async for chunk in piper.synthesize_streaming(gen):
+                chunks.append(chunk)
+
+        assert len(chunks) == 2  # the rejected sentence yielded nothing
+        assert all(c.audio.size > 0 for c in chunks)
 
 
 # ---------------------------------------------------------------------------

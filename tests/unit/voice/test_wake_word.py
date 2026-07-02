@@ -1093,6 +1093,47 @@ class TestLatencyProfileT71:
         # Active count should be 1 (only the most-recent), below the 2-threshold.
         assert detector._adaptive_cooldown_seconds() == 2.0  # noqa: SLF001
 
+    def test_cooldown_telemetry_uses_effective_cooldown_frames(self) -> None:
+        """ENGINES-5 / AP #51 — ``cooldown_ms_remaining`` must be computed
+        from the SAME field the FSM exit test consults
+        (``_effective_cooldown_frames``), not the static
+        ``config.cooldown_frames`` — otherwise the dashboard countdown
+        clamps to 0 for the elevated tail of an adaptive cooldown."""
+        from unittest.mock import patch as _patch
+
+        from sovyx.voice import wake_word as wake_word_module
+
+        config = WakeWordConfig(
+            cooldown_adaptive_enabled=True,
+            cooldown_min_seconds=2.0,
+            cooldown_max_seconds=5.0,
+            cooldown_adaptive_window_seconds=60.0,
+            cooldown_adaptive_threshold=1,
+        )
+        detector = _make_detector([0.0] * 4, config=config)
+        detector.note_false_fire()  # meets threshold → max cooldown engaged
+        detector._enter_cooldown()  # noqa: SLF001
+
+        static_frames = config.cooldown_frames
+        effective_frames = detector._effective_cooldown_frames  # noqa: SLF001
+        assert effective_frames > static_frames  # adaptive max > static 2 s
+
+        with _patch.object(wake_word_module, "logger") as mock_logger:
+            detector.process_frame(_frame())
+
+        score_calls = [
+            call
+            for call in mock_logger.info.call_args_list
+            if call.args and call.args[0] == "voice.wake_word.score"
+        ]
+        assert len(score_calls) == 1
+        frame_ms = int(config.frame_samples * 1000 / config.sample_rate)
+        reported = score_calls[0].kwargs["voice.cooldown_ms_remaining"]
+        # Telemetry now spans the FULL effective window — pre-fix it
+        # reported static_frames * frame_ms and clamped to 0 early.
+        assert reported == effective_frames * frame_ms
+        assert reported > static_frames * frame_ms
+
     def test_adaptive_cooldown_t78_validation_rejects_max_below_min(self) -> None:
         """``cooldown_max_seconds < cooldown_min_seconds`` rejected."""
         bad_config = WakeWordConfig(
