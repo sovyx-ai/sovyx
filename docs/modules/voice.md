@@ -111,15 +111,16 @@ The handshake returns an `info` payload describing the supported services (`asr`
 
 ## Hardware auto-selection
 
-`VoiceModelAutoSelector` reads CPU cores, total RAM, and checks for an NVIDIA GPU via `nvidia-smi`, then picks a tier and a model set.
+`VoiceModelAutoSelector` (`src/sovyx/voice/auto_select.py`) reads CPU cores, total RAM, and checks for an NVIDIA GPU via `nvidia-smi`, then picks a hardware tier (`PI5` / `N100` / `DESKTOP_CPU` / `DESKTOP_GPU` / `CLOUD`) and a model set from an internal model matrix.
 
-| Tier | Target hardware | STT | TTS | VAD | Wake |
-|---|---|---|---|---|---|
-| `PI5` | Raspberry Pi 5, 4–8 GB | Moonshine-tiny | Piper-low | Silero v5 | OpenWakeWord |
-| `N100` | Intel N100 mini-PC, 8–16 GB | Moonshine-base | Piper-medium | Silero v5 | OpenWakeWord |
-| `DESKTOP_CPU` | Modern x86, no GPU | Moonshine-base | Kokoro v0 | Silero v5 | OpenWakeWord |
-| `DESKTOP_GPU` | x86 + NVIDIA GPU (≥ 4 GB VRAM) | Moonshine-large | Kokoro v0 (GPU) | Silero v5 | OpenWakeWord |
-| `CLOUD` | Cloud GPU instance | Moonshine-large | Kokoro v1 | Silero v5 | OpenWakeWord |
+**What actually runs at HEAD:** the auto-selector is **not registered in the default daemon** — nothing in the boot path consumes its selection. The voice factory always builds the same engine set regardless of hardware tier:
+
+- **STT:** Moonshine (`MoonshineSTT`)
+- **TTS:** Piper or Kokoro, per `detect_tts_engine()` priority (Piper preferred) and the mind's `voice_tts_engine` preference
+- **VAD:** Silero v5
+- **Wake word:** OpenWakeWord
+
+The tier matrix surfaces only as informational "recommended models" data in the dashboard's model listing. It is a **roadmap artifact, not active selection logic** — it also names engines (Parakeet TDT, Qwen3-TTS) that no shipped code can load yet (see Roadmap below).
 
 ## Hot-enable from dashboard
 
@@ -178,7 +179,7 @@ The Voice page in the dashboard shows a "Set up Voice" button that opens a modal
 3. "Enable Voice" button (always visible after detection)
 4. Error panels for missing deps (with copy-able install command) or missing audio hardware
 
-Each tier has a fallback chain: if the primary TTS or STT fails to load, the selector walks down to the next lighter model.
+At pipeline creation the factory falls back on its own: if the preferred TTS engine isn't importable it downgrades (Piper → Kokoro or vice versa) with a warning rather than failing the boot.
 
 ## Events
 
@@ -196,29 +197,38 @@ All events are frozen dataclasses emitted on the `EventBus`.
 
 ## Configuration
 
+Voice is configured across three real surfaces. There is **no** nested
+`voice: pipeline:/wyoming:/stt:/tts:` YAML section — keys written under
+such a shape are silently ignored (the system `voice:` section accepts
+extra keys without error, and mind.yaml never reads nested voice keys).
+
+**1. Per-mind settings — flat `voice_*` keys in `mind.yaml`** (read by
+bootstrap at daemon start):
+
+```yaml
+name: Ada
+voice_enabled: true                    # auto-create the voice pipeline at boot
+voice_id: en_US-amy-medium             # TTS voice
+voice_language: en                     # empty → falls back to the mind's `language`
+voice_input_device_name: "Yeti Stereo Microphone"  # stable mic identity
+voice_tts_engine: auto                 # auto | piper | kokoro
+```
+
+**2. System feature gates — `voice:` section in `system.yaml`**
+(`VoiceFeaturesConfig`, env prefix `SOVYX_VOICE__`). Its only field:
+
 ```yaml
 voice:
-  pipeline:
-    mind_id: default
-    wake_word_enabled: true
-    barge_in_enabled: true
-    fillers_enabled: true
-    filler_delay_ms: 800
-    silence_frames_end: 22
-    max_recording_frames: 312
-    confirmation_tone: beep   # or "none"
-  wyoming:
-    enabled: true
-    host: 0.0.0.0
-    port: 10700
-    zeroconf: true
-  stt:
-    backend: moonshine
-    language: en
-  tts:
-    backend: piper            # or "kokoro"
-    voice: en_US-amy-medium
+  calibration_wizard_enabled: true   # default true since v0.31.0 GA
 ```
+
+**3. Tuning knobs** — low-level timeouts/thresholds/feature flags via
+`SOVYX_TUNING__VOICE__*` env vars (or the `tuning.voice` YAML section);
+see [`configuration.md`](../configuration.md).
+
+Pipeline internals (silence frames, filler delay, confirmation tone) and
+the Wyoming server (host/port/zeroconf) are **code-level constructor
+arguments** (`VoicePipelineConfig`, `WyomingConfig`), not YAML settings.
 
 ## STT language support
 
@@ -253,10 +263,13 @@ Paths to speech recognition in other languages:
 
 * **Cloud Whisper STT (BYOK)** — `CloudSTT` (`voice/stt_cloud.py`)
   transcribes via the OpenAI Whisper API, which covers far more
-  languages. It is a stand-alone engine: import it from
-  `sovyx.voice.stt_cloud`, provide your own API key, and pass it to
-  the factory's STT slot explicitly — it is NOT auto-engaged when
-  Moonshine returns low confidence.
+  languages. Two ways to engage it: (a) **opt-in automatic failover**
+  — set `SOVYX_TUNING__VOICE__STT_FAILOVER_ENABLED=true` with an
+  `OPENAI_API_KEY` configured and the daemon wraps the local Moonshine
+  primary with a CloudSTT secondary via `FailoverSTTEngine`, engaging
+  on sustained local-STT failure (raise / timeout — NOT on low
+  confidence); or (b) import it from `sovyx.voice.stt_cloud`, provide
+  your own API key, and pass it to the factory's STT slot explicitly.
 * **Wyoming external STT** — point a Wyoming-protocol STT service of
   your choice at the pipeline (see the Wyoming protocol section
   above).
@@ -359,7 +372,7 @@ On modern Linux distributions (Mint 22, Ubuntu 24.04+, Fedora 40+)
 PipeWire runs as the default session manager and grabs every hardware
 ALSA device (`hw:X,Y`) in shared mode at boot. When the user pins a
 bare `hw:X,Y` PCM as the Sovyx capture device — either explicitly via
-`mind.yaml::voice.input_device_name` or via the onboarding picker —
+`mind.yaml::voice_input_device_name` or via the onboarding picker —
 PortAudio's exclusive-mode open paths return `-9985 Device
 unavailable` because PipeWire already holds the kernel ALSA handle.
 
@@ -425,7 +438,7 @@ opposite direction).
 
 ### `mind.yaml` invariant
 
-The user's `input_device_name` preference is **never overwritten** by
+The user's `voice_input_device_name` preference is **never overwritten** by
 fallback. A subsequent boot where the preferred device is free will
 naturally pick it as rank-0 candidate and win the cascade. This
 decouples "what the user configured" from "what's actually capturing

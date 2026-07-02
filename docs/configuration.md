@@ -363,7 +363,6 @@ tuning:
 
   voice:
     auto_select_min_gpu_vram_mb: 4000     # GPU VRAM for auto-selecting Kokoro
-    kokoro_model_url: "…"
     device_test_frame_rate_hz: 30
     device_test_peak_hold_ms: 1500
     # voice-linux-cascade-root-fix (T5, T10) — session-manager

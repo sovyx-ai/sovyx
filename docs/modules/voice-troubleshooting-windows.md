@@ -14,22 +14,25 @@ explain how to disable / bypass / work around it.
 | `voice` enables fine, mic hardware light is on, but Sovyx never wakes on the wake word | Microsoft Voice Clarity APO destroying signal upstream of PortAudio | Run `sovyx doctor voice_capture_apo` (wired in v0.32.6); inspect `Detected APOs` row |
 | Pipeline reports "deaf signal" then silently quarantines the endpoint | Cascade ↔ runtime drift (Furo W-4) — runtime opens MME while cascade picked DirectSound | Set `SOVYX_TUNING__VOICE__CASCADE_HOST_API_ALIGNMENT_ENABLED=true` (v0.25.0+) |
 | Same combo (DirectSound, 16 kHz, mono) keeps winning the cascade and producing silence | Cold probe accepting silent combo (Furo W-1) | Set `SOVYX_TUNING__VOICE__PROBE_COLD_STRICT_VALIDATION_ENABLED=true` |
-| Microphone works in Discord/Zoom but not in Sovyx | Voice Clarity is in EFX (post-mix), not MFX (pre-mix) — Tier 1 RAW won't fix it | Set both `SOVYX_TUNING__VOICE__BYPASS_TIER1_RAW_ENABLED=true` AND `SOVYX_TUNING__VOICE__BYPASS_TIER2_HOST_API_ROTATE_ENABLED=true` (v0.26.0+ default-on) |
+| Microphone works in Discord/Zoom but not in Sovyx | Voice Clarity is in EFX (post-mix), not MFX (pre-mix) — only exclusive mode bypasses EFX | Keep `voice_clarity_autofix=true` (default) so the WASAPI-exclusive bypass engages — the only Windows strategy wired into the production ladder at HEAD (Tier 1 / Tier 2 flags exist but are not wired; see below) |
 | `sovyx voice` reports the wrong default device after USB hot-plug | Pre-IMMNotificationClient polling loop (5 s window) | Set `SOVYX_TUNING__VOICE__MM_NOTIFICATION_LISTENER_ENABLED=true` (v0.25.0+) |
 | `voice_capture_permanently_degraded` event after multiple failed cascades | Endpoint quarantined by `_quarantine_endpoint` with no viable bypass | Hot-plug the device (remove + readd) OR wait `kernel_invalidated_recheck_interval_s` (default 5 min) for automatic recheck |
 
 ## Tuning knobs by feature flag
 
 The Voice Windows Paranoid Mission ships 5 feature flags on
-`VoiceTuningConfig`. All default `False` in v0.24.0 (foundation
-phase); promotion targets per the master rollout matrix in
-`docs-internal/missions/MISSION-voice-windows-paranoid-2026-04-26.md`.
+`VoiceTuningConfig`. Current defaults at HEAD: only
+`probe_cold_strict_validation_enabled` has flipped to `True` (at
+v0.32.3); the other four remain **opt-in (`False`)** — the
+default-flips once planned for v0.25.0/v0.26.0 never landed and have
+no current target version.
 
 ### `probe_cold_strict_validation_enabled`
 
 **Env var:** `SOVYX_TUNING__VOICE__PROBE_COLD_STRICT_VALIDATION_ENABLED`
 
-**Default:** `False` v0.24.0 → `True` v0.25.0 → `True` v0.26.0
+**Default:** `True` (flipped `False → True` at v0.32.3; the original
+v0.25.0 flip plan was deferred)
 
 **What it does:** when `True`, the cold-probe diagnosis at
 `voice/health/probe/_cold.py::_diagnose_cold` rejects silent combos
@@ -38,14 +41,14 @@ phase); promotion targets per the master rollout matrix in
 cascade then advances to the next combo and the silent winner never
 persists in `capture_combos.json`.
 
-**When to set it true** (v0.24.0):
+**When to re-enable it** (if you had set it false):
 
 * You see `voice.probe.cold_silence_rejected{mode=lenient_passthrough}`
   WARN events in the daemon log on every boot.
 * The pipeline reports a "winning" combo whose `rms_db_at_validation`
   in `capture_combos.json` is below −70 dBFS.
 
-**When to leave it false:**
+**When to set it false:**
 
 * You're testing Sovyx on a known-deaf mic and need the legacy
   v0.23.x acceptance behaviour for A/B comparison.
@@ -54,20 +57,28 @@ persists in `capture_combos.json`.
 
 **Env var:** `SOVYX_TUNING__VOICE__BYPASS_TIER1_RAW_ENABLED`
 
-**Default:** `False` v0.24.0 → `False` (opt-in) v0.25.0 → `True` v0.26.0
+**Default:** `False` (opt-in at HEAD — the v0.26.0 default-flip never
+landed; no current target version)
 
-**What it does:** when `True`, the deaf-signal coordinator includes
-the Tier 1 RAW + Communications bypass strategy
+> **Status at HEAD:** the Tier 1 strategy class is implemented but
+> **not registered in the production bypass ladder** — the factory
+> ships only the WASAPI-exclusive strategy on Windows, so flipping
+> this flag currently has no production effect. The strategy is
+> deprecated in favour of Tier-3 WASAPI-exclusive coverage (see the
+> `_win_raw_communications.py` module docstring).
+
+**What it would do:** when `True` (once wired), the deaf-signal
+coordinator includes the Tier 1 RAW + Communications bypass strategy
 (`IAudioClient3::SetClientProperties`) in its iteration order. Tier
 1 is the cheapest bypass — no exclusive lock (other apps unaffected),
 no admin, no registry mutation, sub-millisecond COM call — and covers
 the common case where Voice Clarity sits in MFX.
 
-**When to set it true** (v0.25.0 pilots):
+**When to set it true:**
 
 * Your hardware reports `RawProcessingSupported=true` for the capture
   endpoint (check via `sovyx doctor voice_capture_apo`, wired in v0.32.6).
-* You want to evaluate Tier 1 alone before v0.26.0 default-flip.
+* You want to evaluate Tier 1 alone before enabling Tier 2.
 
 **When to leave it false:**
 
@@ -80,9 +91,18 @@ the common case where Voice Clarity sits in MFX.
 
 **Env var:** `SOVYX_TUNING__VOICE__BYPASS_TIER2_HOST_API_ROTATE_ENABLED`
 
-**Default:** `False` v0.24.0 → `False` (opt-in) v0.25.0 → `True` v0.26.0
+**Default:** `False` (opt-in at HEAD — the v0.26.0 default-flip never
+landed; no current target version)
 
-**What it does:** when `True`, the coordinator includes the Tier 2
+> **Status at HEAD:** the Tier 2 strategy class is implemented but
+> **not registered in the production bypass ladder** — nothing
+> constructs it in production; promotion is tracked as deferred work
+> (see the `_win_host_api_rotate_then_exclusive.py` module
+> docstring). The underlying capture-layer host-API-rotate primitive
+> does exist and is exercised by the capture restart ladder.
+
+**What it would do:** when `True` (once wired), the coordinator
+includes the Tier 2
 host-API rotate-then-exclusive bypass for endpoints whose runtime
 `host_api` is MME / DirectSound / WDM-KS. The strategy rotates the
 capture stream to WASAPI and then engages exclusive mode, which
@@ -93,7 +113,7 @@ bypasses every APO layer (MFX/SFX/EFX) on the capture pipeline.
 other fails at boot with a remediation hint. See
 `engine/config.py::_enforce_paranoid_mission_dependencies`.
 
-**When to set it true** (v0.25.0 pilots):
+**When to set it true:**
 
 * Tier 1 RAW alone didn't fix Voice Clarity (likely VC sits in EFX,
   not MFX) — only exclusive bypasses EFX.
@@ -109,14 +129,15 @@ other fails at boot with a remediation hint. See
 
 **Env var:** `SOVYX_TUNING__VOICE__MM_NOTIFICATION_LISTENER_ENABLED`
 
-**Default:** `False` v0.24.0 → `False` (opt-in) v0.25.0 → `True` v0.26.0
+**Default:** `False` (opt-in at HEAD — the v0.26.0 default-flip never
+landed; no current target version)
 
 **What it does:** when `True`, Sovyx registers an
 `IMMNotificationClient` with Windows so it can react to default-
 device changes (USB hot-plug, sound-settings panel flip) within
 ~100 ms instead of the legacy 5-second polling loop.
 
-**When to set it true** (v0.25.0 pilots):
+**When to set it true:**
 
 * You frequently hot-plug headsets / dock the mic and want sub-
   second pipeline recovery.
@@ -132,7 +153,8 @@ device changes (USB hot-plug, sound-settings panel flip) within
 
 **Env var:** `SOVYX_TUNING__VOICE__CASCADE_HOST_API_ALIGNMENT_ENABLED`
 
-**Default:** `False` v0.24.0 → `True` v0.25.0 → `True` v0.26.0
+**Default:** `False` (opt-in at HEAD — the v0.25.0 default-flip never
+landed; no current target version)
 
 **What it does:** when `True`, the opener's `_device_chain` honours
 the cascade-winner's `host_api` and the operator-ranked
@@ -141,7 +163,7 @@ error reopens. Closes Furo W-4 (cascade ↔ runtime drift). Pre-
 requisite for `bypass_tier2_host_api_rotate_enabled` (cross-validator
 enforces).
 
-**When to set it true** (v0.24.0 pilots):
+**When to set it true:**
 
 * You see deaf-signal events on a multi-host_api endpoint where the
   cascade picked DirectSound / WDM-KS but the runtime drifted to MME.
@@ -210,7 +232,8 @@ compatibility); v0.25.0 wire-up populates the real payload.
 |-------|---------------|---------------|
 | `voice.probe.cold_silence_rejected{mode=lenient_passthrough}` | Cold probe saw silence but ran in lenient mode (legacy v0.23.x acceptance) | `probe_cold_strict_validation_enabled=true` |
 | `voice.probe.cold_silence_rejected{mode=strict_reject}` | Cold probe rejected silent combo — cascade advanced | (none — this is the post-fix success event) |
-| `voice.deaf_heartbeat.streak_exceeded` | Pipeline detected deaf signal threshold | Bypass strategies fire next |
+| `voice_pipeline_deaf_warning` | Per-heartbeat deaf-signal warning (capture alive but no speech energy) | Watch for `voice.deaf.detected` if the streak continues |
+| `voice.deaf.detected` | Consecutive deaf warnings reached the auto-bypass threshold | Bypass strategies fire next |
 | `voice.bypass.tier1_raw_outcome{verdict=raw_engaged}` | Tier 1 succeeded | (none — success) |
 | `voice.bypass.tier1_raw_outcome{verdict=raw_property_rejected_by_driver}` | Driver lied about `RawProcessingSupported` | Try Tier 2 |
 | `voice.bypass.tier2_host_api_rotate_outcome{verdict=rotated_then_exclusive_engaged}` | Tier 2 succeeded | (none — success) |
@@ -245,13 +268,13 @@ SOVYX_TUNING__VOICE__BYPASS_TIER2_HOST_API_ROTATE_ENABLED=false
 
 If after running `sovyx doctor voice_capture_apo` and flipping the
 flags above the pipeline still doesn't recover, file an issue at
-<https://github.com/anthropics/sovyx/issues> with:
+<https://github.com/sovyx-ai/sovyx/issues> with:
 
 1. The full `sovyx doctor voice_capture_apo` Rich table output.
 2. The last 100 lines of `~/.sovyx/logs/sovyx.log` showing the
-   `voice.deaf_heartbeat.streak_exceeded` event and everything
-   downstream.
-3. The contents of `~/.sovyx/capture_combos.json`.
+   `voice_pipeline_deaf_warning` events, the `voice.deaf.detected`
+   event, and everything downstream.
+3. The contents of `~/.sovyx/voice/capture_combos.json`.
 4. Output of `Get-WinEvent -LogName "Microsoft-Windows-Audio*"` for
    the relevant time window.
 5. The exact mic hardware (USB ID / vendor / model).

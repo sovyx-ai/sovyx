@@ -48,7 +48,7 @@ While raw audio is not persisted, Sovyx does record **privacy-relevant
 events** in the
 [`ConsentLedger`](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/_consent_ledger.py)
 — an append-only JSONL file at `<data_dir>/voice/consent.jsonl`. Each
-record is one of six action types:
+record is one of seven action types:
 
 | Action | When emitted | Why recorded |
 |---|---|---|
@@ -58,6 +58,7 @@ record is one of six action types:
 | `STORE` | Transcript was persisted to long-term memory | Records the brain-write boundary |
 | `SHARE` | Transcript was sent to an external service (cloud LLM, web tool) | Records the external-egress boundary; `context` names the destination |
 | `DELETE` | Right-to-erasure invoked via CLI / dashboard | Tombstone left after a `forget` so the audit trail survives the deletion |
+| `RETENTION_PURGE` | Scheduled retention policy pruned aged records | Distinguishes policy-driven pruning from operator-invoked erasure (see the retention section below) |
 
 The ledger record format (one JSON object per line):
 
@@ -94,8 +95,8 @@ Pipe to `jq` or save to file:
 sovyx voice history --user-id=u-12345 > history.jsonl
 ```
 
-Dashboard equivalent: `GET /api/voice/forget` is the **erasure**
-endpoint; the read-side history surface is exposed via the
+Dashboard equivalent: the dashboard exposes only the **erasure**
+endpoint (`POST /api/voice/forget`, below); the read-side history surface is exposed via the
 operator-side CLI only (avoids the dashboard becoming a one-click
 data-export channel without explicit auth narrative).
 

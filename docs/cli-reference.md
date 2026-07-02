@@ -269,10 +269,14 @@ sovyx doctor --json           # machine-readable output
 | `sovyx doctor resources [--json] [--cohort <name>] [--explain <field>] [--watch] [--tracemalloc-snapshot]` | Render the engine resource-cohort snapshot (Mission H4) — live daemon RPC when reachable, in-process registry otherwise. |
 | `sovyx doctor gates [--json]` | Print the Quality Gates registry — STRICT/LENIENT state + sunset target per gate. |
 
-### Composite surfaces rendered by `sovyx doctor` (no args)
+### Composite surfaces rendered by `sovyx doctor voice`
 
-When invoked without a subcommand, the aggregate doctor flow renders
-the following sections in order (Mission C4 §T3.6 + Mission C5 §T3.4):
+`sovyx doctor voice` (in its default preflight mode, i.e. without
+`--fix` / `--calibrate` / `--full-diag`) renders, after the voice
+preflight report, the following sections in order (Mission C4 §T3.6 +
+Mission C5 §T3.4). `sovyx doctor` without a subcommand runs the
+general installation health check (offline checks + daemon RPC), not
+these surfaces:
 
 1. **Voice — quarantine surface** — endpoints quarantined by the
    capture-integrity coordinator (Mission C1).
@@ -415,19 +419,40 @@ For the exhaustive variable catalog, see
 
 ## Exit code contract
 
-All `sovyx` commands follow a single contract:
+The general contract for `sovyx` commands:
 
 | Code | Meaning |
 |---|---|
 | `0` | Success — the command's invariants hold. |
 | `1` | Subsystem reported a failure (e.g. `sovyx dashboard doctor` on a partial install). |
 | `2` | Argument or configuration error (typer's default). |
-| `6` | (Voice subsystem only) `EXIT_DOCTOR_VOICE_NOT_CONFIGURED` — operator must run `sovyx voice setup`. |
 
-Aggregate doctor flows return the number of failing subsystem checks
-when invoked without `--fix` (preserving the v0.21.2 contract — see
-`docs-internal/missions/MISSION-voice-final-skype-grade-2026.md` §Phase 1 for the historical rationale; the file is an internal doc, not shipped — it lives in the
-internal mission archive in the operator's checkout).
+Two command families overload the codes with richer semantics:
+
+**`sovyx doctor voice`** — without `--fix`, the exit code equals the
+number of failing preflight steps (preserving the v0.21.2 contract —
+see `docs-internal/missions/MISSION-voice-final-skype-grade-2026.md`
+§Phase 1 for the historical rationale; internal doc, not shipped).
+With `--fix` (and for `--calibrate` / `--full-diag` where noted) the
+command steers into semantic codes:
+
+| Code | Constant | Meaning |
+|---|---|---|
+| `0` | `EXIT_DOCTOR_OK` | No saturation, `--fix` succeeded, or `--dry-run` printed the plan. |
+| `1` | `EXIT_DOCTOR_GENERIC_FAILURE` | Non-fix failure paths (e.g. `--full-diag` script failure). |
+| `2` | `EXIT_DOCTOR_SATURATED_NOT_FIXED` | Saturation detected but `--fix` was not requested. |
+| `3` | `EXIT_DOCTOR_APPLY_FAILED` | `--fix` attempted but the mixer reset failed, or the re-probe is still saturated. |
+| `4` | `EXIT_DOCTOR_USER_ABORTED` | Non-TTY shell without `--yes`, or the interactive prompt was rejected. |
+| `5` | `EXIT_DOCTOR_UNSUPPORTED` | Platform mismatch: `--fix` on non-Linux, `amixer` missing, or `--full-diag` on macOS. |
+| `6` | `EXIT_DOCTOR_VOICE_NOT_CONFIGURED` | `--calibrate` invoked non-interactively against a mind with no configured mic — run `sovyx voice setup` or pass `--input-device`. |
+
+**`sovyx doctor linux_session_manager_grab`** — verdict-coded:
+
+| Code | Meaning |
+|---|---|
+| `0` | Detector confirmed no grab (`has_grab=false`). |
+| `1` | Detector confirmed a grab — the printed process list names the culprit. |
+| `2` | Detector inconclusive (`has_grab=null`), or not applicable on Windows / macOS. |
 
 ---
 

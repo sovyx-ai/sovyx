@@ -149,7 +149,7 @@ Schema versioning is explicit: a profile written under `schema_version=1` only l
 
 | Mode | Status | Missing signature | Invalid signature |
 |---|---|---|---|
-| LENIENT | **default** (verified at HEAD: `_signing.py:240`) | warn + accept | warn + accept |
+| LENIENT | **default** (verified at HEAD: load-site default in `voice/calibration/_persistence.py`) | warn + accept | warn + accept |
 | STRICT | opt-in (`mode=Mode.STRICT` argument) | raise `CalibrationProfileLoadError` | raise |
 
 **Why signing-mode STRICT is not yet the default:** flipping

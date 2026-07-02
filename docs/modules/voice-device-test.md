@@ -51,14 +51,14 @@ All WebSocket payloads carry a version + discriminator envelope:
 
 `rms_db` / `peak_db` / `hold_db` are clamped to `[-120, 0] dBFS`.
 `hold_db` uses a peak-hold ballistic: it latches the last peak for a
-configurable window (default 1 000 ms) then decays at 10 dB/s.
+configurable window (default 1 500 ms) then decays at 20 dB/s.
 
 ### Error taxonomy
 
 | `code` | Meaning |
 |---|---|
 | `disabled` | The device-test subsystem is disabled in config. |
-| `rate_limited` | Per-token rate limit exceeded (default: 1 test/sec, burst 3). |
+| `rate_limited` | Per-token reconnect limit exceeded (sliding window, default 10 reconnects per 60 s). |
 | `unauthorized` | Invalid / missing token. |
 | `pipeline_active` | The live voice pipeline is running — cannot run a test concurrently. |
 | `tts_unavailable` | No TTS engine configured or the model is missing. |
@@ -69,9 +69,13 @@ configurable window (default 1 000 ms) then decays at 10 dB/s.
 | `internal_error` | Anything else — surface `detail` to the user. |
 
 All terminal failures on the WebSocket map to **application close codes**
-in the `4xxx` range (e.g. `4003 disabled`, `4029 rate_limited`,
-`4012 pipeline_active`). Transient drops use the standard `1006`, which
-the client retries with exponential backoff up to a 3-attempt budget.
+(constants in `src/sovyx/voice/device_test/_protocol.py`): `4001
+unauthorized`, `4002 rate_limited`, `4009 pipeline_active`, `4010
+disabled`, `4012 replaced` (a newer connection from the same token took
+over), `4020 device_error`, plus the standard `1013` when the wizard
+recorder holds an exclusive claim on the device (retry with backoff).
+Transient drops use the standard `1006`, which the client retries with
+exponential backoff up to a 3-attempt budget.
 
 ## Backend layout
 
@@ -81,10 +85,10 @@ src/sovyx/voice/device_test/
 ├── _models.py            # Pydantic v2 frames + envelope (v=1, t=…)
 ├── _session.py           # TestSession: orchestrates source → meter → sink
 ├── _meter.py             # PeakHoldMeter (ballistics + clipping detector)
-├── _limiter.py           # Per-token token-bucket rate limiter
+├── _protocol.py          # Protocol version + WS close-code constants + frame types
+├── _limiter.py           # TokenReconnectLimiter — sliding-window per-token reconnect limiter
 ├── _source.py            # AudioSource Protocol + Sounddevice + Fake impls
-├── _sink.py              # AudioSink Protocol + Sounddevice + Fake impls
-└── _metrics.py           # OTel counters + histograms
+└── _sink.py              # AudioSink Protocol + Sounddevice + Fake impls
 ```
 
 Tests mirror this layout under `tests/unit/voice/device_test/`. Cross-
@@ -145,15 +149,20 @@ All thresholds live on `EngineConfig.tuning.voice` (flat fields prefixed
 
 ## Observability
 
-OpenTelemetry instruments the subsystem via `_metrics.py`:
+OpenTelemetry instruments the subsystem via the central metrics registry
+(`src/sovyx/observability/metrics.py`; see
+[voice-otel-semconv.md](voice-otel-semconv.md) for the full semconv):
 
-- `sovyx.voice.test.sessions_total{result=…}` — counter for started
-  sessions by outcome (`ok`, `error`, `rate_limited`, …).
-- `sovyx.voice.test.output_jobs_total{result=…}` — counter for playback
-  jobs.
-- `sovyx.voice.test.output_duration_s` — histogram of playback wall-clock.
-- `sovyx.voice.test.meter_frames_total` — counter of meter frames emitted
-  (lets Grafana show a live FPS and spot stalls).
+- `sovyx.voice.test.sessions{result=…}` — counter of voice-test meter
+  sessions by outcome.
+- `sovyx.voice.test.clipping.events` — counter of meter frames flagged
+  as clipping.
+- `sovyx.voice.test.stream.open.latency` — histogram, WS accept to
+  first `level` frame emitted.
+- `sovyx.voice.test.output.synthesis.latency` — histogram, TTS
+  synthesis latency for the playback job.
+- `sovyx.voice.test.output.playback.latency` — histogram, sink playback
+  latency for the job.
 
 Logs use the structured logger (`logger = get_logger(__name__)`) and
 include `session_id`, `device_id`, `code`, and `retryable` fields on

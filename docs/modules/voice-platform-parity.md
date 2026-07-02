@@ -29,7 +29,7 @@ those that don't reach below that layer.
 | **Phonetic similarity matching (T8.12)** | ⚠️ | ✅ | ✅ | espeak-ng optional dep; Win install via [GitHub releases](https://github.com/espeak-ng/espeak-ng/releases) |
 | **Multi-language wake variants (T7.11-T7.16)** | ✅ | ✅ | ✅ | `compose_wake_variants_for_locale` — pure Python |
 | **Diacritic + accent variants (T8.16)** | ✅ | ✅ | ✅ | `_wake_word_variants.expand_wake_word_variants` |
-| **VAD** — Silero v5 | ✅ | ✅ | ✅ | `voice/vad_silero.py` (ONNX Runtime) |
+| **VAD** — Silero v5 | ✅ | ✅ | ✅ | `voice/vad.py` (ONNX Runtime) |
 | **STT (local)** — Moonshine v2 | ✅ | ✅ | ✅ | `voice/stt.py` (`MoonshineSTT`) via `moonshine-voice` |
 | **STT (cloud)** — OpenAI Whisper API | ✅ | ✅ | ✅ | `voice/stt_cloud.py` (BYOK) |
 | **TTS — Piper** | ✅ | ✅ | ✅ | `voice/tts_piper.py` |
@@ -37,14 +37,14 @@ those that don't reach below that layer.
 | **Wyoming server** | ✅ | ✅ | ✅ | `voice/wyoming.py` (TCP) |
 | **VoicePipeline state machine** | ✅ | ✅ | ✅ | `voice/pipeline/_orchestrator.py` |
 | **Barge-in detection** | ✅ | ✅ | ✅ | `voice/pipeline/_barge_in.py` |
-| **AEC (Acoustic Echo Cancellation)** | ✅ | ✅ | ✅ | `voice/_aec_pyaec.py` (`pyaec` extras) |
+| **AEC (Acoustic Echo Cancellation)** | ✅ | ✅ | ✅ | `voice/_aec.py` (`pyaec` extras) |
 | **Audio capture** — PortAudio | ✅ | ✅ | ✅ | `sounddevice` library |
 | **Audio output** — PortAudio | ✅ | ✅ | ✅ | `sounddevice` library |
 | **LUFS normalisation** | ✅ | ✅ | ✅ | `voice/audio.py` |
 | **Auto-selector** (hardware probe → model combo) | ✅ | ✅ | ✅ | `voice/auto_select.py` |
 | **Capture diagnostics** (`/api/voice/capture-diagnostics`) | ✅ | ✅ | ✅ | `voice/_apo_detector.py` (Win-active; no-op on others) |
 | **Combo store** (cascade winner persistence) | ✅ | ✅ | ✅ | `voice/health/combo_store/` |
-| **Bypass tier system** | ✅ | ✅ | ✅ | `voice/health/bypass/` (per-platform bypass impls) |
+| **Bypass tier system** | ✅ | ✅ | ❌ | `voice/health/bypass/` — Windows + Linux strategies only; macOS has **no automatic cures**: detection + manual remediation only (HW-blocked mission W4.1). See [voice-troubleshooting-macos.md](voice-troubleshooting-macos.md). |
 | **Consent ledger** (GDPR Art. 15/17/30) | ✅ | ✅ | ✅ | `voice/_consent_ledger.py` |
 | **Per-mind retention (T8.21 step 6)** | ✅ | ✅ | ✅ | `mind/retention.py` |
 
@@ -68,12 +68,12 @@ hardening because of:
 | Feature | Module | Notes |
 |---|---|---|
 | **WASAPI exclusive mode** | `voice/health/bypass/_win_wasapi_exclusive.py` | Bypasses Voice Clarity APO + every other capture-side processor. Tier-3 fallback. |
-| **Host-API rotate-then-exclusive** | `voice/health/bypass/_win_host_api_rotate_then_exclusive.py` | T27 (deferred ADR) — rotates DirectSound→MME→WDM-KS before falling to exclusive. |
-| **RAW Communications mode** | `voice/health/bypass/_win_raw_communications.py` | Forces communication-mode endpoint for headsets that expose separate "communication" device. |
+| **Host-API rotate-then-exclusive** | `voice/health/bypass/_win_host_api_rotate_then_exclusive.py` | T27 (deferred ADR) — implemented but **unwired** at HEAD: not registered in the production bypass ladder. |
+| **RAW Communications mode** | `voice/health/bypass/_win_raw_communications.py` | Implemented but **unwired** at HEAD; deprecated in favour of WASAPI-exclusive coverage. |
 | **MM notification listener** | `voice/_mm_notification_client.py` | COM `IMMNotificationClient` for sub-second default-device change detection. |
 | **Audio service watchdog** | `voice/health/_audio_service_win.py` | Polls Audiosrv state via `sc.exe` query; restarts capture on service detach. |
 | **Driver update listener** | `voice/health/_driver_update_listener_win.py` | WMI subscription to driver-update events. |
-| **Voice Clarity APO detection** | `voice/_apo_detector.py` | Reads HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\AudioFx for VocaEffectPack registration. |
+| **Voice Clarity APO detection** | `voice/_apo_detector.py` | Walks HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\Capture per-endpoint FX properties for APO registration. |
 
 All Windows-specific modules have a `if sys.platform != "win32":
 return ...` guard at the entry point so importing them on Linux /
@@ -124,7 +124,7 @@ single mature API). Hardening targets:
 | **Bluetooth A2DP profile detect** | `voice/_bluetooth_profile_mac.py` | Spawns `system_profiler` to flag A2DP-only inputs (~2-5 s cold-start). |
 | **macOS sandbox detection** | `voice/health/_macos_sandbox_detect.py` | Identifies App Store sandbox (different audio access model). |
 | **macOS sysdiagnose collection** | `voice/health/_macos_sysdiagnose.py` | On-demand: invokes `sysdiagnose` for support bundles. |
-| **macOS hotplug listener** | `voice/health/_hotplug_mac.py` | Core Audio `kAudioHardwarePropertyDevices` listener. |
+| **macOS hotplug detection** | `voice/health/_hotplug_mac.py` | `system_profiler` polling subprocess (default every 30 s, `voice_macos_hotplug_subprocess_interval_s`). The native `AudioObjectAddPropertyListener` path never shipped (Sprint 4 / Task #28). |
 | **macOS driver watchdog** | `voice/health/_driver_watchdog_macos.py` | Watches Core Audio driver state changes. |
 | **macOS audio fingerprint** | `voice/health/_fingerprint_macos.py` | Stable endpoint fingerprint across reboots. |
 
@@ -160,14 +160,15 @@ worth knowing:
 |---|---|---|
 | Windows | COM `IMMNotificationClient` | < 100 ms |
 | Linux | `udev` events via `pyudev` (when available) | < 200 ms |
-| macOS | Core Audio property listener | < 100 ms |
+| macOS | `system_profiler` polling subprocess (native Core Audio listener never shipped) | 30 s default poll interval |
 
 ### Default device change
 
 All platforms detect default-device changes. Windows uses the
-`IMMNotificationClient` listener (T6.49 / T6.50); Linux and macOS
-use platform-native APIs. The orchestrator's restart epoch
-increments uniformly across platforms.
+`IMMNotificationClient` listener (T6.49 / T6.50); Linux uses
+platform-native APIs; macOS relies on the `system_profiler` polling
+loop described above. The orchestrator's restart epoch increments
+uniformly across platforms.
 
 ### Capture epoch counter (Phase 6)
 

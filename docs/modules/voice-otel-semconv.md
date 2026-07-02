@@ -36,7 +36,7 @@ under `src/sovyx/observability/log_schema/`), tracing span names
 > `docs-internal/missions/MISSION-h2-platform-neutral-event-naming-2026-05-18.md`
 > for the canonical surface.
 
-The 53 instruments under `sovyx.voice.*` decompose into seven
+The instruments under `sovyx.voice.*` decompose into the following
 functional sub-namespaces:
 
 | Sub-namespace | Purpose | Cluster |
@@ -126,7 +126,7 @@ metrics so dashboards can split per-OS contribution.
 ### `diagnosis` (string)
 
 Voice probe diagnosis from `sovyx.voice.health.contract.Diagnosis`
-StrEnum. 23 values as of v0.27.0:
+StrEnum. Current values:
 
 `healthy`, `muted`, `no_signal`, `low_signal`, `format_mismatch`,
 `apo_degraded`, `vad_insensitive`, `driver_error`, `device_busy`,
@@ -224,7 +224,7 @@ Probe mode discriminator: `cold`, `warm`. From
 | `sovyx.voice.health.apo_degraded.events` | Counter | 1 | APO_DEGRADED emissions |
 | `sovyx.voice.health.vad_frontend_reset.outcomes` | Counter | 1 | Mission C1 T1.4 — per-step outcome of the VAD-frontend reset ladder (`silero_reset` / `normalizer_engage` / future `silero_reinstantiate` / `agc2_floor_lift` / `fallback_vad`). Labels: `step`, `success=true\|false`, `reason` (failure-mode token when `success=false`), `elapsed_ms_bucket=lt_10ms\|lt_100ms\|lt_1s\|ge_1s` |
 | `sovyx.voice.health.coordinator.outcomes` | Counter | 1 | Mission C1 T1.3 / T1.6 — coordinator dispatch + benign-skip outcomes. Labels: `kind=benign_skip\|cascade_reevaluation_requested\|normalizer_engagement_requested`, `verdict`, `reason` |
-| `sovyx.voice.health.quarantine.reason_dual_emit` | Counter | 1 | **TEMPORARY** Mission C1 T1.7 — LENIENT v0.44.x calibration counter. Fires when `derived_reason != "apo_degraded"` (legacy default). Labels: `legacy_reason`, `derived_reason`. **REMOVED at v0.45.0 STRICT flip** (mission §8 T4.1 deletion target) |
+| `sovyx.voice.health.quarantine.reason_dual_emit` | Counter | 1 | **TEMPORARY** Mission C1 T1.7 — LENIENT v0.44.x calibration counter. Fires when `derived_reason != "apo_degraded"` (legacy default). Labels: `legacy_reason`, `derived_reason`. Still registered at HEAD — LENIENT dual-emit; removal scheduled at the v0.53.0 STRICT flip (Mission H3, Gate 14) |
 | `voice.failover.ladder_started` | LogEvent | n/a | **Mission C3 §T1.3** — per-ladder-invocation. Carries `ladder_id` (uuid4 hex), `from_endpoint`, `initial_target_endpoint`, `candidate_count_estimate`, `max_candidates_per_ladder`, `mind_id` |
 | `voice.failover.candidate_attempted` | LogEvent | n/a | **Mission C3 §T1.3** — fires per dispatch within a ladder. Carries `ladder_id`, `index` (0-based), `candidate_count`, `target_endpoint`, `target_friendly_name`, `candidates_remaining`, `derived_reason`, `mind_id` |
 | `voice.failover.candidate_failed` | LogEvent | n/a | **Mission C3 §T1.3** — fires per failed dispatch. Carries `ladder_id`, `index`, `target_endpoint`, `verdict`, `error_class` (FailoverErrorClass value: `transient_retryable_same_device\|format_retryable_same_device\|unopenable_this_boot\|unopenable_permanent\|unknown`), `error_code`, `error_detail`, `elapsed_ms`, `mind_id` |

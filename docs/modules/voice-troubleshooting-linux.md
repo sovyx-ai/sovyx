@@ -88,6 +88,7 @@ H3 §T2.1 ADR-D3) classifies the failure for operator triage:
 | `capture_dead` | Substrate fully silent: zero callbacks OR exact-zero PCM across every host API | Physical replug; reboot if persistent; `systemctl --user restart pipewire pipewire-pulse pulseaudio` |
 | `kernel_invalidated` | Kernel-side IAudioClient wedge — predominantly a Windows pattern, rare on Linux | Replug; reboot |
 | `watchdog_recheck` | Lifecycle re-add tag (not a terminal verdict) — read the entry's `derived_reason` / `resolved_reason` for the underlying classification | n/a |
+| `unclassified` | Catch-all: the quarantining verdict fell outside the SSoT verdict→reason resolver map | Treat as `capture_dead`-class (replug / service restart) and file a bug report with the daemon log so the verdict can be classified |
 
 Inspect via the dashboard's Voice Health page or `sovyx doctor voice
 --reason-filter <reason>`. The `resolved_reason` is the canonical field;

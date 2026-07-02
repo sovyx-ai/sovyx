@@ -376,9 +376,9 @@ GET    /api/voice/service-health          # T6.20 — aggregated readiness probe
 GET    /api/voice/health                  # ComboStore + overrides + quarantine snapshot
 GET    /api/voice/health/quarantine       # kernel-invalidated quarantine snapshot
 GET    /api/voice/health/failover-history # runtime failover-ladder history ring (Mission C3 §T2.9) — per ladder + per-candidate detail
-GET    /api/voice/health/snapshot         # current cascade + watchdog state
-GET    /api/voice/health/preflight        # rerun preflight on demand
-POST   /api/voice/health/cascade/reset    # clear ComboStore for an endpoint
+POST   /api/voice/health/reprobe          # run a single probe against an endpoint GUID and return the result
+POST   /api/voice/health/forget           # invalidate a ComboStore entry (returns invalidated=false if absent)
+POST   /api/voice/health/pin              # pin a combo to capture_overrides.json for the given endpoint
 GET    /api/voice/capture-diagnostics     # APO / HFP guard report
 GET    /api/engine/degraded               # cross-axis composite degraded surface (Mission C4 §T1.6) — voice + LLM + STT axes with per-axis severity + action chips
 ```
