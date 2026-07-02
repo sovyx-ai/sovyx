@@ -67,6 +67,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from sovyx.engine.config import VoiceTuningConfig
 from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -98,16 +99,19 @@ _CANCEL_GRACE_PERIOD_S = 10.0
 _CANCEL_SIGKILL_WAIT_S = 5.0
 
 # rc.12 (operator-debt P2): defense-in-depth slow-path watchdog. The
-# bash diag's design budget is 8-12 minutes on healthy hardware; a
-# value of 30 minutes covers a 2.5× safety multiplier for slow disk
+# bash diag's design budget is 8-12 minutes on healthy hardware; the
+# default of 30 minutes covers a 2.5× safety multiplier for slow disk
 # I/O / paged-out swap scenarios and still kills a hung diag long
-# before the operator gives up. Caller can override via
-# ``total_deadline_s`` parameter (None disables the watchdog -- the
-# pre-rc.12 behaviour, kept available for CLI operators who explicitly
-# want to wait indefinitely). Watchdog fires SIGTERM → grace → SIGKILL
-# via the existing cancellation path so all the cleanup invariants
-# (trap-EXIT, process-group teardown) still hold.
-_DEFAULT_TOTAL_DEADLINE_S: float = 30 * 60.0  # 30 minutes
+# before the operator gives up. The duration is a real operator knob
+# (DOCTOR-5): ``EngineConfig.tuning.voice.full_diag_watchdog_deadline_s``
+# — env ``SOVYX_TUNING__VOICE__FULL_DIAG_WATCHDOG_DEADLINE_S`` — read
+# once at module import per the anti-pattern #17 module-level pattern.
+# ``0`` (or ``None`` from a programmatic caller) disables the watchdog
+# entirely for hosts where the diag is legitimately slow. Watchdog
+# fires SIGTERM → grace → SIGKILL via the existing cancellation path
+# so all the cleanup invariants (trap-EXIT, process-group teardown)
+# still hold.
+_DEFAULT_TOTAL_DEADLINE_S: float = float(VoiceTuningConfig().full_diag_watchdog_deadline_s)
 
 
 # ====================================================================
@@ -225,10 +229,14 @@ async def run_full_diag_async(
             wall-clock time the bash diag is allowed to run before
             the runner cancels it via the same SIGTERM-grace-SIGKILL
             path the operator-cancellation flow uses. Defaults to
-            :data:`_DEFAULT_TOTAL_DEADLINE_S` (30 minutes — 2.5× the
-            12-minute design budget). Pass ``None`` to disable the
-            watchdog (pre-rc.12 behaviour, kept for CLI operators
-            who explicitly want to wait indefinitely on slow hosts).
+            :data:`_DEFAULT_TOTAL_DEADLINE_S`, which is resolved at
+            module import from
+            ``EngineConfig.tuning.voice.full_diag_watchdog_deadline_s``
+            (default 30 minutes — 2.5× the 12-minute design budget).
+            ``None`` or ``<= 0`` disables the watchdog; operators
+            disable it via
+            ``SOVYX_TUNING__VOICE__FULL_DIAG_WATCHDOG_DEADLINE_S=0``
+            (DOCTOR-5 — there is intentionally no CLI flag for this).
             Operator-cancellation still works regardless of this
             field.
 
@@ -246,7 +254,10 @@ async def run_full_diag_async(
             ``voice.diagnostics.full_diag_watchdog_fired`` log event
             distinguishes them).
     """
-    _check_prerequisites()
+    # Blocking pre-flight (shutil.which + a bash --version subprocess)
+    # offloaded per anti-pattern #14 so the wizard's event loop never
+    # stalls on a slow PATH scan / subprocess spawn.
+    await asyncio.to_thread(_check_prerequisites)
 
     if trigger not in _TRIGGER_VALUES:
         # Defensive: spec §8.3 closed enum. If a caller passes an
@@ -299,11 +310,12 @@ async def run_full_diag_async(
             # hung diag (driver bug, blocked syscall, paged-out swap)
             # gets force-killed instead of hanging the wizard
             # forever. Operator-cancellation still flows through the
-            # outer CancelledError handler. When ``total_deadline_s``
-            # is None, fall through to the bare ``proc.wait()`` —
-            # preserves the pre-rc.12 unbounded-wait contract for
-            # CLI operators who explicitly opt out.
-            if total_deadline_s is None:
+            # outer CancelledError handler. ``None`` / ``<= 0``
+            # (DOCTOR-5: the operator kill-switch via
+            # SOVYX_TUNING__VOICE__FULL_DIAG_WATCHDOG_DEADLINE_S=0)
+            # falls through to the bare ``proc.wait()`` — the
+            # pre-rc.12 unbounded-wait contract.
+            if total_deadline_s is None or total_deadline_s <= 0:
                 return_code = await proc.wait()
             else:
                 try:
@@ -323,8 +335,10 @@ async def run_full_diag_async(
                         f"diag exceeded the {total_deadline_s:.0f}s watchdog "
                         f"deadline (design budget 8-12 min); SIGTERM-grace-"
                         f"SIGKILL escalation completed. Re-run on a less-"
-                        f"loaded host or pass --no-deadline if the diag is "
-                        f"genuinely slow on this hardware.",
+                        f"loaded host, or raise/disable the watchdog via "
+                        f"SOVYX_TUNING__VOICE__FULL_DIAG_WATCHDOG_DEADLINE_S "
+                        f"(seconds; 0 disables) if the diag is genuinely "
+                        f"slow on this hardware.",
                         exit_code=-1,
                     ) from None
         except asyncio.CancelledError:
@@ -396,6 +410,7 @@ def run_full_diag(
     extra_args: tuple[str, ...] = (),
     output_root: Path | None = None,
     trigger: str = "cli",
+    total_deadline_s: float | None = _DEFAULT_TOTAL_DEADLINE_S,
 ) -> DiagRunResult:
     """Materialize the bundled bash diag, run it interactively, return the tarball path.
 
@@ -423,6 +438,13 @@ def run_full_diag(
             telemetry field per spec §8.3. Defaults to ``"cli"`` so
             direct CLI callers don't need to override; the wizard
             orchestrator passes ``"wizard"``.
+        total_deadline_s: Same semantics as
+            :func:`run_full_diag_async` — defaults to the
+            ``full_diag_watchdog_deadline_s`` tuning value (30 min);
+            ``None`` / ``<= 0`` disables. The CLI intentionally
+            exposes no flag for this; operators tune it via
+            ``SOVYX_TUNING__VOICE__FULL_DIAG_WATCHDOG_DEADLINE_S``
+            (DOCTOR-5).
 
     Returns:
         A :class:`DiagRunResult` carrying the absolute path to the
@@ -440,6 +462,7 @@ def run_full_diag(
             extra_args=extra_args,
             output_root=output_root,
             trigger=trigger,
+            total_deadline_s=total_deadline_s,
         )
     )
 

@@ -24,7 +24,7 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
@@ -1956,6 +1956,14 @@ async def set_capture_exclusive(request: Request) -> VoiceCaptureExclusiveRespon
     Body: ``{"enabled": bool}`` (default ``True``).
 
     Flow:
+        0. GP eligibility gate (WINDOWS-4 follow-up): when enabling,
+           consult the Windows Group Policy snapshot first. On a
+           GP-locked fleet (``DisallowExclusiveDevice=1``) every
+           exclusive open is structurally doomed (PortAudio ``-9988``;
+           the Tier-3 :class:`WindowsWASAPIExclusiveBypass` reports
+           ineligible with reason ``gp_exclusive_disallowed``), so the
+           route returns HTTP 409 with that reason + remediation text
+           instead of persisting a flag that can never engage.
         1. Persist ``tuning.voice.capture_wasapi_exclusive`` to
            ``system.yaml`` via :class:`ConfigEditor` so the choice
            survives restart.
@@ -1973,6 +1981,12 @@ async def set_capture_exclusive(request: Request) -> VoiceCaptureExclusiveRespon
     Returns:
         ``{"ok": True, "enabled": bool, "persisted": bool,
         "applied_immediately": bool}``.
+
+    Raises:
+        HTTPException 409: ``enabled=True`` on a host whose Group
+            Policy disallows WASAPI exclusive mode. ``detail`` is a
+            structured object: ``{"reason": "gp_exclusive_disallowed",
+            "remediation": "<operator text>"}``.
     """
     try:
         body = await request.json()
@@ -1981,6 +1995,38 @@ async def set_capture_exclusive(request: Request) -> VoiceCaptureExclusiveRespon
     if not isinstance(body, dict):
         body = {}
     enabled = bool(body.get("enabled", True))
+
+    # 0. GP eligibility gate (WINDOWS-4 follow-up). On a GP-blocked
+    # fleet the operator button would attempt and fail on EVERY click
+    # (Tier-3 carries exclusive_mode_disallowed → -9988 on open).
+    # Fail honestly BEFORE persisting so system.yaml never records an
+    # exclusive-mode preference the OS forbids. Registry read is
+    # offloaded per anti-pattern #14; detect_group_policies never
+    # raises and returns "no restriction" on non-Windows hosts.
+    if enabled:
+        from sovyx.voice._group_policy_detector import detect_group_policies
+
+        gp_snapshot = await asyncio.to_thread(detect_group_policies)
+        if gp_snapshot.exclusive_mode_disallowed:
+            logger.warning(
+                "capture_exclusive_rejected_gp",
+                reason="gp_exclusive_disallowed",
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "gp_exclusive_disallowed",
+                    "remediation": (
+                        "Windows Group Policy (DisallowExclusiveDevice=1) "
+                        "blocks WASAPI exclusive mode on this host, so the "
+                        "exclusive-mode bypass cannot engage. Ask your "
+                        "Windows administrator to unset the policy, or "
+                        "disable the offending capture enhancement (e.g. "
+                        "Voice Clarity) in the device's enhancements "
+                        "settings."
+                    ),
+                },
+            )
 
     # 1. Persist to system.yaml
     persisted = False

@@ -36,6 +36,7 @@ Reference: master mission ``MISSION-voice-final-skype-grade-2026.md``
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -597,7 +598,12 @@ async def post_mind_wake_word_toggle(
             voice_tuning = VoiceTuningConfig()
 
         try:
-            pre_resolved_model_path = resolve_wake_word_model_for_mind(
+            # Anti-pattern #14: the resolver walks the pretrained pool
+            # on disk and can shell out to an ``espeak-ng`` phonetic
+            # fallback subprocess — offload so the dashboard event
+            # loop keeps serving while the toggle pre-validates.
+            pre_resolved_model_path = await asyncio.to_thread(
+                resolve_wake_word_model_for_mind,
                 data_dir=data_dir,
                 wake_word=mind_config.effective_wake_word,
                 voice_language=mind_config.voice_language or "en",

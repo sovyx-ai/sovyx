@@ -42,6 +42,7 @@ import subprocess
 from typing import Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 
 logger = get_logger(__name__)
 
@@ -121,6 +122,9 @@ def _resolve_via_pactl(persisted_name: str) -> int | None:
             text=True,
             timeout=_PACTL_TIMEOUT_S,
             check=False,
+            # LINUX-6: pin the locale so ``Description:`` / property
+            # labels stay English-parseable on pt_BR/de/fr desktops.
+            env=linux_tool_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.info(
@@ -176,6 +180,10 @@ def _resolve_via_pactl(persisted_name: str) -> int | None:
 
 def resolve_active_mic_card(*, mind_config: Any) -> int | None:  # noqa: ANN401
     """Map ``MindConfig.voice_input_device_name`` to an ALSA card index.
+
+    Blocking (``pactl`` / ``arecord`` subprocesses, up to 5 s timeout
+    each) — async callers MUST wrap this in :func:`asyncio.to_thread`
+    per anti-pattern #14 (the wizard orchestrator does).
 
     Args:
         mind_config: The mind whose persisted mic to resolve. May be
@@ -234,6 +242,9 @@ def resolve_active_mic_card(*, mind_config: Any) -> int | None:  # noqa: ANN401
             text=True,
             timeout=_ARECORD_TIMEOUT_S,
             check=False,
+            # LINUX-6: LC_ALL=C keeps the ``card N: ...`` listing in
+            # the English shape the card-line regex matches.
+            env=linux_tool_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.info(

@@ -271,7 +271,7 @@ Each rule is a pure `(fingerprint, measurements, triage_result, prior_decisions)
 | Backup is corrupt | `--rollback` validates pre-swap | Refuses; operator re-runs `--calibrate` to regenerate. |
 | Operator rolls back multiple bad calibrations | `--rollback` walks the multi-generation chain (rc.12) | Up to 3 prior profiles restorable from `.bak.{1,2,3}`; once exhausted, `--calibrate` repopulates. |
 | No microphone connected | Orchestrator early-bails after fingerprint (rc.12) | FALLBACK with `reason="no_capture_device"` — operator sees actionable message instead of waiting 8-12 min for a useless diag. |
-| Bash diag hangs (driver bug, blocked syscall) | Watchdog timer (rc.12, default 30 min) | SIGTERM → 10s grace → SIGKILL via existing cancellation path; operator sees `DiagRunError` with watchdog citation. |
+| Bash diag hangs (driver bug, blocked syscall) | Watchdog timer (rc.12, default 30 min; tunable via `SOVYX_TUNING__VOICE__FULL_DIAG_WATCHDOG_DEADLINE_S`, `0` disables) | SIGTERM → 10s grace → SIGKILL via existing cancellation path; operator sees `DiagRunError` naming the tuning knob. |
 
 ## Example: surgical measurer mode (~30s vs ~10min)
 

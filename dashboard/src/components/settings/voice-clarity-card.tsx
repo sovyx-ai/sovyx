@@ -22,7 +22,7 @@ import {
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { api, isAbortError } from "@/lib/api";
+import { api, ApiError, isAbortError } from "@/lib/api";
 import {
   CaptureDiagnosticsResponseSchema,
   CaptureExclusiveResponseSchema,
@@ -31,6 +31,17 @@ import type {
   CaptureDiagnosticsResponse,
   CaptureExclusiveResponse,
 } from "@/types/api";
+
+/** True when the error is the structured 409 GP-eligibility rejection. */
+function isGpExclusiveDisallowed(err: ApiError): boolean {
+  if (err.status !== 409) return false;
+  const detail = err.body?.detail;
+  return (
+    typeof detail === "object" &&
+    detail !== null &&
+    (detail as Record<string, unknown>).reason === "gp_exclusive_disallowed"
+  );
+}
 
 export function VoiceClarityCard() {
   const { t } = useTranslation(["settings"]);
@@ -77,6 +88,14 @@ export function VoiceClarityCard() {
         }
         await load();
       } catch (err) {
+        // GP gate (WINDOWS-4 follow-up): the backend returns a
+        // structured 409 {detail: {reason: "gp_exclusive_disallowed"}}
+        // when Group Policy forbids WASAPI exclusive mode — surface a
+        // localised remediation instead of the raw JSON body.
+        if (err instanceof ApiError && isGpExclusiveDisallowed(err)) {
+          toast.error(t("settings:voiceClarity.gpBlocked"));
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Request failed";
         toast.error(t("settings:voiceClarity.failed", { error: msg }));
       } finally {

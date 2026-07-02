@@ -274,6 +274,7 @@
     "enableSuccessRestart": "Exclusive mode saved. Restart the pipeline to apply.",
     "disableSuccess": "Exclusive mode disabled. Restart to return to shared mode.",
     "failed": "Could not update capture mode: {{error}}",
+    "gpBlocked": "Your Windows Group Policy blocks WASAPI exclusive mode (DisallowExclusiveDevice). Ask your Windows administrator to unset the policy, or disable the capture enhancement (e.g. Voice Clarity) in the device's enhancements settings.",
     "knownApos": "Detected APOs: {{list}}",
     "activeDevice": "Active microphone: {{device}}"
   },

@@ -44,6 +44,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._tool_env import linux_tool_env
 from sovyx.voice.calibration.schema import (
     MEASUREMENT_SNAPSHOT_SCHEMA_VERSION,
     MeasurementSnapshot,
@@ -78,6 +79,10 @@ def capture_measurements(
     active_mic_card_index: int | None = None,
 ) -> MeasurementSnapshot:
     """Build a MeasurementSnapshot for calibration.
+
+    Blocking (live ``amixer`` subprocess + tarball disk walk) — async
+    callers MUST wrap this in :func:`asyncio.to_thread` per
+    anti-pattern #14 (the wizard orchestrator does).
 
     Args:
         diag_tarball_root: Optional extracted root of a diag tarball
@@ -339,6 +344,10 @@ def _safe_amixer(cmd: list[str]) -> str:
             text=True,
             timeout=_AMIXER_TIMEOUT_S,
             check=False,
+            # LINUX-6: pin the locale so ``Simple mixer control`` block
+            # labels + ``[NN%]`` tokens stay parseable on localised
+            # desktops.
+            env=linux_tool_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         with contextlib.suppress(Exception):

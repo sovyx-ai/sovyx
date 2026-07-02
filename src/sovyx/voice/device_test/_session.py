@@ -9,6 +9,16 @@ The :class:`SessionRegistry` enforces at most ``max_sessions_per_token``
 concurrent sessions per auth token; newer connections replace older
 ones (the server sends a :class:`ClosedFrame` with reason
 ``session_replaced`` before dropping the old WS).
+
+Liveness contract (DOCTOR-6,
+MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02): the
+max-lifetime / peer-alive / stop checks are enforced by a deadline-
+bounded wait that races the next source frame against the stop event —
+NOT by the arrival of frames. A device whose callbacks stop firing
+(APO wedge, driver freeze) can no longer hold the mic silently behind
+a frozen meter: the session emits an honest
+:class:`ErrorFrame` (``device_disappeared``) or :class:`ClosedFrame`
+and releases the source within the configured caps.
 """
 
 from __future__ import annotations
@@ -23,7 +33,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.engine._lock_dict import LRULockDict
 from sovyx.observability.logging import get_logger
-from sovyx.observability.tasks import spawn
+from sovyx.observability.tasks import mark_consumed, spawn
 from sovyx.voice.device_test._meter import PeakHoldMeter
 from sovyx.voice.device_test._models import (
     ClosedFrame,
@@ -36,6 +46,9 @@ from sovyx.voice.device_test._source import AudioSourceError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    import numpy as np
+    import numpy.typing as npt
 
     from sovyx.voice.device_test._source import AudioInputSource
 
@@ -50,12 +63,17 @@ class SessionConfig:
         frame_rate_hz / peak_hold_ms / peak_decay_db_per_sec /
             vad_trigger_db / clipping_db: meter ballistics.
         max_lifetime_s: v0.20.2 / Bug B — hard cap on total session
-            wall-clock duration. ``0`` disables.
+            wall-clock duration. ``0`` disables. Enforced by a
+            deadline-bounded wait (DOCTOR-6) so it fires even when the
+            source stops producing frames.
         peer_alive_timeout_s: v0.20.2 / Bug B — if the sender cannot
             deliver a frame for this many seconds (typically because the
             peer tab is frozen / backgrounded / the WS path is dead) the
             session closes with :attr:`CloseReason.PEER_DEAD`. ``0``
-            disables.
+            disables. When the window elapses with zero frames FROM THE
+            SOURCE as well, the session classifies the fault as
+            ``device_disappeared`` (frame starvation) instead of
+            blaming the peer (DOCTOR-6).
         force_close_grace_s: v0.20.2 / Bug B — after :meth:`stop` is
             called, wait this long for :meth:`run` to finalize before
             :meth:`force_close` kicks the source shut directly. ``0``
@@ -237,6 +255,23 @@ class TestSession:
             await self._finalize(reason)
 
     async def _stream_levels(self) -> CloseReason:
+        """Stream meter frames, enforcing liveness independent of frame arrival.
+
+        DOCTOR-6 (MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02):
+        pre-fix the max-lifetime / peer-dead / stop checks ran only when
+        the source yielded a frame — a device whose callbacks stopped
+        firing parked the loop inside ``async for`` forever, silently
+        holding the mic behind a frozen meter. Post-fix the loop races
+        the next-frame await against (a) the stop event (via the
+        stop-waiter task, previously spawned but dead code) and (b) the
+        nearest enabled deadline, so every check fires on schedule even
+        with zero frames. Frame starvation (an entire
+        ``peer_alive_timeout_s`` window with no frames from the source)
+        raises :class:`AudioSourceError` with
+        :attr:`ErrorCode.DEVICE_DISAPPEARED` so :meth:`run` emits an
+        honest ErrorFrame + DEVICE_ERROR close instead of mislabelling
+        the fault as a dead peer.
+        """
         frame_interval = 1.0 / self._config.frame_rate_hz
         open_ts = self._loop.time()
         last_emit = open_ts
@@ -245,15 +280,21 @@ class TestSession:
         # open. Seeded to open_ts so a peer that never reads anything
         # still trips the watchdog after peer_alive_timeout_s.
         last_successful_send = open_ts
+        # DOCTOR-6 — track the last frame *arrival* separately from
+        # sends so a starved source (callbacks stopped firing) is
+        # classified as a device fault, not a dead peer.
+        last_frame_ts = open_ts
         explicit_reason: CloseReason | None = None
 
+        iterator = self._source.frames().__aiter__()
         stop_task = spawn(self._stop_event.wait(), name="device-test-stop-waiter")
+        frame_task: asyncio.Task[npt.NDArray[np.int16]] | None = None
         try:
-            async for audio_frame in self._source.frames():
+            while True:
+                now = self._loop.time()
                 if self._stop_event.is_set():
                     explicit_reason = self._stop_reason or CloseReason.SERVER_SHUTDOWN
                     break
-                now = self._loop.time()
                 # Max-lifetime cap: browser tabs left open for hours
                 # must not hold the mic forever.
                 if (
@@ -268,18 +309,57 @@ class TestSession:
                     )
                     break
                 # Peer-aliveness watchdog: if we cannot push a frame for
-                # peer_alive_timeout_s, the peer is effectively dead.
+                # peer_alive_timeout_s, either the peer is dead (frames
+                # flowed but never reached it) or the SOURCE is starved
+                # (no frames at all — DOCTOR-6 honest classification).
                 if (
                     self._config.peer_alive_timeout_s > 0
                     and (now - last_successful_send) >= self._config.peer_alive_timeout_s
                 ):
+                    silent_s = now - last_successful_send
+                    if (now - last_frame_ts) >= self._config.peer_alive_timeout_s:
+                        logger.warning(
+                            "voice_test_session_frame_starved",
+                            session_id=self._session_id,
+                            silent_s=round(silent_s, 2),
+                        )
+                        raise AudioSourceError(
+                            ErrorCode.DEVICE_DISAPPEARED,
+                            f"no frames from device for {silent_s:.1f}s "
+                            "(device callbacks stopped firing)",
+                        )
                     explicit_reason = CloseReason.PEER_DEAD
                     logger.info(
                         "voice_test_session_peer_dead",
                         session_id=self._session_id,
-                        silent_s=round(now - last_successful_send, 2),
+                        silent_s=round(silent_s, 2),
                     )
                     break
+
+                if frame_task is None:
+                    frame_task = asyncio.ensure_future(anext(iterator))
+                done, _pending = await asyncio.wait(
+                    {frame_task, stop_task},
+                    timeout=self._next_wakeup_budget(
+                        now,
+                        open_ts=open_ts,
+                        last_successful_send=last_successful_send,
+                    ),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if frame_task not in done:
+                    # Deadline tick or stop event — top of loop decides.
+                    continue
+                finished = frame_task
+                frame_task = None
+                try:
+                    audio_frame = finished.result()
+                except StopAsyncIteration:
+                    # Source exhausted / closed underneath us.
+                    break
+
+                now = self._loop.time()
+                last_frame_ts = now
                 reading = self._meter.process(audio_frame, clock_s=now)
                 if now - last_emit < frame_interval:
                     # Under-sample: drop frames to maintain target rate.
@@ -299,10 +379,61 @@ class TestSession:
                     return CloseReason.CLIENT_DISCONNECT
                 last_successful_send = self._loop.time()
         finally:
-            stop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stop_task
+            if frame_task is not None:
+                frame_task.cancel()
+                try:
+                    await frame_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:  # noqa: BLE001 — teardown drain; close reason already decided
+                    logger.debug(
+                        "voice_test_frame_task_drain_skipped",
+                        session_id=self._session_id,
+                        reason=str(exc),
+                    )
+            if stop_task.done() and not stop_task.cancelled():
+                # Stop event fired — result observed via the loop-top
+                # check; mark consumed so the task registry doesn't
+                # flag a false orphan.
+                mark_consumed(stop_task)
+            else:
+                stop_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stop_task
+            aclose = getattr(iterator, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except Exception as exc:  # noqa: BLE001 — generator finalisation is best-effort
+                    logger.debug(
+                        "voice_test_iterator_aclose_skipped",
+                        session_id=self._session_id,
+                        reason=str(exc),
+                    )
         return explicit_reason or CloseReason.CLIENT_DISCONNECT
+
+    def _next_wakeup_budget(
+        self,
+        now: float,
+        *,
+        open_ts: float,
+        last_successful_send: float,
+    ) -> float | None:
+        """Time until the nearest enabled liveness deadline, or ``None``.
+
+        DOCTOR-6 — bounds the next-frame wait so the deadline checks in
+        :meth:`_stream_levels` run on schedule even when the source
+        stops yielding frames. ``None`` (both caps disabled) means the
+        wait is unbounded; the stop-waiter task still interrupts it.
+        """
+        deadlines: list[float] = []
+        if self._config.max_lifetime_s > 0:
+            deadlines.append(open_ts + self._config.max_lifetime_s)
+        if self._config.peer_alive_timeout_s > 0:
+            deadlines.append(last_successful_send + self._config.peer_alive_timeout_s)
+        if not deadlines:
+            return None
+        return max(0.0, min(deadlines) - now)
 
     async def _send_error(self, code: ErrorCode, detail: str) -> None:
         try:

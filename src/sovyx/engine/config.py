@@ -1006,6 +1006,20 @@ class VoiceTuningConfig(BaseSettings):
     playback is legitimate and its exit is owned by the TTS-out
     coroutines (speak/flush_stream)."""
 
+    full_diag_watchdog_deadline_s: float = Field(default=1800.0, ge=0.0, le=86_400.0)
+    """DOCTOR-5 — wall-clock watchdog for the Linux bash full-diag
+    runner (``sovyx doctor voice --full-diag`` / ``--calibrate`` + the
+    wizard slow path). When the diag subprocess outlives this budget,
+    :func:`sovyx.voice.diagnostics._runner.run_full_diag_async` kills
+    it via the same SIGTERM → grace → SIGKILL escalation as operator
+    cancellation. Default 1800 s = 30 min (2.5× the 12-minute design
+    budget). ``0`` disables the watchdog entirely (kill-switch,
+    inverse anti-pattern #34) for operators on genuinely slow
+    hardware: ``SOVYX_TUNING__VOICE__FULL_DIAG_WATCHDOG_DEADLINE_S=0``.
+    Resolved at module import of the runner (anti-pattern #17
+    module-level pattern), so the env override must be set before the
+    daemon / CLI starts."""
+
     tts_synthesis_timeout_seconds: float = Field(default=60.0, ge=0.0, le=600.0)
     """Per-call deadline for a single TTS synthesis (Piper VITS /
     Kokoro ONNX inference dispatched via ``asyncio.to_thread``).

@@ -649,7 +649,12 @@ class WizardOrchestrator:
                 summary=str(exc),
             )
 
-        measurements = capture_measurements(
+        # Anti-pattern #14: capture_measurements shells out to a live
+        # ``amixer`` subprocess + walks the tarball on disk — offload
+        # so the event loop (dashboard WS progress, cancel polling)
+        # keeps ticking during the probe.
+        measurements = await asyncio.to_thread(
+            capture_measurements,
             diag_tarball_root=triage.tarball_root,
             triage_result=triage,
             duration_s=diag_result.duration_s,
@@ -695,12 +700,17 @@ class WizardOrchestrator:
             self._data_dir,
             state.mind_id,  # type: ignore[arg-type]
         )
+        # Anti-pattern #14: the resolver runs pactl / arecord
+        # subprocesses (up to 5 s timeout each) — offload so the loop
+        # stays responsive during the apply stage.
+        slow_apply_active_mic_card = await asyncio.to_thread(
+            resolve_active_mic_card,
+            mind_config=slow_apply_mind_config,
+        )
         applier = CalibrationApplier(
             data_dir=self._data_dir,
             mind_yaml_path=self._data_dir / state.mind_id / "mind.yaml",
-            active_mic_card_index=resolve_active_mic_card(
-                mind_config=slow_apply_mind_config,
-            ),
+            active_mic_card_index=slow_apply_active_mic_card,
         )
         try:
             apply_result = await applier.apply(profile, dry_run=False)
@@ -815,12 +825,16 @@ class WizardOrchestrator:
             self._data_dir,
             mind_id,  # type: ignore[arg-type]
         )
+        # Anti-pattern #14: same subprocess-backed resolver as the slow
+        # path — offload off the event loop.
+        fast_apply_active_mic_card = await asyncio.to_thread(
+            resolve_active_mic_card,
+            mind_config=fast_apply_mind_config,
+        )
         applier = CalibrationApplier(
             data_dir=self._data_dir,
             mind_yaml_path=self._data_dir / mind_id / "mind.yaml",
-            active_mic_card_index=resolve_active_mic_card(
-                mind_config=fast_apply_mind_config,
-            ),
+            active_mic_card_index=fast_apply_active_mic_card,
         )
         try:
             apply_result = await applier.apply(replayed, dry_run=False)

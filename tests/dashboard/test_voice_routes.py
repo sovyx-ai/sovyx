@@ -2382,3 +2382,116 @@ class TestEnableVoiceConcurrencyMutex:
         assert statuses == ["active", "already_active"], (
             f"expected one active + one already_active, got {statuses}"
         )
+
+
+# ---------------------------------------------------------------------------
+# WINDOWS-4 follow-up — GP eligibility gate on POST /api/voice/capture-exclusive
+# ---------------------------------------------------------------------------
+
+
+class TestCaptureExclusiveGroupPolicyGate:
+    """On a GP-locked fleet (DisallowExclusiveDevice=1) the manual
+    restart button must fail honestly with a structured 409 BEFORE
+    persisting or attempting the exclusive reopen — Tier 3 carries
+    ``exclusive_mode_disallowed`` and every open would die with
+    PortAudio -9988.
+    """
+
+    @staticmethod
+    def _gp_snapshot(*, disallowed: bool):
+        from sovyx.voice._group_policy_detector import GroupPolicySnapshot
+
+        return GroupPolicySnapshot(
+            platform_supported=True,
+            exclusive_mode_disallowed=disallowed,
+        )
+
+    def test_enable_on_gp_blocked_host_returns_409_and_never_attempts(self, app, tmp_path) -> None:
+        from sovyx.voice import _group_policy_detector as gp
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        config_path = tmp_path / "system.yaml"
+        config_path.write_text("")
+        app.state.config_path = str(config_path)
+        app.state.engine_config = MagicMock()
+
+        fake_capture = MagicMock()
+        fake_capture.request_exclusive_restart = AsyncMock()
+        registry = app.state.registry
+        registry.is_registered = MagicMock(
+            side_effect=lambda iface: iface is AudioCaptureTask,
+        )
+        registry.resolve = AsyncMock(return_value=fake_capture)
+
+        mock_editor = MagicMock()
+        mock_editor.update_section = AsyncMock()
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        with (
+            # Route lazily imports from the source module (#38) — patch there.
+            patch.object(
+                gp,
+                "detect_group_policies",
+                return_value=self._gp_snapshot(disallowed=True),
+            ),
+            patch("sovyx.engine.config_editor.ConfigEditor", return_value=mock_editor),
+        ):
+            resp = c.post("/api/voice/capture-exclusive", json={"enabled": True})
+
+        assert resp.status_code == 409  # noqa: PLR2004
+        detail = resp.json()["detail"]
+        assert detail["reason"] == "gp_exclusive_disallowed"
+        assert "DisallowExclusiveDevice" in detail["remediation"]
+        # Honest short-circuit: neither persisted nor attempted.
+        mock_editor.update_section.assert_not_awaited()
+        fake_capture.request_exclusive_restart.assert_not_called()
+
+    def test_enable_on_unrestricted_host_proceeds(self, app, tmp_path) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from sovyx.voice import _group_policy_detector as gp
+
+        config_path = tmp_path / "system.yaml"
+        config_path.write_text("")
+        app.state.config_path = str(config_path)
+        app.state.engine_config = MagicMock()
+
+        mock_editor = MagicMock()
+        mock_editor.update_section = _AsyncMock()
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        with (
+            patch.object(
+                gp,
+                "detect_group_policies",
+                return_value=self._gp_snapshot(disallowed=False),
+            ),
+            patch("sovyx.engine.config_editor.ConfigEditor", return_value=mock_editor),
+        ):
+            resp = c.post("/api/voice/capture-exclusive", json={"enabled": True})
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert resp.json()["ok"] is True
+        mock_editor.update_section.assert_awaited_once()
+
+    def test_disable_skips_gp_probe(self, app, tmp_path) -> None:
+        """enabled=False never needs eligibility — the probe must not run."""
+        from sovyx.voice import _group_policy_detector as gp
+
+        config_path = tmp_path / "system.yaml"
+        config_path.write_text("")
+        app.state.config_path = str(config_path)
+        app.state.engine_config = MagicMock()
+
+        mock_editor = MagicMock()
+        mock_editor.update_section = AsyncMock()
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        with (
+            patch.object(gp, "detect_group_policies") as mock_probe,
+            patch("sovyx.engine.config_editor.ConfigEditor", return_value=mock_editor),
+        ):
+            resp = c.post("/api/voice/capture-exclusive", json={"enabled": False})
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        mock_probe.assert_not_called()

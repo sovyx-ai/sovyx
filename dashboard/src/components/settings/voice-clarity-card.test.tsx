@@ -212,4 +212,36 @@ describe("VoiceClarityCard", () => {
       expect(mockToastError).toHaveBeenCalled();
     });
   });
+
+  it("surfaces the localised GP remediation on the structured 409", async () => {
+    // WINDOWS-4 follow-up: the backend rejects enable with
+    // {detail: {reason: "gp_exclusive_disallowed", remediation}} when
+    // Group Policy forbids WASAPI exclusive mode. The card must show
+    // the localised remediation, not the raw JSON body.
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse(diagPayload()))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            detail: {
+              reason: "gp_exclusive_disallowed",
+              remediation: "Ask your Windows administrator.",
+            },
+          },
+          409,
+        ),
+      );
+
+    render(<VoiceClarityCard />);
+    await waitFor(() => {
+      expect(screen.getByTestId("enable-exclusive-button")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("enable-exclusive-button"));
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        expect.stringContaining("Group Policy blocks WASAPI exclusive mode"),
+      );
+    });
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
 });

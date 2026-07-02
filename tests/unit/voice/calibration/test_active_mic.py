@@ -260,3 +260,41 @@ class TestResolveActiveMicCardPactl:
             ),
         ):
             assert resolve_active_mic_card(mind_config=mind_config) == 2
+
+
+class TestLocalePinning:
+    """LINUX-6 residual: pactl/arecord parsers string-match English
+    output — every invocation must pin LC_ALL=C via linux_tool_env().
+    """
+
+    def test_arecord_invocation_pins_locale(self) -> None:
+        with (
+            patch.object(
+                _active_mic.shutil,
+                "which",
+                side_effect=lambda t: None if t == "pactl" else "/usr/bin/arecord",
+            ),
+            patch.object(
+                _active_mic.subprocess, "run", return_value=_completed(_ARECORD_L_OUTPUT)
+            ) as mock_run,
+        ):
+            _active_mic.resolve_active_mic_card(
+                mind_config=SimpleNamespace(voice_input_device_name="Razer BlackShark"),
+            )
+        env = mock_run.call_args.kwargs.get("env")
+        assert env is not None, "arecord ran without a pinned environment"
+        assert env["LC_ALL"] == "C"
+        assert env["LANG"] == "C"
+
+    def test_pactl_invocation_pins_locale(self) -> None:
+        with (
+            patch.object(_active_mic.shutil, "which", return_value="/usr/bin/pactl"),
+            patch.object(
+                _active_mic.subprocess, "run", return_value=_completed("", returncode=1)
+            ) as mock_run,
+        ):
+            _active_mic._resolve_via_pactl("Razer BlackShark")
+        env = mock_run.call_args.kwargs.get("env")
+        assert env is not None, "pactl ran without a pinned environment"
+        assert env["LC_ALL"] == "C"
+        assert env["LANG"] == "C"

@@ -503,3 +503,48 @@ class TestT1PreValidateContract:
         call = pipeline.register_mind_wake_word.call_args
         assert str(call.args[0]) == "aria"
         assert str(call.kwargs["model_path"]).endswith("aria.onnx")
+
+
+class TestResolverOffloadedDoctor14:
+    """Anti-pattern #14 residual (audit 2026-07-02): the wake-word
+    resolver walks the pretrained pool + can shell out to an
+    ``espeak-ng`` phonetic-fallback subprocess — the toggle route must
+    dispatch it via ``asyncio.to_thread`` so the dashboard loop keeps
+    serving during pre-validate.
+    """
+
+    def test_resolver_runs_off_the_event_loop(self, tmp_path: Path) -> None:
+        import asyncio
+
+        from sovyx.voice.factory import _wake_word_wire_up as wwu
+
+        _write_mind_yaml(tmp_path, "default", wake_word="Aria")
+        model_path = _write_pretrained_model(tmp_path, "Aria")
+        app = _build_app(tmp_path=tmp_path)
+
+        ran_on_loop: list[bool] = []
+
+        def _recording_resolver(**_kwargs: Any) -> Path:
+            try:
+                asyncio.get_running_loop()
+                ran_on_loop.append(True)  # BAD: still on the loop thread
+            except RuntimeError:
+                ran_on_loop.append(False)  # worker thread — no running loop
+            return model_path
+
+        client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        # Route lazily imports from the source module (#38) — patch there.
+        from unittest.mock import patch
+
+        with patch.object(wwu, "resolve_wake_word_model_for_mind", _recording_resolver):
+            resp = client.post(
+                "/api/mind/default/wake-word/toggle",
+                json={"enabled": True},
+            )
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert ran_on_loop, "resolver never ran during pre-validate"
+        assert ran_on_loop[0] is False, (
+            "resolve_wake_word_model_for_mind ran ON the event loop "
+            "thread — the anti-pattern #14 offload regressed"
+        )

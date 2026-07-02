@@ -869,6 +869,10 @@ class TestSlowPathWatchdog:
             )
 
         assert "watchdog" in str(exc_info.value).lower()
+        # DOCTOR-5: the error names the REAL knob (env-tunable via
+        # EngineConfig.tuning.voice), not a nonexistent CLI flag.
+        assert "SOVYX_TUNING__VOICE__FULL_DIAG_WATCHDOG_DEADLINE_S" in str(exc_info.value)
+        assert "--no-deadline" not in str(exc_info.value)
         # Watchdog escalated to terminate (Windows path).
         assert spawned[0].terminate_called is True
 
@@ -904,6 +908,78 @@ class TestSlowPathWatchdog:
         from sovyx.voice.diagnostics._runner import _DEFAULT_TOTAL_DEADLINE_S
 
         assert _DEFAULT_TOTAL_DEADLINE_S == 30 * 60.0
+
+    def test_watchdog_default_matches_tuning_field(self) -> None:
+        """DOCTOR-5: the runner sentinel mirrors the EngineConfig knob.
+
+        The runner resolves ``_DEFAULT_TOTAL_DEADLINE_S`` at module
+        import from ``VoiceTuningConfig.full_diag_watchdog_deadline_s``
+        (anti-pattern #17 module-level pattern) so the pydantic field
+        default and the runner constant must never drift.
+        """
+        from sovyx.engine.config import VoiceTuningConfig
+        from sovyx.voice.diagnostics._runner import _DEFAULT_TOTAL_DEADLINE_S
+
+        field = VoiceTuningConfig.model_fields["full_diag_watchdog_deadline_s"]
+        assert field.default == _DEFAULT_TOTAL_DEADLINE_S
+
+    @pytest.mark.asyncio()
+    async def test_watchdog_disabled_with_zero(self, tmp_path: Path) -> None:
+        """DOCTOR-5 kill-switch: ``0`` (the env knob's disable value)
+        takes the same unbounded-wait branch as ``None``."""
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
+
+        with (
+            patch.object(_runner, "_check_prerequisites"),
+            patch.object(
+                _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+            ),
+            patch.object(
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0),
+            ),
+        ):
+            result = await run_full_diag_async(
+                output_root=output_root,
+                total_deadline_s=0.0,
+            )
+        assert result.exit_code == 0
+
+    @pytest.mark.asyncio()
+    async def test_prerequisites_checked_off_the_event_loop(self, tmp_path: Path) -> None:
+        """Anti-pattern #14: the blocking pre-flight (shutil.which + a
+        bash-version subprocess) must run on a worker thread, not the
+        wizard's event loop."""
+        import threading
+
+        extracted = _build_extracted(tmp_path)
+        output_root = _build_output_root(tmp_path)
+        loop_thread_id = threading.get_ident()
+        seen_thread_ids: list[int] = []
+
+        def _recording_check() -> None:
+            seen_thread_ids.append(threading.get_ident())
+
+        with (
+            patch.object(_runner, "_check_prerequisites", _recording_check),
+            patch.object(
+                _runner, "_extract_bash_to_temp", side_effect=_stub_extract_to(extracted)
+            ),
+            patch.object(
+                _runner.asyncio,
+                "create_subprocess_exec",
+                side_effect=_async_proc_factory(returncode=0),
+            ),
+        ):
+            await run_full_diag_async(output_root=output_root)
+
+        assert seen_thread_ids, "prerequisite check never ran"
+        assert seen_thread_ids[0] != loop_thread_id, (
+            "_check_prerequisites ran ON the event loop thread — the "
+            "anti-pattern #14 offload regressed"
+        )
 
 
 # ════════════════════════════════════════════════════════════════════

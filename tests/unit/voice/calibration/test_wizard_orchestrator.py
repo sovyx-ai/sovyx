@@ -865,3 +865,103 @@ class TestTerminalCurrentPromptStrip:
             "type": "speak",
             "phrase": "the quick brown fox",
         }
+
+
+# ====================================================================
+# Anti-pattern #14 residuals (audit 2026-07-02) — subprocess-backed
+# helpers must run OFF the event loop thread
+# ====================================================================
+
+
+@pytest.mark.asyncio()
+class TestBlockingHelpersOffloaded:
+    """Wave-B residual closure: ``capture_measurements`` (live amixer)
+    and ``resolve_active_mic_card`` (pactl/arecord) are subprocess-
+    backed; the orchestrator must dispatch both via
+    ``asyncio.to_thread`` so the dashboard WS progress + cancel polling
+    keep ticking. Regression: record the thread each helper runs on
+    and assert it is NOT the event-loop thread.
+    """
+
+    async def test_slow_path_offloads_measurer_and_mic_resolver(self, tmp_path: Path) -> None:
+        import threading
+
+        from sovyx.voice.calibration import _active_mic as am
+
+        loop_thread_id = threading.get_ident()
+        measure_threads: list[int] = []
+        resolver_threads: list[int] = []
+
+        def _recording_measure(**_kwargs: Any) -> MeasurementSnapshot:
+            measure_threads.append(threading.get_ident())
+            return _measurements()
+
+        def _recording_resolver(*, mind_config: Any) -> int | None:  # noqa: ARG001
+            resolver_threads.append(threading.get_ident())
+            return None
+
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        profile_path = tmp_path / "default" / "calibration.json"
+
+        with (
+            patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+            patch.object(wo, "run_full_diag_async", return_value=_diag_result()),
+            patch.object(wo, "triage_tarball", return_value=_triage()),
+            patch.object(wo, "capture_measurements", _recording_measure),
+            # Lazy `from ... import` in the orchestrator resolves on the
+            # SOURCE module at call time (CLAUDE.md #38) — patch there.
+            patch.object(am, "resolve_active_mic_card", _recording_resolver),
+            patch.object(wo.CalibrationEngine, "evaluate", return_value=_r10_profile()),
+            patch.object(
+                wo.CalibrationApplier,
+                "apply",
+                return_value=_apply_result(profile_path),
+            ),
+        ):
+            result = await orch.run(job_id="offloadjob", mind_id="default")
+
+        assert result.status == WizardStatus.DONE
+        assert measure_threads, "capture_measurements never ran"
+        assert all(t != loop_thread_id for t in measure_threads), (
+            "capture_measurements ran ON the event loop thread — "
+            "anti-pattern #14 offload regressed"
+        )
+        assert resolver_threads, "resolve_active_mic_card never ran"
+        assert all(t != loop_thread_id for t in resolver_threads), (
+            "resolve_active_mic_card ran ON the event loop thread — "
+            "anti-pattern #14 offload regressed"
+        )
+
+    async def test_fast_path_offloads_mic_resolver(self, tmp_path: Path) -> None:
+        import threading
+
+        from sovyx.voice.calibration import _active_mic as am
+
+        loop_thread_id = threading.get_ident()
+        resolver_threads: list[int] = []
+
+        def _recording_resolver(*, mind_config: Any) -> int | None:  # noqa: ARG001
+            resolver_threads.append(threading.get_ident())
+            return None
+
+        orch = WizardOrchestrator(data_dir=tmp_path)
+        profile_path = tmp_path / "default" / "calibration.json"
+
+        with (
+            patch.object(wo, "capture_fingerprint", return_value=_fingerprint()),
+            patch.object(wo, "lookup_profile", return_value=_r10_profile()),
+            patch.object(am, "resolve_active_mic_card", _recording_resolver),
+            patch.object(
+                wo.CalibrationApplier,
+                "apply",
+                return_value=_apply_result(profile_path),
+            ),
+        ):
+            result = await orch.run(job_id="fastoffload", mind_id="default")
+
+        assert result.status == WizardStatus.DONE
+        assert resolver_threads, "resolve_active_mic_card never ran on the fast path"
+        assert all(t != loop_thread_id for t in resolver_threads), (
+            "fast-path resolve_active_mic_card ran ON the event loop "
+            "thread — anti-pattern #14 offload regressed"
+        )

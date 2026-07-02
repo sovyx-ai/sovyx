@@ -274,6 +274,7 @@
     "enableSuccessRestart": "Modo exclusivo salvo. Reinicie o pipeline para aplicar.",
     "disableSuccess": "Modo exclusivo desabilitado. Reinicie para voltar ao modo compartilhado.",
     "failed": "Não foi possível atualizar o modo de captura: {{error}}",
+    "gpBlocked": "A Diretiva de Grupo do Windows bloqueia o modo exclusivo WASAPI (DisallowExclusiveDevice). Peça ao administrador do Windows para remover a diretiva, ou desabilite o aprimoramento de captura (ex.: Voice Clarity) nas configurações de aprimoramentos do dispositivo.",
     "knownApos": "APOs detectados: {{list}}",
     "activeDevice": "Microfone ativo: {{device}}"
   },

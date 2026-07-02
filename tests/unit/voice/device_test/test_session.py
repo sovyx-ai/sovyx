@@ -308,6 +308,120 @@ class TestSessionLifecycleV2:
         assert closed[-1]["reason"] == CloseReason.SESSION_REPLACED.value
 
 
+class _StarvedSource:
+    """Source whose device opens fine but whose callbacks never fire.
+
+    DOCTOR-6 reproduction: an APO wedge / driver freeze leaves the
+    PortAudio callback silent — ``frames()`` parks forever without
+    yielding. Pre-fix the session's ``async for`` never woke up, so
+    the max-lifetime / peer-alive / stop checks were unreachable and
+    the mic stayed held behind a frozen meter.
+    """
+
+    def __init__(self) -> None:
+        self._closed = False
+
+    async def open(self):  # noqa: ANN201 — mirrors AudioInputSource protocol
+        from sovyx.voice.device_test._source import AudioSourceInfo
+
+        return AudioSourceInfo(
+            device_id=0,
+            device_name="StarvedInput",
+            sample_rate=16_000,
+            channels=1,
+            blocksize=512,
+        )
+
+    async def close(self) -> None:
+        self._closed = True
+
+    async def frames(self):  # noqa: ANN201 — async generator that never yields
+        await asyncio.Event().wait()  # parks until cancelled
+        yield  # pragma: no cover — marks this as an async generator
+
+
+class TestSessionFrameStarvationDoctor6:
+    """DOCTOR-6 — liveness checks fire independent of frame arrival."""
+
+    @pytest.mark.asyncio()
+    async def test_starved_source_emits_device_error_within_peer_window(self) -> None:
+        """Zero frames for peer_alive_timeout_s → honest DEVICE_ERROR close."""
+        source = _StarvedSource()
+        sender = _RecordingSender()
+        session = TestSession(
+            session_id=new_session_id(),
+            source=source,
+            sender=sender,
+            config=_config(
+                frame_rate_hz=30,
+                max_lifetime_s=10.0,  # must NOT be the trigger
+                peer_alive_timeout_s=0.1,
+            ),
+        )
+        await asyncio.wait_for(session.run(), timeout=2.0)
+
+        types = [p["t"] for p in sender.payloads]
+        error_payloads = [p for p in sender.payloads if p["t"] == FrameType.ERROR.value]
+        assert error_payloads, "expected an honest ErrorFrame for the starved device"
+        assert error_payloads[-1]["code"] == ErrorCode.DEVICE_DISAPPEARED.value
+        assert types[-1] == FrameType.CLOSED.value
+        closed = [p for p in sender.payloads if p["t"] == FrameType.CLOSED.value]
+        assert closed[-1]["reason"] == CloseReason.DEVICE_ERROR.value
+        # The mic is released — the whole point of the cap.
+        assert source._closed is True  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_starved_source_hits_max_lifetime_when_peer_watchdog_disabled(
+        self,
+    ) -> None:
+        """max_lifetime is enforced even with zero frames (the documented cap)."""
+        source = _StarvedSource()
+        sender = _RecordingSender()
+        session = TestSession(
+            session_id=new_session_id(),
+            source=source,
+            sender=sender,
+            config=_config(
+                frame_rate_hz=30,
+                max_lifetime_s=0.1,
+                peer_alive_timeout_s=0.0,  # disabled
+            ),
+        )
+        await asyncio.wait_for(session.run(), timeout=2.0)
+
+        closed = [p for p in sender.payloads if p["t"] == FrameType.CLOSED.value]
+        assert closed
+        assert closed[-1]["reason"] == CloseReason.MAX_LIFETIME.value
+        assert source._closed is True  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_stop_interrupts_starved_wait(self) -> None:
+        """The stop-waiter races the frame await — stop lands promptly."""
+        source = _StarvedSource()
+        sender = _RecordingSender()
+        session = TestSession(
+            session_id=new_session_id(),
+            source=source,
+            sender=sender,
+            config=_config(
+                frame_rate_hz=30,
+                max_lifetime_s=30.0,
+                peer_alive_timeout_s=30.0,  # neither cap should be the trigger
+            ),
+        )
+        run_task = asyncio.create_task(session.run())
+        await asyncio.sleep(0.05)  # let it park in the frame wait
+        await session.stop(CloseReason.SERVER_SHUTDOWN)
+        # Bounded well below both caps — proves the stop event (not a
+        # deadline) interrupted the starved wait.
+        await asyncio.wait_for(run_task, timeout=2.0)
+
+        closed = [p for p in sender.payloads if p["t"] == FrameType.CLOSED.value]
+        assert closed
+        assert closed[-1]["reason"] == CloseReason.SERVER_SHUTDOWN.value
+        assert source._closed is True  # noqa: SLF001
+
+
 # --------------------------------------------------------------------------
 # Registry tests
 # --------------------------------------------------------------------------

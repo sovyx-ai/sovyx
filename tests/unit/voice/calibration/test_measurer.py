@@ -339,3 +339,21 @@ class TestTriageFlowThrough:
             result = capture_measurements(captured_at_utc="2026-05-05T18:00:00Z")
         assert result.triage_winner_hid is None
         assert result.triage_winner_confidence is None
+
+
+class TestLocalePinning:
+    """LINUX-6 residual: the amixer scontents parser string-matches
+    English control labels — the subprocess must pin LC_ALL=C via
+    linux_tool_env().
+    """
+
+    def test_safe_amixer_pins_locale(self) -> None:
+        from unittest.mock import MagicMock
+
+        completed = MagicMock(returncode=0, stdout="ok")
+        with patch.object(m.subprocess, "run", return_value=completed) as mock_run:
+            assert m._safe_amixer(["amixer", "-c", "0", "scontents"]) == "ok"
+        env = mock_run.call_args.kwargs.get("env")
+        assert env is not None, "amixer ran without a pinned environment"
+        assert env["LC_ALL"] == "C"
+        assert env["LANG"] == "C"

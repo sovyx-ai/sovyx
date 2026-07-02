@@ -37,6 +37,12 @@ Failure-isolation contract:
 * Unregister is wrapped in try/except so a wedged WMI service or COM
   marshalling glitch on one listener never blocks the pipeline
   shutdown path.
+* The MM listener's ``register()`` runs INLINE on the event loop
+  thread by design — offloading it to ``asyncio.to_thread`` would hit
+  ``CO_E_NOTINITIALIZED`` on COM-uninitialised executor workers and be
+  silently swallowed by the listener's defensive register contract.
+  See the threading note above the register call in
+  :meth:`ListenerWireupMixin._register_listeners`.
 
 Anti-pattern #32 contract: zero cross-mixin method calls. The 2
 async callbacks are passed AS REFERENCES (``self._on_default_capture_changed``
@@ -129,6 +135,34 @@ class ListenerWireupMixin:
             return
 
         # MM notification listener — Windows COM device-change events.
+        #
+        # THREADING NOTE (audit 2026-07-02, anti-pattern #14 sweep +
+        # #48 disposition): ``mm_listener.register()`` performs COM
+        # calls (``CoCreateInstance`` +
+        # ``RegisterEndpointNotificationCallback``) that can block if
+        # the Windows audio service is wedged. It is nonetheless
+        # invoked INLINE here on purpose — do NOT wrap it in
+        # ``asyncio.to_thread``: comtypes (verified at 1.4.16,
+        # ``comtypes/__init__.py`` module-level ``CoInitializeEx()``)
+        # initialises COM only on the thread that first imports it and
+        # ``comtypes.client.CreateObject`` does no per-thread init, so
+        # a default-executor worker without COM initialised fails with
+        # ``CO_E_NOTINITIALIZED`` — which the listener's defensive
+        # ``except BaseException`` register contract SWALLOWS into
+        # "registered=False + WARN". The offload would trade a rare
+        # blocking hazard (wedged audiosrv, opt-in flag that is
+        # default-OFF at HEAD — WINDOWS-7) for a deterministic silent
+        # registration failure. Same constraint is already documented
+        # for playback in :mod:`sovyx.voice.audio`
+        # (``_play_chunk``: "a requirement that asyncio.to_thread
+        # workers do not satisfy"). The real cure is a dedicated
+        # CoInitializeEx(MTA)-owning worker thread INSIDE
+        # ``WindowsMMNotificationListener`` (mirroring
+        # ``sovyx.voice.health._driver_update_listener_win
+        # .WindowsDriverUpdateListener._run_worker``) so register/
+        # unregister share one COM apartment — tracked as follow-up in
+        # MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02
+        # (#14-residual item 5).
         try:
             mm_listener = create_mm_notification_listener(
                 loop=loop,
