@@ -337,7 +337,7 @@ gh api repos/sovyx-ai/sovyx/actions/runs/$RUN/jobs \
   --jq '.jobs[] | select(.conclusion=="failure") | {name, steps: [.steps[]|select(.conclusion=="failure")|.name]}'
 ```
 
-A job with `conclusion=failure` and an EMPTY failed-steps list = infrastructure lock (billing / runner-pool outage), NOT a code failure — **hold the tag**. This is a bounded one-shot check on the main push, not prohibited CI-watching (`feedback_ci_watching` governs post-TAG watching). Recovery once the org is unlocked: `gh run rerun <publish-run-id>` (or `--failed`) — the tag and commit are intact, NO re-tag needed; a queued run that expired can be re-run from the workflow page within 30 days.
+A job with `conclusion=failure` and an EMPTY failed-steps list = infrastructure lock (billing / runner-pool outage), NOT a code failure — **hold the tag**. This is a bounded one-shot check on the main push, not prohibited CI-watching (`feedback_ci_watching` governs post-TAG watching). Recovery once the org is unlocked: `gh run rerun <publish-run-id>` (or `--failed`) — the tag and commit are intact, NO re-tag needed; a queued run that expired can be re-run from the workflow page within 30 days. **Recovery must SWEEP the whole outage window, not just the release run:** any run created during the lock carries hosted-job corpses (instant failures) alongside self-hosted jobs that ran fine after unlock — a mixed red run that resurfaces later as a false "CI broke again" alarm (this happened ~1 h after the v0.49.59 unlock). Sweep: `gh run list --limit 10`, and for every `failure` run overlapping the window whose failed jobs carry the lock annotation, `gh run rerun <id> --failed`.
 
 Per `feedback_ci_watching`: don't `gh run watch` — operator surfaces failures via validation backlog.
 
