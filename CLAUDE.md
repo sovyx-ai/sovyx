@@ -325,9 +325,19 @@ Definition of done: *a senior dev reading only the docs would not be misled by t
 
 1. Bump `version` in `pyproject.toml` (single source — `src/sovyx/__init__.py` reads via `importlib.metadata.version`).
 2. `uv lock` (CI enforces `--check`).
-3. `git commit` + `git tag vX.Y.Z` + `git push origin main` + `git push origin vX.Y.Z`.
-4. Tag triggers `publish.yml`: CI gate → dashboard build → `uv build` → PyPI (OIDC) → Release → Docker.
+3. `git commit` + `git push origin main` — then, BEFORE pushing the tag, run the **Actions-availability pre-flight** (see below).
+4. `git tag vX.Y.Z` + `git push origin vX.Y.Z` → `publish.yml`: CI gate → dashboard build → `uv build` → PyPI (OIDC) → Release → Docker.
 5. CI fail on tagged commit: fix + commit + re-tag (`git tag -d vX.Y.Z && git tag vX.Y.Z && git push origin vX.Y.Z --force`).
+
+**Actions-availability pre-flight (v0.49.59 incident):** the prior-tag check (`gh run list --workflow=publish.yml`) proves the PIPELINE was healthy at the LAST tag — it cannot see an org-level outage that happened since. v0.49.59 tagged clean against a green v0.49.58 and then every hosted-runner job died in 3-4 s: **`sovyx-ai` org locked for a billing issue** (annotation: "The job was not started because your account is locked due to a billing issue"), which kills GitHub-hosted jobs at "Set up job" (zero steps) AND freezes self-hosted job assignment. So, ~60 s after pushing main (step 3):
+
+```bash
+RUN=$(gh run list --branch main --workflow=ci.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+gh api repos/sovyx-ai/sovyx/actions/runs/$RUN/jobs \
+  --jq '.jobs[] | select(.conclusion=="failure") | {name, steps: [.steps[]|select(.conclusion=="failure")|.name]}'
+```
+
+A job with `conclusion=failure` and an EMPTY failed-steps list = infrastructure lock (billing / runner-pool outage), NOT a code failure — **hold the tag**. This is a bounded one-shot check on the main push, not prohibited CI-watching (`feedback_ci_watching` governs post-TAG watching). Recovery once the org is unlocked: `gh run rerun <publish-run-id>` (or `--failed`) — the tag and commit are intact, NO re-tag needed; a queued run that expired can be re-run from the workflow page within 30 days.
 
 Per `feedback_ci_watching`: don't `gh run watch` — operator surfaces failures via validation backlog.
 
