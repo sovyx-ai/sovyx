@@ -474,3 +474,88 @@ class TestComtypesWarningLatchAcrossCalls:
         ):
             _resolve_endpoint_to_pnp_id("{guid}")
         assert any("comtypes_unavailable" in r.message for r in caplog.records)
+
+
+# ── PROPVARIANT lifetime: _clear_propvariant (WINDOWS-15) ────────────
+
+
+class TestClearPropvariant:
+    """WINDOWS-15 regression: the ``IPropertyStore::GetValue``
+    PROPVARIANT is caller-owned per the COM contract — the VT_LPWSTR
+    payload is a CoTaskMemAlloc'd wide string that leaked on every
+    endpoint-fingerprint resolution until ``PropVariantClear`` was
+    wired into a ``finally``."""
+
+    def test_read_pnp_id_clears_propvariant_in_finally(self) -> None:
+        mock_propvariant = MagicMock(name="propvariant")
+        mock_propvariant.vt = 99  # not VT_LPWSTR → early return None
+        mock_propstore = MagicMock(name="propstore")
+        mock_propstore.GetValue = MagicMock(return_value=mock_propvariant)
+        with patch.object(module_under_test, "_clear_propvariant") as clear:
+            result = _read_pnp_id_from_property_store(mock_propstore)
+        assert result is None
+        clear.assert_called_once_with(mock_propvariant)
+
+    def test_read_pnp_id_clears_propvariant_on_happy_path(self) -> None:
+        import ctypes
+
+        pnp_string = r"USB\VID_1532&PID_0528\SER"
+        buf = ctypes.create_unicode_buffer(pnp_string)
+        ptr = ctypes.cast(buf, ctypes.c_void_p).value
+
+        mock_propvariant = MagicMock(name="propvariant")
+        mock_propvariant.vt = 31  # VT_LPWSTR
+        mock_propvariant.pwszVal = ptr
+        mock_propstore = MagicMock(name="propstore")
+        mock_propstore.GetValue = MagicMock(return_value=mock_propvariant)
+        with patch.object(module_under_test, "_clear_propvariant") as clear:
+            result = _read_pnp_id_from_property_store(mock_propstore)
+        assert result == pnp_string
+        clear.assert_called_once_with(mock_propvariant)
+
+    def test_get_value_failure_does_not_call_clear(self) -> None:
+        # Nothing was returned → nothing to free (clearing an
+        # uninitialised out-param is the caller's bug, not ours).
+        mock_propstore = MagicMock(name="propstore")
+        mock_propstore.GetValue = MagicMock(side_effect=OSError("com boom"))
+        with patch.object(module_under_test, "_clear_propvariant") as clear:
+            result = _read_pnp_id_from_property_store(mock_propstore)
+        assert result is None
+        clear.assert_not_called()
+
+    def test_clear_skips_non_ctypes_structure(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Test doubles carry no COM-owned memory; PropVariantClear on
+        # a Python-owned object would corrupt the heap. The skip
+        # leaves an anti-pattern-#27 debug trail.
+        import logging
+
+        with caplog.at_level(logging.DEBUG):
+            module_under_test._clear_propvariant(MagicMock(name="propvariant"))
+        assert any("propvariant_clear_skipped" in r.message for r in caplog.records)
+
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="ole32.PropVariantClear needs the Windows ABI",
+    )
+    def test_clear_real_empty_propvariant_roundtrip(self) -> None:
+        # A genuine VT_EMPTY PROPVARIANT-shaped struct — clearing must
+        # not raise and must zero the variant tag.
+        import ctypes
+
+        class _PropVariant(ctypes.Structure):
+            _fields_ = (
+                ("vt", ctypes.c_ushort),
+                ("wReserved1", ctypes.c_ushort),
+                ("wReserved2", ctypes.c_ushort),
+                ("wReserved3", ctypes.c_ushort),
+                ("pwszVal", ctypes.c_void_p),
+                ("_padding", ctypes.c_void_p),
+            )
+
+        pv = _PropVariant()
+        pv.vt = 0  # VT_EMPTY
+        module_under_test._clear_propvariant(pv)
+        assert pv.vt == 0

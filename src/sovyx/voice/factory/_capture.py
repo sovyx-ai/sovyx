@@ -55,6 +55,12 @@ def _build_bypass_strategies(platform_key: str) -> list[PlatformBypassStrategy]:
       :class:`~sovyx.voice.health.bypass.WindowsWASAPIExclusiveBypass`.
       The definitive fix for the Windows Voice Clarity /
       ``VocaEffectPack`` regression (CLAUDE.md anti-pattern #21).
+      Constructed with the boot-time Group Policy verdict
+      (WINDOWS-4 wire-up): ``DisallowExclusiveDevice=1`` makes the
+      strategy report ineligible (reason ``gp_exclusive_disallowed``)
+      instead of failing every apply attempt against an OS-enforced
+      block. :func:`detect_group_policies` never raises and is a
+      cheap one-shot registry read.
     * **linux** —
       :class:`~sovyx.voice.health.bypass.LinuxALSAMixerResetBypass`
       first (mandatory, default-on, non-destructive: mutates the
@@ -71,9 +77,15 @@ def _build_bypass_strategies(platform_key: str) -> list[PlatformBypassStrategy]:
       :class:`MacOSVPIODisable`.
     """
     if platform_key == "win32":
+        from sovyx.voice._group_policy_detector import detect_group_policies
         from sovyx.voice.health.bypass import WindowsWASAPIExclusiveBypass
 
-        return [WindowsWASAPIExclusiveBypass()]
+        snapshot = detect_group_policies()
+        return [
+            WindowsWASAPIExclusiveBypass(
+                exclusive_mode_disallowed=snapshot.exclusive_mode_disallowed,
+            )
+        ]
     if platform_key == "linux":
         from sovyx.voice.health.bypass import (
             LinuxALSACaptureSwitchBypass,

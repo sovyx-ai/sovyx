@@ -44,6 +44,7 @@ _STRATEGY_NAME = "win.wasapi_exclusive"
 # packages can key on them without string-literal drift.
 _REASON_NOT_WIN32 = "not_win32_platform"
 _REASON_NOT_WASAPI = "not_wasapi_endpoint"
+_REASON_GP_EXCLUSIVE_DISALLOWED = "gp_exclusive_disallowed"
 
 # Mission band-aid #19: pre-hardening the eligibility check used a
 # case-insensitive substring match — ``"WASAPI" in host_api.upper()``.
@@ -88,6 +89,15 @@ class WindowsWASAPIExclusiveBypass:
 
     Eligibility:
         * ``platform_key == "win32"``
+        * Group Policy does NOT disallow exclusive mode — the factory
+          plumbs the boot-time
+          :attr:`~sovyx.voice._group_policy_detector.GroupPolicySnapshot.exclusive_mode_disallowed`
+          bit into the constructor (WINDOWS-4 wire-up in
+          :func:`sovyx.voice.factory._capture._build_bypass_strategies`).
+          When ``DisallowExclusiveDevice=1`` the OS rejects every
+          exclusive open, so the strategy reports ineligible with
+          reason ``gp_exclusive_disallowed`` instead of burning an
+          apply attempt per deaf-signal incident.
         * ``host_api_name`` exact-matches the canonical allowlist
           :data:`_WASAPI_HOST_API_LABELS` after ``strip().lower()``
           normalisation (both the bare ``"WASAPI"`` label and
@@ -121,6 +131,21 @@ class WindowsWASAPIExclusiveBypass:
 
     name: str = _STRATEGY_NAME
 
+    def __init__(self, *, exclusive_mode_disallowed: bool = False) -> None:
+        """Construct the strategy with the boot-time GP verdict.
+
+        Args:
+            exclusive_mode_disallowed: The
+                :attr:`GroupPolicySnapshot.exclusive_mode_disallowed`
+                bit read once at boot (``DisallowExclusiveDevice=1``).
+                Defaults to ``False`` (no restriction) so a
+                snapshot-less caller — tests, non-fleet installs —
+                keeps the pre-gate behaviour. The default matches the
+                snapshot's own fail-open contract: a failed GP probe
+                presents as "no restriction".
+        """
+        self._exclusive_mode_disallowed = exclusive_mode_disallowed
+
     async def probe_eligibility(
         self,
         context: BypassContext,
@@ -129,6 +154,18 @@ class WindowsWASAPIExclusiveBypass:
             return Eligibility(
                 applicable=False,
                 reason=_REASON_NOT_WIN32,
+                estimated_cost_ms=0,
+            )
+        # WINDOWS-4: honour the boot-time Group Policy snapshot.
+        # DisallowExclusiveDevice=1 makes the OS reject EVERY
+        # exclusive open (PortAudio -9988 / E_ACCESSDENIED), so
+        # attempting Tier 3 would fail per incident with a cryptic
+        # error. Ineligible-with-reason keeps the coordinator's
+        # telemetry honest ("Tier 3 stays gracefully disabled").
+        if self._exclusive_mode_disallowed:
+            return Eligibility(
+                applicable=False,
+                reason=_REASON_GP_EXCLUSIVE_DISALLOWED,
                 estimated_cost_ms=0,
             )
         # Mission #19: exact-match against canonical allowlist instead

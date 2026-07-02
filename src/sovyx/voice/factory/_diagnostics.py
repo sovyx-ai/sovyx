@@ -683,12 +683,16 @@ def _emit_group_policy_detection() -> None:
 
     The most operator-actionable case is
     ``DisallowExclusiveDevice=1`` (enterprise fleet blocks
-    WASAPI exclusive mode). Sovyx's Tier 3 bypass becomes a
-    no-op in that scenario; Tier 1 (RAW) and Tier 2
-    (host_api_rotate) handle Voice Clarity-class incidents
-    instead. Surfacing the policy at boot gives operators a
-    chance to coordinate with their Windows admin BEFORE
-    debugging cryptic PortAudio -9988 errors mid-incident.
+    WASAPI exclusive mode). Tier 3 — the ONLY automatic bypass
+    in the production Windows ladder — is then reported
+    ineligible (reason ``gp_exclusive_disallowed``) by the
+    WINDOWS-4 gate in
+    :func:`sovyx.voice.factory._capture._build_bypass_strategies`,
+    leaving NO automatic Voice Clarity cure on such fleets;
+    remediation is manual (admin unsets the policy or disables
+    the offending APO). Surfacing the policy at boot gives
+    operators a chance to coordinate with their Windows admin
+    BEFORE debugging cryptic PortAudio -9988 errors mid-incident.
     """
     from sovyx.voice._group_policy_detector import (
         detect_group_policies,

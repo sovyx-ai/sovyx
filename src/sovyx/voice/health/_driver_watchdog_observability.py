@@ -40,11 +40,18 @@ continue to resolve correctly.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# Parses the T5.43 USB fingerprint shape ``usb-VVVV:PPPP[-SERIAL]``
+# produced by :func:`sovyx.voice.health._usb_fingerprint.fingerprint_usb_device`
+# into the (vid, pid) pair the Windows watchdog correlator needs.
+_USB_FP_VID_PID_RE = re.compile(r"^usb-([0-9a-f]{4}):([0-9a-f]{4})(?:-|$)")
 
 
 # Extracts the three identity pieces from a composed Linux endpoint
@@ -79,12 +86,61 @@ _MACOS_FP_DEVICE_RE = re.compile(
 )
 
 
+def _derive_windows_usb_vid_pid(endpoint_id: str) -> tuple[str, str] | None:
+    """Resolve a Windows endpoint identifier to its USB ``(vid, pid)``.
+
+    WINDOWS-5 correlation key: Kernel-PnP Driver Watchdog event
+    messages carry ONLY the PnP device instance path
+    (``USB\\VID_1532&PID_0528&MI_00\\…``), never the vendor friendly
+    name — so the pre-flight needs the target device's USB VID/PID
+    to tie an event to the device about to be probed. The chain is
+    the same one the combo store uses:
+    :func:`~sovyx.voice.health._endpoint_fingerprint_win.resolve_endpoint_to_usb_fingerprint`
+    (IMMDevice → PKEY_Device_InstanceId → ``usb-VVVV:PPPP[-SERIAL]``).
+
+    Accepts either endpoint-id shape in circulation:
+
+    * the full ``IMMDevice::GetId`` form ``{0.0.1.00000000}.{guid}``;
+    * the bare MMDevices registry-subkey form ``{guid}`` (what
+      :class:`~sovyx.voice._apo_detector.CaptureApoReport.endpoint_id`
+      / the win32 ``derive_endpoint_guid`` carry) — retried with the
+      capture-flow prefix, since ``GetDevice`` requires the full form.
+
+    Best-effort + blocking (COM IPC): returns ``None`` for non-USB
+    endpoints, surrogate / Linux / macOS fingerprints, or any COM
+    failure. Async callers MUST wrap in ``asyncio.to_thread`` (#14).
+    """
+    candidate = (endpoint_id or "").strip()
+    if not candidate.startswith("{"):
+        return None
+    if candidate.startswith(("{surrogate-", "{linux-", "{macos-")):
+        return None
+    from sovyx.voice.health._endpoint_fingerprint_win import (  # noqa: PLC0415 — lazy-Windows COM import
+        resolve_endpoint_to_usb_fingerprint,
+    )
+
+    fingerprint = resolve_endpoint_to_usb_fingerprint(candidate)
+    if fingerprint is None and "." not in candidate:
+        # Bare registry-subkey GUID → prepend the capture-flow prefix
+        # IMMDeviceEnumerator::GetDevice requires.
+        fingerprint = resolve_endpoint_to_usb_fingerprint(
+            "{0.0.1.00000000}." + candidate,
+        )
+    if not fingerprint:
+        return None
+    match = _USB_FP_VID_PID_RE.match(fingerprint)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
 async def _autofix_after_driver_watchdog_scan(
     *,
     resolved_name: str,
     device_interface_name: str,
     lookback_hours: int,
     timeout_s: float,
+    endpoint_id: str = "",
 ) -> bool:
     """Return the ``voice_clarity_autofix`` flag after the watchdog scan.
 
@@ -94,6 +150,16 @@ async def _autofix_after_driver_watchdog_scan(
     untouched tuning default) — we never make the cascade safer *by
     accident*; we only drop to shared-mode when we have positive
     evidence that the driver is fragile.
+
+    Correlation (WINDOWS-5 fix): the primary matcher is hardware
+    identity — ``endpoint_id`` is resolved to the device's USB
+    VID/PID (via :func:`_derive_windows_usb_vid_pid`, off-loop) and
+    matched against the ``vid_xxxx&pid_xxxx`` / ``vid_xxxx#pid_xxxx``
+    forms embedded in the event's PnP instance path. The
+    ``device_interface_name`` friendly-name substring remains a
+    SECONDARY heuristic only — real watchdog messages never carry
+    vendor display names, so before this fix the downgrade safety
+    net (v0.20.3 Razer Kernel-Power-41 post-mortem) never fired.
     """
     from sovyx.voice.health._driver_watchdog_win import (
         scan_recent_driver_watchdog_events,
@@ -115,19 +181,31 @@ async def _autofix_after_driver_watchdog_scan(
         return True
     # Events exist — but only override when we can tie at least one to
     # this specific device. A drift-printer watchdog should not disable
-    # APO-bypass on the USB headset.
-    targeted = scan.matches_device(device_interface_name)
+    # APO-bypass on the USB headset. Hardware identity (USB VID/PID)
+    # is the load-bearing matcher; the friendly-name substring is a
+    # secondary heuristic for needles that are already PnP-path-shaped.
+    # VID/PID derivation is COM IPC → off-loop per anti-pattern #14,
+    # and only paid when events actually exist.
+    vid_pid = await asyncio.to_thread(_derive_windows_usb_vid_pid, endpoint_id)
+    hardware_targeted = vid_pid is not None and scan.matches_hardware_id(
+        usb_vid=vid_pid[0],
+        usb_pid=vid_pid[1],
+    )
+    targeted = hardware_targeted or scan.matches_device(device_interface_name)
     if not targeted:
         logger.info(
             "voice_driver_watchdog_preflight_unrelated",
             device=resolved_name,
             event_count=len(scan.events),
+            usb_vid_pid=":".join(vid_pid) if vid_pid else None,
         )
         return True
     logger.warning(
         "voice_driver_watchdog_preflight_downgrade",
         device=resolved_name,
         device_interface_name=device_interface_name,
+        matched_by="hardware_id" if hardware_targeted else "friendly_name",
+        usb_vid_pid=":".join(vid_pid) if vid_pid else None,
         event_count=len(scan.events),
         lookback_hours=lookback_hours,
         remediation=(
@@ -435,6 +513,7 @@ __all__ = [
     "_LINUX_FP_USB_RE",
     "_MACOS_FP_DEVICE_RE",
     "_autofix_after_driver_watchdog_scan",
+    "_derive_windows_usb_vid_pid",
     "_extract_linux_watchdog_hints",
     "_extract_macos_watchdog_hints",
     "_log_linux_driver_watchdog_scan",

@@ -3,13 +3,18 @@
 Coverage:
 
 * BUSY class: AUDCLNT_E_DEVICE_IN_USE / 0x8889000a /
-  paDeviceUnavailable (-9985) / "device or resource busy".
+  paDeviceUnavailable (-9985) / "device or resource busy" /
+  AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED ALONE (WINDOWS-3 fix — the
+  bare macro means transient contention, not a GP block).
 * UNSUPPORTED class: AUDCLNT_E_UNSUPPORTED_FORMAT / 0x88890008 /
   paBadIODeviceCombination (-9988) / paInvalidDevice (-9996) /
   "format not supported".
 * GP_BLOCKED class: E_ACCESSDENIED / "access is denied" /
   "group policy" / AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED paired
-  with access-denied wording.
+  with access-denied evidence — including LOCALE-NEUTRAL evidence:
+  a bare hex 0x80070005 / decimal -2147024891 HRESULT with no
+  English prose at all (WINDOWS-3 fix — pt-BR Windows surfaces
+  "Acesso negado", so English words must never be required).
 * OTHER catch-all when nothing matches.
 * Detail field truncated to 256 chars.
 * Priority ordering: GP_BLOCKED outranks BUSY (the
@@ -47,6 +52,19 @@ class TestBusyClass:
         assert report.failure_class == ExclusiveOpenFailureClass.BUSY
         assert "another app" in report.remediation.lower()
 
+    def test_exclusive_mode_not_allowed_alone_is_busy(self) -> None:
+        # WINDOWS-3 regression: the docstring always promised
+        # BUSY-when-alone, but the macro's own substring satisfied the
+        # old GP secondary guard, so the bare macro (the common
+        # "another exclusive client holds the device" surface) was
+        # misrouted to GP_BLOCKED with a "coordinate with your Windows
+        # admin" remediation for a transient contention.
+        report = classify_exclusive_open_failure(
+            _err("AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED"),
+        )
+        assert report.failure_class == ExclusiveOpenFailureClass.BUSY
+        assert "another app" in report.remediation.lower()
+
 
 class TestUnsupportedClass:
     @pytest.mark.parametrize(
@@ -81,6 +99,35 @@ class TestGpBlockedClass:
         report = classify_exclusive_open_failure(_err(msg))
         assert report.failure_class == ExclusiveOpenFailureClass.GP_BLOCKED
         assert "policy" in report.remediation.lower()
+
+    def test_pure_hex_access_denied_is_gp_blocked(self) -> None:
+        # WINDOWS-3 regression: the bare hex HRESULT used to fail the
+        # English-word secondary guard and fall through to OTHER with
+        # a useless "file an issue" remediation. Hex HRESULTs are
+        # locale-neutral and MUST be first-class triggers.
+        report = classify_exclusive_open_failure(_err("0x80070005"))
+        assert report.failure_class == ExclusiveOpenFailureClass.GP_BLOCKED
+
+    def test_decimal_access_denied_is_gp_blocked(self) -> None:
+        report = classify_exclusive_open_failure(_err("HRESULT -2147024891"))
+        assert report.failure_class == ExclusiveOpenFailureClass.GP_BLOCKED
+
+    def test_macro_paired_with_hex_is_gp_blocked(self) -> None:
+        report = classify_exclusive_open_failure(
+            _err("AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED (0x80070005)"),
+        )
+        assert report.failure_class == ExclusiveOpenFailureClass.GP_BLOCKED
+
+    def test_localized_ptbr_prose_with_hex_is_gp_blocked(self) -> None:
+        # Real localized-Windows shape: FormatMessage prose is
+        # pt-BR ("Acesso negado"), so the only stable evidence is the
+        # hex HRESULT. Pre-fix this routed to OTHER.
+        report = classify_exclusive_open_failure(
+            _err(
+                "AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED — Acesso negado (0x80070005)",
+            ),
+        )
+        assert report.failure_class == ExclusiveOpenFailureClass.GP_BLOCKED
 
 
 class TestOtherClass:

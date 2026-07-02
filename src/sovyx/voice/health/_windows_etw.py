@@ -28,9 +28,23 @@ This module ships:
   across the audio channels and returns one :class:`EtwQueryResult`
   per channel. Bounded subprocess calls; never raises.
 
-Discovery method: ``wevtutil qe`` — built into every Windows since
-Vista, no external dependency, runs without elevation against
+Discovery method: ``wevtutil qe … /f:XML`` — built into every Windows
+since Vista, no external dependency, runs without elevation against
 operational channels. Bounded 5 s timeout per channel.
+
+The XML render mode is deliberate (WINDOWS-2 audit fix): the legacy
+``/f:Text`` mode is locale/format-fragile — the ``Level:`` VALUE is
+localized (pt-BR emits ``Informações`` / ``Aviso``), and the
+``Event[N]`` block header is emitted WITHOUT the trailing colon on
+real Windows 11 hosts, so a colon-requiring splitter parsed ZERO
+events (silently blind probe). ``/f:XML`` carries the numeric
+``<Level>`` element plus ``<TimeCreated>`` / ``<Provider>`` /
+``<EventID>``, all fully locale-neutral. wevtutil emits the events as
+a CONCATENATED sequence of ``<Event>`` roots (no enclosing document
+element); the parser wraps them in a synthetic root before handing
+the string to :mod:`xml.etree.ElementTree`. Channel absence is
+detected via the ``ERROR_EVT_CHANNEL_NOT_FOUND`` return code (15007 /
+``0x3A9F``), never via localized stderr text.
 
 Design contract (mirrors WI2):
 
@@ -51,6 +65,14 @@ import subprocess  # noqa: S404 — fixed-argv subprocess to trusted Win event l
 import sys
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+from defusedxml import ElementTree as ET  # noqa: N817 — stdlib-style alias.
+
+if TYPE_CHECKING:
+    from xml.etree.ElementTree import (
+        Element,  # nosec B405 — typing-only; parsing goes through defusedxml
+    )
 
 from sovyx.observability.logging import get_logger
 
@@ -92,10 +114,11 @@ class EtwEventLevel(StrEnum):
     """Closed-set vocabulary for Windows Event Log levels.
 
     Maps the Windows ``Level`` integer codes to readable tokens.
-    The wevtutil text format already emits the textual form, so we
-    parse the token directly — these constants are the canonical
-    set. UNKNOWN is the inconclusive bucket (parse failure, missing
-    level field)."""
+    The wevtutil XML render carries the NUMERIC ``<Level>`` element
+    (locale-neutral — the textual form is localized, e.g. pt-BR
+    ``Informações``), so parsing maps the integer via
+    :data:`_MICROSOFT_LEVEL_TO_LEVEL`. UNKNOWN is the inconclusive
+    bucket (parse failure, missing / out-of-range level element)."""
 
     CRITICAL = "critical"
     """Microsoft level 1 — driver crash, audio service hang."""
@@ -120,26 +143,32 @@ class EtwEventLevel(StrEnum):
     """Probe parse failure or missing Level field."""
 
 
-_LEVEL_TOKENS: dict[str, EtwEventLevel] = {
-    "CRITICAL": EtwEventLevel.CRITICAL,
-    "ERROR": EtwEventLevel.ERROR,
-    "WARNING": EtwEventLevel.WARNING,
-    "INFORMATION": EtwEventLevel.INFO,
-    "INFORMATIONAL": EtwEventLevel.INFO,
-    "INFO": EtwEventLevel.INFO,
-    "VERBOSE": EtwEventLevel.VERBOSE,
+_MICROSOFT_LEVEL_TO_LEVEL: dict[int, EtwEventLevel] = {
+    # Microsoft numeric levels per winmeta.xml. Level 0 is LogAlways
+    # ("always logged", no severity attached) — bucketed as INFO so a
+    # provider that emits it doesn't surface as UNKNOWN severity.
+    0: EtwEventLevel.INFO,
+    1: EtwEventLevel.CRITICAL,
+    2: EtwEventLevel.ERROR,
+    3: EtwEventLevel.WARNING,
+    4: EtwEventLevel.INFO,
+    5: EtwEventLevel.VERBOSE,
 }
+"""Numeric ``<Level>`` → :class:`EtwEventLevel`. Locale-neutral by
+construction — replaces the pre-WINDOWS-2 English-token table that
+mapped every localized level value to UNKNOWN."""
 
 
 @dataclass(frozen=True, slots=True)
 class EtwEvent:
     """One parsed event from a Windows audio operational channel.
 
-    The fields are the subset of the wevtutil text-format event
-    record that's stable across Windows versions and useful for
-    operator-facing diagnostics. ``raw_text`` carries the full
-    event block (truncated) so the dashboard can render it for
-    forensic deep-dives without a second wevtutil call."""
+    The fields are the subset of the wevtutil XML event record
+    (``<System>`` children + ``<EventData>``) that's stable across
+    Windows versions and useful for operator-facing diagnostics.
+    ``raw_text`` carries the full event XML (truncated) so the
+    dashboard can render it for forensic deep-dives without a
+    second wevtutil call."""
 
     channel: str
     """The event log channel the event was read from
@@ -154,17 +183,22 @@ class EtwEvent:
     can look these up in Microsoft docs."""
 
     timestamp_iso: str = ""
-    """ISO 8601 timestamp from the ``Date:`` field, verbatim. Empty
-    when parsing failed."""
+    """ISO 8601 timestamp from ``<TimeCreated SystemTime='…'/>``,
+    verbatim. Empty when parsing failed."""
 
     provider: str = ""
-    """The provider name (e.g. ``"Microsoft-Windows-Audio"``)."""
+    """The provider name from ``<Provider Name='…'/>``
+    (e.g. ``"Microsoft-Windows-Audio"``)."""
 
     description: str = ""
-    """Human-readable description, first 512 chars."""
+    """``Name=value`` pairs synthesized from the event's
+    ``<EventData>`` children, first 512 chars. The XML render carries
+    the raw event payload rather than a (localized) rendered message —
+    the payload values are what triage actually greps for (device
+    names, endpoint IDs, state codes)."""
 
     raw_text: str = ""
-    """Verbatim event block from wevtutil, truncated to 4 KB."""
+    """Verbatim per-event XML from wevtutil, truncated to 4 KB."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,7 +330,11 @@ def _query_one_channel(
         f"/q:{xpath}",
         f"/c:{max_events}",
         "/rd:true",
-        "/f:Text",
+        # XML render — locale-neutral numeric <Level> + attribute-form
+        # provider/timestamp. NEVER /f:Text: its Level VALUE is
+        # localized and its Event[N] header format drifts across
+        # Windows builds (see module docstring, WINDOWS-2).
+        "/f:XML",
     )
     try:
         result = subprocess.run(
@@ -322,10 +360,14 @@ def _query_one_channel(
         )
 
     if result.returncode != 0:
-        stderr_lower = result.stderr.lower()
-        if "channel" in stderr_lower and (
-            "not found" in stderr_lower or "could not be found" in stderr_lower
-        ):
+        # Locale-neutral channel-absence check: wevtutil exits with
+        # ERROR_EVT_CHANNEL_NOT_FOUND (15007 / 0x3A9F; empirically
+        # rc=15007 on Windows 11) when the channel doesn't exist on
+        # this SKU. The pre-WINDOWS-2 code grepped stderr for the
+        # ENGLISH "not found" phrase — pt-BR emits "Não foi possível
+        # encontrar o canal especificado.", misclassifying a merely-
+        # absent channel as a probe failure.
+        if _is_channel_not_found_returncode(result.returncode):
             return EtwQueryResult(
                 channel=channel,
                 lookback_seconds=lookback_seconds,
@@ -340,13 +382,33 @@ def _query_one_channel(
             notes=tuple(notes),
         )
 
-    events = _parse_wevtutil_text_output(result.stdout, channel=channel)
+    events = _parse_wevtutil_xml_output(result.stdout, channel=channel, notes=notes)
     return EtwQueryResult(
         channel=channel,
         events=events,
         lookback_seconds=lookback_seconds,
         notes=tuple(notes),
     )
+
+
+_CHANNEL_NOT_FOUND_WIN32 = 15007
+"""``ERROR_EVT_CHANNEL_NOT_FOUND`` (winerror.h, ``0x3A9F``) — the exit
+code wevtutil returns for a channel that doesn't exist on this
+Windows SKU. Empirically verified rc=15007 on this Windows 11 host."""
+
+_CHANNEL_NOT_FOUND_HRESULT = 0x80073A9F
+"""HRESULT-wrapped form of :data:`_CHANNEL_NOT_FOUND_WIN32`
+(``HRESULT_FROM_WIN32(15007)``) — accepted defensively in case a
+Windows build surfaces the HRESULT instead of the bare Win32 code."""
+
+
+def _is_channel_not_found_returncode(returncode: int) -> bool:
+    """Return ``True`` when ``returncode`` signals channel-not-found.
+
+    Masks to unsigned 32-bit first so an HRESULT surfaced as a
+    negative CPython exit code still matches."""
+    rc = returncode & 0xFFFFFFFF
+    return rc in (_CHANNEL_NOT_FOUND_WIN32, _CHANNEL_NOT_FOUND_HRESULT)
 
 
 def _level_to_microsoft_int(level: EtwEventLevel) -> int:
@@ -372,102 +434,96 @@ def _level_to_microsoft_int(level: EtwEventLevel) -> int:
 # ── Parser ────────────────────────────────────────────────────────
 
 
-def _parse_wevtutil_text_output(
+def _local_tag(tag: str) -> str:
+    """Strip the ``{namespace}`` prefix from an ElementTree tag."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _parse_wevtutil_xml_output(
     stdout: str,
     *,
     channel: str,
+    notes: list[str],
 ) -> tuple[EtwEvent, ...]:
-    """Parse the ``wevtutil qe /f:Text`` output into events.
+    """Parse ``wevtutil qe … /f:XML`` output into events.
 
-    Output format (one event)::
+    Real wevtutil output (empirically captured on Windows 11) is a
+    CONCATENATED sequence of ``<Event xmlns='…'>…</Event>`` roots with
+    no enclosing document element and no separators::
 
-        Event[0]:
-          Log Name: Microsoft-Windows-Audio/Operational
-          Source: Microsoft-Windows-Audio
-          Date: 2026-04-25T12:34:56.789Z
-          Event ID: 65
-          Task: N/A
-          Level: Warning
-          Opcode: N/A
-          Keyword: N/A
-          User: S-1-5-18
-          User Name: NT AUTHORITY\\SYSTEM
-          Computer: HOSTNAME
-          Description:
-          <multi-line description text>
+        <Event xmlns='…'><System><Provider Name='Microsoft-Windows-Audio' …/>
+        <EventID>65</EventID>…<Level>4</Level>…
+        <TimeCreated SystemTime='2026-02-22T15:46:34.3677596Z'/>…</System>
+        <EventData><Data Name='DeviceName'>…</Data>…</EventData></Event><Event …
 
-    Events are separated by ``Event[N]:`` headers. Description is
-    everything after the ``Description:`` line until the next
-    ``Event[N]:`` or end-of-input.
+    The parser wraps the sequence in a synthetic root so ElementTree
+    accepts it, then extracts the locale-neutral fields per event.
+    A malformed payload appends a structured note (probe-failure
+    isolation — NEVER silently blind) and returns no events. Empty
+    stdout is a healthy quiet channel: no events, no notes.
     """
+    if not stdout.strip():
+        return ()
+    try:
+        root = ET.fromstring(f"<SovyxEvents>{stdout}</SovyxEvents>")
+    except ET.ParseError as exc:
+        notes.append(f"wevtutil XML parse failed: {exc}")
+        return ()
     events: list[EtwEvent] = []
-    blocks = _split_event_blocks(stdout)
-    for block in blocks:
-        ev = _parse_single_event_block(block, channel=channel)
-        if ev is not None:
-            events.append(ev)
+    for element in root:
+        if _local_tag(element.tag) != "Event":
+            continue
+        events.append(_parse_single_event_element(element, channel=channel))
     return tuple(events)
 
 
-def _split_event_blocks(stdout: str) -> list[str]:
-    """Split wevtutil text output into per-event blocks.
+def _parse_single_event_element(
+    element: Element,
+    *,
+    channel: str,
+) -> EtwEvent:
+    """Parse one ``<Event>`` element into :class:`EtwEvent`.
 
-    Blocks start with ``Event[N]:`` (where N is a non-negative
-    integer). The header line itself is dropped from the block —
-    the body is everything until the next ``Event[`` or EOF."""
-    blocks: list[str] = []
-    current: list[str] = []
-    in_block = False
-    for raw_line in stdout.splitlines():
-        if raw_line.startswith("Event[") and "]:" in raw_line:
-            if in_block and current:
-                blocks.append("\n".join(current))
-            current = []
-            in_block = True
-            continue
-        if in_block:
-            current.append(raw_line)
-    if in_block and current:
-        blocks.append("\n".join(current))
-    return blocks
+    Total: a partial / malformed element still yields an event with
+    UNKNOWN level + ``event_id=0`` rather than being dropped — the
+    ``raw_text`` XML is still useful for forensic deep-dives."""
+    level = EtwEventLevel.UNKNOWN
+    event_id = 0
+    timestamp = ""
+    provider = ""
+    data_parts: list[str] = []
 
+    for section in element:
+        section_tag = _local_tag(section.tag)
+        if section_tag == "System":
+            for child in section:
+                child_tag = _local_tag(child.tag)
+                if child_tag == "Level":
+                    # Distinguish "element absent / garbage" (UNKNOWN)
+                    # from a genuine numeric 0 (LogAlways → INFO) —
+                    # _safe_int's 0-fallback would conflate the two.
+                    level_int = _safe_int_or_none(child.text or "")
+                    if level_int is not None:
+                        level = _MICROSOFT_LEVEL_TO_LEVEL.get(
+                            level_int,
+                            EtwEventLevel.UNKNOWN,
+                        )
+                elif child_tag == "EventID":
+                    event_id = _safe_int(child.text or "")
+                elif child_tag == "TimeCreated":
+                    timestamp = child.get("SystemTime", "")
+                elif child_tag == "Provider":
+                    provider = child.get("Name", "")
+        elif section_tag == "EventData":
+            for data in section:
+                if _local_tag(data.tag) != "Data":
+                    continue
+                value = (data.text or "").strip()
+                name = data.get("Name", "")
+                data_parts.append(f"{name}={value}" if name else value)
 
-def _parse_single_event_block(block: str, *, channel: str) -> EtwEvent | None:
-    """Parse one event block into :class:`EtwEvent`.
-
-    Returns ``None`` if the block has no recognisable fields (e.g.
-    truncated output). On partial parse, returns an event with
-    UNKNOWN level + ``event_id=0`` rather than dropping it — the
-    raw_text is still useful for forensic."""
-    if not block.strip():
-        return None
-    fields: dict[str, str] = {}
-    description_lines: list[str] = []
-    in_description = False
-    for raw_line in block.splitlines():
-        line = raw_line.rstrip()
-        if in_description:
-            description_lines.append(line)
-            continue
-        stripped = line.strip()
-        if stripped.lower().startswith("description:"):
-            in_description = True
-            after = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
-            if after:
-                description_lines.append(after)
-            continue
-        if ":" not in stripped:
-            continue
-        key, _, value = stripped.partition(":")
-        fields[key.strip().lower()] = value.strip()
-
-    event_id = _safe_int(fields.get("event id", "0"))
-    level_token = fields.get("level", "").upper()
-    level = _LEVEL_TOKENS.get(level_token, EtwEventLevel.UNKNOWN)
-    timestamp = fields.get("date", "")
-    provider = fields.get("source", "")
-    description = " ".join(s for s in description_lines if s.strip())
-    raw_text = block[:_RAW_TEXT_TRUNCATE_BYTES]
+    raw_text = ET.tostring(element, encoding="unicode")[:_RAW_TEXT_TRUNCATE_BYTES]
+    description = " ".join(part for part in data_parts if part)
 
     return EtwEvent(
         channel=channel,
@@ -485,6 +541,15 @@ def _safe_int(value: str) -> int:
         return int(value.strip())
     except (ValueError, AttributeError):
         return 0
+
+
+def _safe_int_or_none(value: str) -> int | None:
+    """Like :func:`_safe_int` but with a ``None`` (not ``0``) fallback —
+    for fields where ``0`` is a legitimate distinct value."""
+    try:
+        return int(value.strip())
+    except (ValueError, AttributeError):
+        return None
 
 
 __all__ = [

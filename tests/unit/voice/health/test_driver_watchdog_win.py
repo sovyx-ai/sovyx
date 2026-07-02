@@ -26,6 +26,48 @@ from sovyx.voice.health._driver_watchdog_win import (
     scan_recent_driver_watchdog_events,
 )
 
+# Verbatim Kernel-PnP Driver Watchdog 900 event message captured on the
+# operator's pt-BR Windows 11 host (2026-04-19, read-only Get-WinEvent) —
+# the EXACT hardware of the v0.20.3 Kernel-Power-41 post-mortem
+# (VID_1532 = Razer, PID_0528 = BlackShark V2 Pro). Note: the message
+# carries ONLY the PnP device instance path + localized prose; the
+# vendor friendly name ("Razer BlackShark V2 Pro") appears NOWHERE.
+_REAL_RAZER_900_MESSAGE = (
+    "Um thread de execução longa para a fila de eventos do dispositivo "
+    "foi detectado. O thread está sendo executado por 3004 milissegundos.\n"
+    "ID do Thread: 0x25DC\n"
+    "Dispositivo: USB\\VID_1532&PID_0528&MI_00\\6&191a269&0&0000\n"
+    "Serviço: usbaudio\n"
+    "Categoria do Evento: 1\n"
+    "GUID do Evento:argumento do evento  {cb3a400e-46f0-11d0-b08f-00609713053f}\n"
+    ":status do argumento  0x15\n"
+    ":dados específicos da categoria  0x0\n"
+    ":\n"
+    "{00000000-0000-0000-0000-000000000000}\n"
+    "USB\\VID_1532&PID_0528&MI_00\\6&191a269&0&0000"
+)
+
+_REAL_RAZER_900_EVENT = DriverWatchdogEvent(
+    event_id=900,
+    time_created_iso="2026-04-19T23:34:28.3999662Z",
+    message_excerpt=_REAL_RAZER_900_MESSAGE[:512],
+)
+
+# Storage-class watchdog event from the same host — carries the
+# '#'-separated symbolic-link form of the PnP path (no VID/PID; a
+# USB mass-storage volume). Used to pin the unrelated-device negative.
+_REAL_STORAGE_900_MESSAGE = (
+    "Um thread de execução longa para a fila de eventos do dispositivo "
+    "foi detectado. O thread está sendo executado por 3014 milissegundos.\n"
+    "ID do Thread: 0x3D28\n"
+    "Dispositivo: \n"
+    "Serviço: \n"
+    "Categoria do Evento: 2\n"
+    "\\??\\STORAGE#Volume#_??_USBSTOR#Disk&Ven_&Prod_USB_DISK_2.0&Rev_PMAP"
+    "#2700431667F32C96&0#{53f56307-b6bf-11d0-94f2-00a0c91efb8b}"
+    "#{53f5630d-b6bf-11d0-94f2-00a0c91efb8b}"
+)
+
 # ---------------------------------------------------------------------------
 # DriverWatchdogScan.matches_device
 # ---------------------------------------------------------------------------
@@ -79,6 +121,19 @@ class TestMatchesDevice:
         scan = DriverWatchdogScan(scan_attempted=True, events=())
         assert scan.matches_device("anything") is False
 
+    def test_friendly_name_never_matches_real_event_message(self) -> None:
+        # WINDOWS-5 defect documentation: real watchdog messages carry
+        # ONLY the PnP instance path — a vendor friendly name (what
+        # both production callers used to pass as the sole needle)
+        # can never match, which is why the Kernel-Power-41 downgrade
+        # safety net never fired. Hardware-identity matching
+        # (matches_hardware_id below) is the load-bearing correlator.
+        scan = DriverWatchdogScan(
+            scan_attempted=True,
+            events=(_REAL_RAZER_900_EVENT,),
+        )
+        assert scan.matches_device("Razer BlackShark V2 Pro") is False
+
     def test_any_events_property(self) -> None:
         empty = DriverWatchdogScan(scan_attempted=True, events=())
         assert empty.any_events is False
@@ -93,6 +148,86 @@ class TestMatchesDevice:
             ),
         )
         assert populated.any_events is True
+
+
+# ---------------------------------------------------------------------------
+# DriverWatchdogScan.matches_hardware_id (WINDOWS-5)
+# ---------------------------------------------------------------------------
+
+
+class TestMatchesHardwareId:
+    """WINDOWS-5 regression: hardware-identity correlation against the
+    REAL captured 900-event message shape."""
+
+    def test_real_razer_event_targets_razer_vid_pid(self) -> None:
+        scan = DriverWatchdogScan(
+            scan_attempted=True,
+            events=(_REAL_RAZER_900_EVENT,),
+        )
+        assert scan.matches_hardware_id(usb_vid="1532", usb_pid="0528") is True
+
+    def test_real_razer_event_case_insensitive(self) -> None:
+        scan = DriverWatchdogScan(
+            scan_attempted=True,
+            events=(_REAL_RAZER_900_EVENT,),
+        )
+        assert scan.matches_hardware_id(usb_vid="1532", usb_pid="0528") is True
+        # Uppercase / padded input normalised.
+        assert scan.matches_hardware_id(usb_vid=" 1532 ", usb_pid="0528") is True
+
+    def test_unrelated_device_does_not_match_real_event(self) -> None:
+        scan = DriverWatchdogScan(
+            scan_attempted=True,
+            events=(_REAL_RAZER_900_EVENT,),
+        )
+        # Logitech C922 — present on the host but NOT in the event.
+        assert scan.matches_hardware_id(usb_vid="046d", usb_pid="0892") is False
+
+    def test_storage_event_does_not_match_audio_device(self) -> None:
+        # A drift storage-volume watchdog event must not downgrade the
+        # USB headset.
+        scan = DriverWatchdogScan(
+            scan_attempted=True,
+            events=(
+                DriverWatchdogEvent(
+                    event_id=900,
+                    time_created_iso="2026-04-21T20:26:59.1320254Z",
+                    message_excerpt=_REAL_STORAGE_900_MESSAGE[:512],
+                ),
+            ),
+        )
+        assert scan.matches_hardware_id(usb_vid="1532", usb_pid="0528") is False
+
+    def test_hash_separated_form_matches(self) -> None:
+        # Defensive: PnP symbolic links replace path separators with
+        # '#' (see the real STORAGE event above) — accept a rendering
+        # that also '#'-separates the VID/PID pair itself.
+        scan = DriverWatchdogScan(
+            scan_attempted=True,
+            events=(
+                DriverWatchdogEvent(
+                    event_id=900,
+                    time_created_iso="2026-04-20T00:00:00Z",
+                    message_excerpt=(
+                        "\\??\\USB#VID_1532#PID_0528#6&191a269&0&0000"
+                        "#{6994ad04-93ef-11d0-a3cc-00a0c9223196}"
+                    ),
+                ),
+            ),
+        )
+        assert scan.matches_hardware_id(usb_vid="1532", usb_pid="0528") is True
+
+    def test_empty_vid_or_pid_returns_false(self) -> None:
+        scan = DriverWatchdogScan(
+            scan_attempted=True,
+            events=(_REAL_RAZER_900_EVENT,),
+        )
+        assert scan.matches_hardware_id(usb_vid="", usb_pid="0528") is False
+        assert scan.matches_hardware_id(usb_vid="1532", usb_pid="  ") is False
+
+    def test_empty_events_never_match(self) -> None:
+        scan = DriverWatchdogScan(scan_attempted=True, events=())
+        assert scan.matches_hardware_id(usb_vid="1532", usb_pid="0528") is False
 
 
 # ---------------------------------------------------------------------------

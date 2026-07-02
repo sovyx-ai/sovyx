@@ -542,6 +542,37 @@ class TestReadStringProperty:
         result = _read_string_property(mock_class_object, "anything")
         assert result is None
 
+    def test_swallowed_read_failure_leaves_debug_trail(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """WINDOWS-14 / anti-pattern #27: the intentional ignore MUST
+        log — a malformed driver-update event used to vanish with zero
+        trace (the Indicate loop just ``continue``s). The debug record
+        fires whether the failure is the comtypes import (slim CI) or
+        the COM Get call itself (Windows)."""
+        import logging
+
+        mock_class_object = MagicMock(name="class_object")
+        mock_class_object.Get = MagicMock(side_effect=OSError("WBEM_E_NOT_FOUND"))
+        with caplog.at_level(logging.DEBUG):
+            result = _read_string_property(mock_class_object, "PNPDeviceID")
+        assert result is None
+        assert any("variant_read_skipped" in r.message for r in caplog.records)
+
+    def test_target_instance_read_failure_leaves_debug_trail(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        mock_event_object = MagicMock(name="event_object")
+        mock_event_object.Get = MagicMock(side_effect=OSError("WBEM_E_FAILED"))
+        with caplog.at_level(logging.DEBUG):
+            result = _read_target_instance(mock_event_object, MagicMock())
+        assert result is None
+        assert any("variant_read_skipped" in r.message for r in caplog.records)
+
 
 class TestUnwrapVariantToString:
     """Pure-helper coverage for the VARIANT-value coercion rules.

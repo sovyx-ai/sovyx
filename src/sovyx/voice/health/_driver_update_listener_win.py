@@ -866,7 +866,16 @@ def _read_target_instance(event_object: Any, class_object_cls: Any) -> Any | Non
             byref(ctype),
             byref(flavor),
         )
-    except BaseException:  # noqa: BLE001 — best-effort read; COM call may raise
+    except BaseException as exc:  # noqa: BLE001 — best-effort read; COM call may raise
+        # Anti-pattern #27: intentional ignore MUST leave a debug
+        # trail — a malformed driver-update event is otherwise
+        # dropped invisibly by the Indicate loop's ``continue``.
+        logger.debug(
+            "voice.driver_update_listener.variant_read_skipped",
+            property_name="TargetInstance",
+            reason=str(exc),
+            exc_type=type(exc).__name__,
+        )
         return None
 
     return _unwrap_variant_to_class_object(value.value, class_object_cls)
@@ -926,7 +935,15 @@ def _read_string_property(class_object: Any, property_name: str) -> str | None: 
             byref(ctype),
             byref(flavor),
         )
-    except BaseException:  # noqa: BLE001 — best-effort read; COM call may raise
+    except BaseException as exc:  # noqa: BLE001 — best-effort read; COM call may raise
+        # Anti-pattern #27: log the intentional ignore so an event
+        # whose PNPDeviceID / Name read fails is traceable.
+        logger.debug(
+            "voice.driver_update_listener.variant_read_skipped",
+            property_name=property_name,
+            reason=str(exc),
+            exc_type=type(exc).__name__,
+        )
         return None
 
     return _unwrap_variant_to_string(value.value)

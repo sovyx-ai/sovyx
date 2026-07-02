@@ -7,8 +7,10 @@ that materially affect Sovyx are:
 * ``DisallowExclusiveDevice`` (HKLM Software/Microsoft/Windows/
   CurrentVersion/Policies/system/) — when set to 1, no app can
   open an audio endpoint in WASAPI exclusive mode. This kills
-  Sovyx's Tier 3 bypass strategy outright; Tier 1 / Tier 2
-  remain available.
+  Sovyx's Tier 3 bypass strategy outright — and Tier 3 is the
+  ONLY bypass strategy in the production Windows ladder (Tier 1
+  RAW and Tier 2 host_api_rotate are unwired foundations), so a
+  GP-blocked fleet has NO automatic Voice Clarity cure.
 * ``LimitDevicesToCallSpace`` (same path, future) — limits
   capture device exposure based on call-space rules. Detected
   for telemetry; remediation is "ask the IT admin".
@@ -17,7 +19,13 @@ Without GP detection, Sovyx would attempt Tier 3 on every
 deaf-signal incident and fail with cryptic PortAudio error
 ``-9988``. With detection at boot, the operator sees a clear
 "Group Policy blocks exclusive mode" message + Tier 3 stays
-gracefully disabled.
+gracefully disabled: the WINDOWS-4 wire-up in
+:func:`sovyx.voice.factory._capture._build_bypass_strategies`
+passes :attr:`GroupPolicySnapshot.exclusive_mode_disallowed`
+into
+:class:`~sovyx.voice.health.bypass._win_wasapi_exclusive.WindowsWASAPIExclusiveBypass`,
+whose ``probe_eligibility`` reports ineligible with reason
+``gp_exclusive_disallowed``.
 
 Design notes (mirrors :mod:`._apo_detector`):
 
@@ -71,8 +79,12 @@ class GroupPolicySnapshot:
 
     exclusive_mode_disallowed: bool = False
     """``DisallowExclusiveDevice == 1``. When True, Tier 3
-    (``capture_wasapi_exclusive``) MUST NOT be attempted — the
-    OS will reject every open with PortAudio error -9988."""
+    (``win.wasapi_exclusive``) MUST NOT be attempted — the OS
+    will reject every open with PortAudio error -9988. Consumed
+    by :func:`sovyx.voice.factory._capture._build_bypass_strategies`,
+    which constructs ``WindowsWASAPIExclusiveBypass`` with this
+    bit so its ``probe_eligibility`` reports ineligible
+    (``gp_exclusive_disallowed``)."""
 
     devices_limited_to_call_space: bool = False
     """``LimitDevicesToCallSpace == 1``. Restricts which capture
@@ -252,13 +264,15 @@ def log_group_policy_snapshot(snapshot: GroupPolicySnapshot) -> None:
                 "voice.gp.devices_limited": (snapshot.devices_limited_to_call_space),
                 "voice.gp.remediation": (
                     "DisallowExclusiveDevice=1 — your Group Policy "
-                    "blocks WASAPI exclusive mode. Tier 3 bypass "
-                    "is disabled; expect Tier 1 (RAW) and Tier 2 "
-                    "(host_api_rotate) to handle Voice Clarity-class "
-                    "incidents. If those tiers don't resolve a "
-                    "deaf-signal scenario on your hardware, ask "
-                    "your Windows admin to override the policy "
-                    "for the Sovyx process."
+                    "blocks WASAPI exclusive mode. Tier 3 (the ONLY "
+                    "automatic bypass in the production Windows "
+                    "ladder) is disabled on this host, so there is "
+                    "NO automatic cure for Voice Clarity-class "
+                    "deaf-signal incidents until an alternative "
+                    "bypass tier ships. Remediation is manual: ask "
+                    "your Windows admin to unset the policy, or "
+                    "disable the offending capture APO (Voice "
+                    "Clarity) in the device's enhancements settings."
                 ),
             },
         )

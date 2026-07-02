@@ -155,6 +155,47 @@ class TestEligibilityHostApiAllowlistB19:
         assert result.applicable is False
         assert result.reason == "not_win32_platform"
 
+    # ── Group Policy gate (WINDOWS-4 wire-up) ────────────────────────
+
+    @pytest.mark.asyncio()
+    async def test_gp_exclusive_disallowed_reports_ineligible(self) -> None:
+        """WINDOWS-4 regression: with ``DisallowExclusiveDevice=1`` the
+        OS rejects every exclusive open — the strategy MUST report
+        ineligible with the ``gp_exclusive_disallowed`` reason token
+        instead of burning an apply attempt per deaf-signal incident."""
+        bypass = WindowsWASAPIExclusiveBypass(exclusive_mode_disallowed=True)
+        result = await bypass.probe_eligibility(_ctx(host_api_name="Windows WASAPI"))
+        assert result.applicable is False
+        assert result.reason == "gp_exclusive_disallowed"
+        assert result.estimated_cost_ms == 0
+
+    @pytest.mark.asyncio()
+    async def test_gp_gate_defaults_open(self) -> None:
+        """Default construction (no snapshot / probe failed / home
+        machine) keeps the pre-gate behaviour: eligible on a WASAPI
+        endpoint."""
+        bypass = WindowsWASAPIExclusiveBypass()
+        result = await bypass.probe_eligibility(_ctx(host_api_name="Windows WASAPI"))
+        assert result.applicable is True
+
+    @pytest.mark.asyncio()
+    async def test_gp_not_disallowed_explicit_false_unchanged(self) -> None:
+        bypass = WindowsWASAPIExclusiveBypass(exclusive_mode_disallowed=False)
+        result = await bypass.probe_eligibility(_ctx(host_api_name="Windows WASAPI"))
+        assert result.applicable is True
+        assert result.reason == ""
+
+    @pytest.mark.asyncio()
+    async def test_platform_gate_outranks_gp_gate(self) -> None:
+        """Non-win32 keeps its own reason token even when the GP bit
+        is set — the platform check is cheaper and fires first."""
+        bypass = WindowsWASAPIExclusiveBypass(exclusive_mode_disallowed=True)
+        result = await bypass.probe_eligibility(
+            _ctx(host_api_name="Windows WASAPI", platform_key="linux"),
+        )
+        assert result.applicable is False
+        assert result.reason == "not_win32_platform"
+
     # ── Allowlist constant invariants ────────────────────────────────
 
     def test_allowlist_contains_canonical_label(self) -> None:

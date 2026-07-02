@@ -483,6 +483,11 @@ def _read_pnp_id_from_property_store(propstore: Any) -> str | None:  # noqa: ANN
        whose backing PnP device has been removed mid-session).
     4. Read ``propvariant.pwszVal`` as a ``LPWSTR`` (wide-string
        pointer).
+    5. Free the PROPVARIANT contents via ``ole32.PropVariantClear``
+       in a ``finally`` — per the COM contract the caller owns them,
+       and the ``VT_LPWSTR`` payload is a CoTaskMemAlloc'd wide
+       string that would otherwise leak on every resolution
+       (WINDOWS-15 / anti-pattern #47 resource-hygiene class).
 
     Returns the wide-string contents or ``None`` on any failure.
     """
@@ -520,27 +525,61 @@ def _read_pnp_id_from_property_store(propstore: Any) -> str | None:  # noqa: ANN
 
     try:
         vt = int(propvariant.vt)
+        if vt != _VT_LPWSTR:
+            return None
+
+        try:
+            pwsz_val = propvariant.pwszVal
+        except AttributeError:
+            return None
+
+        if not pwsz_val:
+            return None
+
+        # ``pwszVal`` is a LPWSTR (wide-string pointer). Cast to
+        # ``c_wchar_p`` to read it as a Python ``str``.
+        try:
+            pnp_id = ctypes.cast(pwsz_val, ctypes.c_wchar_p).value
+        except (TypeError, ValueError, OSError):
+            return None
     except (AttributeError, TypeError, ValueError):
         return None
-    if vt != _VT_LPWSTR:
-        return None
-
-    try:
-        pwsz_val = propvariant.pwszVal
-    except AttributeError:
-        return None
-
-    if not pwsz_val:
-        return None
-
-    # ``pwszVal`` is a LPWSTR (wide-string pointer). Cast to
-    # ``c_wchar_p`` to read it as a Python ``str``.
-    try:
-        pnp_id = ctypes.cast(pwsz_val, ctypes.c_wchar_p).value
-    except (TypeError, ValueError, OSError):
-        return None
+    finally:
+        # Step 5 — free the COM-owned PROPVARIANT contents AFTER the
+        # string has been copied into a Python str.
+        _clear_propvariant(propvariant)
 
     if not pnp_id:
         return None
 
     return pnp_id
+
+
+def _clear_propvariant(propvariant: Any) -> None:  # noqa: ANN401 — comtypes-marshalled PROPVARIANT struct is dynamically typed
+    """Best-effort ``ole32.PropVariantClear`` on a real PROPVARIANT.
+
+    Per the COM contract the ``IPropertyStore::GetValue`` caller owns
+    the PROPVARIANT contents; a ``VT_LPWSTR`` payload is a
+    CoTaskMemAlloc'd wide string that leaks unless cleared. Only a
+    genuine :class:`ctypes.Structure` is cleared — test doubles (and
+    any unexpected marshalling shape) carry no COM-owned memory, and
+    calling ``PropVariantClear`` on a Python-owned buffer would
+    corrupt the heap. Failures are logged at DEBUG per the
+    anti-pattern #27 intentional-ignore contract, never raised.
+    """
+    if not isinstance(propvariant, ctypes.Structure):
+        logger.debug(
+            "voice.endpoint_fingerprint.propvariant_clear_skipped",
+            reason="not_a_ctypes_structure",
+            value_type=type(propvariant).__name__,
+        )
+        return
+    try:
+        ole32 = ctypes.windll.ole32  # type: ignore[attr-defined, unused-ignore]
+        ole32.PropVariantClear(ctypes.byref(propvariant))
+    except BaseException as exc:  # noqa: BLE001 — best-effort COM contract
+        logger.debug(
+            "voice.endpoint_fingerprint.propvariant_clear_failed",
+            reason=str(exc),
+            exc_type=type(exc).__name__,
+        )

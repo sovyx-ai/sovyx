@@ -103,11 +103,18 @@ class DriverWatchdogScan:
     def matches_device(self, device_interface_name: str) -> bool:
         """Return ``True`` when any event's message references the device.
 
-        Case-insensitive substring match — the PnP device instance path
-        in watchdog messages embeds the same hardware enumeration string
-        (``USB\\VID_1532&PID_0528\\...``) that the OS uses everywhere,
-        so a match on the ``device_interface_name`` is a strong
-        hardware-identity signal.
+        Case-insensitive substring match. WEAK HEURISTIC ONLY
+        (WINDOWS-5 audit): real Kernel-PnP Driver Watchdog 900/901
+        messages carry ONLY the PnP device instance path
+        (``USB\\VID_1532&PID_0528&MI_00\\6&191a269&0&0000`` —
+        empirically captured on the operator's machine for the exact
+        v0.20.3 Razer BlackShark V2 Pro post-mortem hardware) plus
+        localized prose; the vendor friendly name ("Razer BlackShark
+        V2 Pro") appears NOWHERE in them, so a friendly-name needle
+        never matches a real event. Callers wanting hardware-identity
+        correlation MUST use :meth:`matches_hardware_id` with the USB
+        VID/PID and keep this method as the secondary fallback for
+        needles that already ARE hardware-ID-shaped.
 
         Empty ``device_interface_name`` always returns ``False``.
         """
@@ -117,6 +124,34 @@ class DriverWatchdogScan:
         if not needle:
             return False
         return any(needle in ev.message_excerpt.lower() for ev in self.events)
+
+    def matches_hardware_id(self, *, usb_vid: str, usb_pid: str) -> bool:
+        """Return ``True`` when any event references the USB VID/PID pair.
+
+        Locale-neutral hardware-identity correlation (WINDOWS-5 fix):
+        matches ``vid_<vid>&pid_<pid>`` case-insensitively against the
+        event message — the shape the PnP device instance path takes
+        in real Driver Watchdog event bodies
+        (``USB\\VID_1532&PID_0528&MI_00\\…``, empirically captured).
+        The ``vid_<vid>#pid_<pid>`` variant is accepted defensively:
+        PnP symbolic-link renderings replace path separators with
+        ``#`` (``\\??\\USB#VID_…``), so a rendering that also
+        ``#``-separates the pair still correlates.
+
+        Args:
+            usb_vid: 4-hex-digit USB vendor ID (e.g. ``"1532"``).
+            usb_pid: 4-hex-digit USB product ID (e.g. ``"0528"``).
+
+        Empty ``usb_vid`` or ``usb_pid`` always returns ``False``.
+        """
+        vid = usb_vid.strip().lower()
+        pid = usb_pid.strip().lower()
+        if not vid or not pid:
+            return False
+        needles = (f"vid_{vid}&pid_{pid}", f"vid_{vid}#pid_{pid}")
+        return any(
+            needle in ev.message_excerpt.lower() for ev in self.events for needle in needles
+        )
 
 
 _POWERSHELL_SCRIPT = r"""

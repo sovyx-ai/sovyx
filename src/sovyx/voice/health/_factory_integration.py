@@ -251,6 +251,11 @@ async def run_boot_cascade(
             device_interface_name=device_interface_name,
             lookback_hours=tuning.driver_watchdog_lookback_hours,
             timeout_s=tuning.driver_watchdog_scan_timeout_s,
+            # WINDOWS-5: hardware-identity correlation key. On win32
+            # with an APO report this is the MMDevices endpoint GUID,
+            # which the pre-flight resolves to the USB VID/PID that
+            # real Driver Watchdog event messages actually carry.
+            endpoint_id=endpoint_guid,
         )
 
     # Linux-side driver-watchdog scan. Detection-tier only — unlike
@@ -401,6 +406,9 @@ async def run_boot_cascade_for_candidates(
             device_interface_name=primary.canonical_name,
             lookback_hours=tuning.driver_watchdog_lookback_hours,
             timeout_s=tuning.driver_watchdog_scan_timeout_s,
+            # WINDOWS-5: hardware-identity correlation key (USB
+            # VID/PID derivation) — see run_boot_cascade's call site.
+            endpoint_id=primary.endpoint_guid,
         )
 
     # Linux detection-tier scan, symmetric to :func:`run_boot_cascade`

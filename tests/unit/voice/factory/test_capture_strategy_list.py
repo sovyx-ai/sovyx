@@ -80,6 +80,39 @@ class TestNonLinuxStrategyLists:
         assert len(strategies) == 1
         assert strategies[0].name.startswith("win.")
 
+    def test_win32_strategy_carries_boot_gp_verdict(self) -> None:
+        # WINDOWS-4 wire-up regression: the factory MUST plumb the
+        # boot-time GroupPolicySnapshot.exclusive_mode_disallowed bit
+        # into WindowsWASAPIExclusiveBypass so a DisallowExclusiveDevice=1
+        # fleet gets an honest ineligible verdict (gp_exclusive_disallowed)
+        # instead of a failing apply per deaf-signal incident.
+        # Patch the SOURCE module (anti-pattern #38 — the factory
+        # lazy-imports `from ... import detect_group_policies`).
+        from unittest.mock import patch
+
+        from sovyx.voice import _group_policy_detector as gp_module
+        from sovyx.voice._group_policy_detector import GroupPolicySnapshot
+
+        blocked = GroupPolicySnapshot(
+            platform_supported=True,
+            exclusive_mode_disallowed=True,
+        )
+        with patch.object(gp_module, "detect_group_policies", return_value=blocked):
+            strategies = _build_bypass_strategies("win32")
+        assert len(strategies) == 1
+        assert strategies[0]._exclusive_mode_disallowed is True  # noqa: SLF001 — pinning the wire-up
+
+    def test_win32_strategy_gp_open_by_default_snapshot(self) -> None:
+        from unittest.mock import patch
+
+        from sovyx.voice import _group_policy_detector as gp_module
+        from sovyx.voice._group_policy_detector import GroupPolicySnapshot
+
+        clean = GroupPolicySnapshot(platform_supported=True)
+        with patch.object(gp_module, "detect_group_policies", return_value=clean):
+            strategies = _build_bypass_strategies("win32")
+        assert strategies[0]._exclusive_mode_disallowed is False  # noqa: SLF001 — pinning the wire-up
+
     def test_darwin_returns_empty_list(self) -> None:
         # macOS bypass strategies (Phase 4 — coreaudio_vpio_off) are
         # not yet shipped. Pinning empty here catches an accidental
