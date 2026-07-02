@@ -32,19 +32,12 @@ from sovyx.engine.rpc_server import DaemonRPCServer
 _SRC_ROOT = Path(sovyx.__file__).resolve().parent
 _CLI_ROOT = Path(sovyx.cli.__file__).resolve().parent
 
-_KNOWN_UNREGISTERED: frozenset[str] = frozenset(
-    {
-        # Pre-existing AP #53 defects OUTSIDE the DOCTOR-1 wave's scope:
-        # these commands have called methods no daemon ever registered
-        # since they shipped (same class as DOCTOR-1, separate findings).
-        # Fixing one REQUIRES removing it here —
-        # test_known_unregistered_allowlist_not_stale enforces cleanup.
-        # Adding NEW entries is forbidden: register the handler instead.
-        "brain.search",  # cli/main.py::brain_search
-        "brain.stats",  # cli/main.py::brain_stats
-        "mind.status",  # cli/main.py::mind_status
-    },
-)
+# Empty since the last pre-existing AP #53 defects (brain.search,
+# brain.stats, mind.status) gained real handlers in
+# engine/_rpc_handlers.py. Fixing an entry REQUIRES removing it here —
+# test_known_unregistered_allowlist_not_stale enforces cleanup.
+# Adding NEW entries is forbidden: register the handler instead.
+_KNOWN_UNREGISTERED: frozenset[str] = frozenset()
 
 
 def _string_literal_args(root: Path, attr: str, text_hint: str) -> list[tuple[str, str, int]]:

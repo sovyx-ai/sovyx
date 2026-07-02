@@ -64,6 +64,71 @@ def _load_mind_config_best_effort(
         return None
 
 
+async def _brain_row_counts(
+    registry: ServiceRegistry,
+    mind_id: MindId,
+) -> tuple[int, int]:
+    """Best-effort ``(concepts, episodes)`` row counts for one mind.
+
+    Mirrors ``StatusCollector._get_memory_stats`` (the dashboard's
+    stats provider): each axis degrades to 0 independently when its
+    repository is unregistered or the count query fails — a partially
+    booted brain must never crash a status/stats RPC.
+    """
+    concepts = 0
+    episodes = 0
+    try:
+        from sovyx.brain.concept_repo import ConceptRepository  # noqa: PLC0415
+
+        if registry.is_registered(ConceptRepository):
+            concept_repo = await registry.resolve(ConceptRepository)
+            concepts = await concept_repo.count(mind_id)
+    except Exception:  # noqa: BLE001 — best-effort by design
+        logger.debug("rpc_brain_concept_count_failed", mind_id=str(mind_id))
+
+    try:
+        from sovyx.brain.episode_repo import EpisodeRepository  # noqa: PLC0415
+
+        if registry.is_registered(EpisodeRepository):
+            episode_repo = await registry.resolve(EpisodeRepository)
+            episodes = await episode_repo.count(mind_id)
+    except Exception:  # noqa: BLE001 — best-effort by design
+        logger.debug("rpc_brain_episode_count_failed", mind_id=str(mind_id))
+
+    return concepts, episodes
+
+
+async def _relation_count_best_effort(
+    registry: ServiceRegistry,
+    mind_id: MindId,
+) -> int:
+    """Best-effort relation row count for one mind (0 on any failure).
+
+    ``RelationRepository`` exposes no ``count`` — this queries the
+    mind's brain pool directly with the same concept-join filter
+    ``RelationRepository.delete_weak`` uses (relations carry no
+    ``mind_id`` column; membership is derived via ``source_id``).
+    """
+    try:
+        from sovyx.persistence.manager import DatabaseManager  # noqa: PLC0415
+
+        if not registry.is_registered(DatabaseManager):
+            return 0
+        db_manager = await registry.resolve(DatabaseManager)
+        pool = db_manager.get_brain_pool(mind_id)
+        async with pool.read() as conn:
+            cursor = await conn.execute(
+                """SELECT COUNT(*) FROM relations
+                WHERE source_id IN (SELECT id FROM concepts WHERE mind_id = ?)""",
+                (str(mind_id),),
+            )
+            row = await cursor.fetchone()
+            return int(row[0]) if row else 0
+    except Exception:  # noqa: BLE001 — best-effort by design
+        logger.debug("rpc_brain_relation_count_failed", mind_id=str(mind_id))
+        return 0
+
+
 # Stable identity for every CLI session. PersonResolver attaches all
 # CLI traffic to the same person row regardless of which terminal the
 # user is running from — matches the dashboard's single-identity
@@ -128,6 +193,179 @@ def register_cli_handlers(
         return {
             "minds": active,
             "active": active[0] if active else None,
+        }
+
+    async def _brain_search(
+        query: str,
+        mind_id: str = "default",
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Search a mind's brain concepts (``sovyx brain search``).
+
+        AP #53 closure — the CLI has called ``brain.search`` since the
+        command shipped, but no daemon ever registered it, so the
+        command always failed with 'Method not found'. Producer half of
+        the contract; the consumer is ``cli/main.py::brain_search``,
+        which renders a list (one bullet per item) or the raw payload.
+
+        Wiring: delegates to :meth:`sovyx.brain.service.BrainService.search`
+        — the same hybrid-retrieval + spreading-activation entrypoint the
+        cognitive loop's phases use — honouring the CLI's ``mind_id``
+        parameter (unlike the dashboard's ``search_brain``, which always
+        resolves the active mind).
+
+        Returns:
+            JSON-serialisable list of compact concept projections:
+            ``{id, name, category, importance, confidence, score}``,
+            score-descending. Empty list for a blank query (mirrors
+            the dashboard's graceful-degradation contract).
+
+        Raises:
+            BrainError: BrainService not registered (daemon booting or
+                brain subsystem disabled).
+        """
+        from sovyx.brain.service import BrainService  # noqa: PLC0415
+        from sovyx.engine.errors import BrainError  # noqa: PLC0415
+        from sovyx.engine.types import MindId  # noqa: PLC0415
+
+        if not query.strip():
+            return []
+        bounded_limit = max(1, min(limit, 100))
+
+        if not registry.is_registered(BrainService):
+            msg = (
+                "brain subsystem not available (BrainService not "
+                "registered) — the daemon may still be booting"
+            )
+            raise BrainError(msg)
+
+        brain = await registry.resolve(BrainService)
+        results = await brain.search(
+            query.strip(),
+            MindId(mind_id),
+            limit=bounded_limit,
+        )
+        return [
+            {
+                "id": str(concept.id),
+                "name": concept.name,
+                "category": concept.category.value,
+                "importance": round(concept.importance, 3),
+                "confidence": round(concept.confidence, 3),
+                "score": round(score, 4),
+            }
+            for concept, score in results
+        ]
+
+    async def _brain_stats(mind_id: str = "default") -> dict[str, Any]:
+        """Per-mind brain row counts (``sovyx brain stats``).
+
+        AP #53 closure — sibling of ``brain.search``; the consumer is
+        ``cli/main.py::brain_stats``, which renders each dict entry as
+        a ``key: value`` line.
+
+        Wiring: ``ConceptRepository.count`` + ``EpisodeRepository.count``
+        (the same providers ``StatusCollector._get_memory_stats``
+        mirrors for the dashboard) plus a best-effort relation count
+        via the mind's brain pool (:func:`_relation_count_best_effort`).
+        The repositories are REQUIRED — a stats command that silently
+        reports 0 when the brain is absent would be a semantic lie
+        (AP #48); the relation axis alone degrades to 0 because it has
+        no repository-level counter to fail loudly through.
+
+        Returns:
+            ``{"mind_id": str, "concepts": int, "episodes": int,
+            "relations": int}``.
+
+        Raises:
+            ValueError: Empty / whitespace ``mind_id``.
+            BrainError: Brain repositories not registered.
+        """
+        from sovyx.brain.concept_repo import ConceptRepository  # noqa: PLC0415
+        from sovyx.brain.episode_repo import EpisodeRepository  # noqa: PLC0415
+        from sovyx.engine.errors import BrainError  # noqa: PLC0415
+        from sovyx.engine.types import MindId  # noqa: PLC0415
+
+        if not mind_id.strip():
+            msg = "mind_id must be a non-empty string"
+            raise ValueError(msg)
+
+        if not (
+            registry.is_registered(ConceptRepository) and registry.is_registered(EpisodeRepository)
+        ):
+            msg = (
+                "brain subsystem not available (repositories not "
+                "registered) — the daemon may still be booting"
+            )
+            raise BrainError(msg)
+
+        mid = MindId(mind_id)
+        concept_repo = await registry.resolve(ConceptRepository)
+        episode_repo = await registry.resolve(EpisodeRepository)
+        return {
+            "mind_id": mind_id,
+            "concepts": await concept_repo.count(mid),
+            "episodes": await episode_repo.count(mid),
+            "relations": await _relation_count_best_effort(registry, mid),
+        }
+
+    async def _mind_status(mind_id: str = "default") -> dict[str, Any]:
+        """Per-mind status snapshot (``sovyx mind status``).
+
+        AP #53 closure — the consumer is ``cli/main.py::mind_status``,
+        which renders each dict entry as a ``key: value`` line.
+
+        Wiring: activity from :class:`MindManager.get_active_minds`
+        (the same source ``mind.list`` serves), identity from the
+        mind's ``mind.yaml`` via :func:`_load_mind_config_best_effort`
+        (same resolver the retention handler uses), memory counts via
+        :func:`_brain_row_counts` (best-effort, mirrors the dashboard's
+        ``StatusCollector``). ``name``/``language`` are ``None`` when
+        the mind is active but its YAML is missing or malformed —
+        honest absence over a fabricated value (AP #48).
+
+        Returns:
+            ``{"mind_id": str, "active": bool, "name": str | None,
+            "language": str | None, "concepts": int, "episodes": int}``.
+
+        Raises:
+            ValueError: Empty / whitespace ``mind_id``.
+            MindNotFoundError: The mind is neither active nor onboarded
+                (no ``<data_dir>/<mind_id>/mind.yaml``) — surfaces
+                operator typos loudly instead of an all-zero snapshot.
+        """
+        from sovyx.engine.bootstrap import MindManager  # noqa: PLC0415
+        from sovyx.engine.config import EngineConfig  # noqa: PLC0415
+        from sovyx.engine.errors import MindNotFoundError  # noqa: PLC0415
+        from sovyx.engine.types import MindId  # noqa: PLC0415
+
+        if not mind_id.strip():
+            msg = "mind_id must be a non-empty string"
+            raise ValueError(msg)
+
+        mid = MindId(mind_id)
+
+        active = False
+        if registry.is_registered(MindManager):
+            mgr = await registry.resolve(MindManager)
+            active = mind_id in mgr.get_active_minds()
+
+        mind_config: MindConfig | None = None
+        if registry.is_registered(EngineConfig):
+            config = await registry.resolve(EngineConfig)
+            mind_config = _load_mind_config_best_effort(config.data_dir, mid)
+
+        if not active and mind_config is None:
+            raise MindNotFoundError(mind_id=mind_id)
+
+        concepts, episodes = await _brain_row_counts(registry, mid)
+        return {
+            "mind_id": mind_id,
+            "active": active,
+            "name": mind_config.name if mind_config is not None else None,
+            "language": mind_config.language if mind_config is not None else None,
+            "concepts": concepts,
+            "episodes": episodes,
         }
 
     async def _config_get() -> dict[str, Any]:
@@ -664,7 +902,10 @@ def register_cli_handlers(
         }
 
     rpc.register_method("chat", _chat)
+    rpc.register_method("brain.search", _brain_search)
+    rpc.register_method("brain.stats", _brain_stats)
     rpc.register_method("mind.list", _mind_list)
+    rpc.register_method("mind.status", _mind_status)
     rpc.register_method("mind.forget", _mind_forget)
     rpc.register_method("mind.retention.prune", _mind_retention_prune)
     rpc.register_method("config.get", _config_get)
@@ -676,4 +917,4 @@ def register_cli_handlers(
         _engine_resources_tracemalloc_snapshot,
     )
     rpc.register_method("doctor", _doctor)
-    logger.debug("cli_rpc_handlers_registered", count=10)
+    logger.debug("cli_rpc_handlers_registered", count=13)
