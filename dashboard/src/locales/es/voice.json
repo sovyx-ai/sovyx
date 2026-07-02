@@ -492,7 +492,12 @@
       "codeSigningTitle": "Hardened Runtime entitlement",
       "codeSigningVerdict": "Veredicto",
       "codeSigningExecutable": "Ejecutable",
-      "codeSigningHint": "No se requiere remediación."
+      "codeSigningHint": "No se requiere remediación.",
+      "coreaudiodTitle": "Daemon coreaudiod",
+      "sandboxTitle": "App Sandbox",
+      "audioLogTitle": "Eventos recientes del registro de audio",
+      "audioLogLookback": "últimos {{lookback}}",
+      "audioLogEmpty": "Sin eventos com.apple.audio en la ventana consultada."
     },
     "verdictColor": {
       "ok": "ok",

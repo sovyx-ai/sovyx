@@ -79,7 +79,8 @@ detection, failover between devices, and quarantine reporting all work
 | Command | macOS behaviour |
 |---|---|
 | `sovyx doctor voice` | **Works** — preflight diagnosis + quarantine / failover-history / degraded-banner / bundle-integrity / LLM-health surfaces. |
-| `sovyx doctor platform` | **Works** — cross-OS platform-diagnostics report. |
+| `sovyx doctor platform` | **Works** — cross-OS platform-diagnostics report. Since MACOS-4 (2026-07-02) the macOS branch also surfaces the coreaudiod daemon state (MA10, with the manual `sudo killall coreaudiod` recovery hint), the App Sandbox verdict (MA13), and recent `com.apple.audio` unified-log events (MA14) — the same three probes `GET /api/voice/platform-diagnostics` exposes; previously they were boot-log-only. |
+| `sovyx doctor stt_language_match` | **Works** — cross-platform; checks the mind's language against Moonshine's STT model set (WARN = speech transcribed in English). |
 | `sovyx doctor voice --fix` | **Refuses** — exits `5` (`EXIT_DOCTOR_UNSUPPORTED`); the mixer auto-fix is Linux-only (`amixer`). |
 | `sovyx doctor voice --calibrate` | **Refuses** — Linux-only. |
 | `sovyx doctor voice --full-diag` | **Refuses** — exits `5` (`EXIT_DOCTOR_UNSUPPORTED`); the forensic producer exists for Linux (bash toolkit) and Windows (native probes) only. |

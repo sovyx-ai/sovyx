@@ -1023,6 +1023,86 @@ def _check_piper_locale_match(language: str | None = None) -> DiagnosticResult:
     )
 
 
+def _check_stt_language_match(language: str | None = None) -> DiagnosticResult:
+    """Verify the mind's spoken language has a Moonshine STT model.
+
+    ENGINES-9 — the STT sibling of :func:`_check_piper_locale_match`
+    (TTS). Pre-fix the Moonshine no-Portuguese limitation surfaced
+    ONLY at pipeline start (factory WARN + ``stt_language_coerced``
+    degraded banner, ``voice/factory/_validate.py``); a pt-BR operator
+    running the doctor before enabling voice got no signal that speech
+    would be transcribed in English. This probe runs the same SSoT
+    classification the factory uses —
+    :func:`sovyx.voice.stt.normalize_stt_language` membership against
+    :data:`sovyx.voice.stt.MOONSHINE_SUPPORTED_LANGUAGES` — at
+    doctor/setup preflight time.
+
+    LENIENT default per ``feedback_staged_adoption``: WARN (not FAIL)
+    on an unsupported language, matching the sibling's exit semantics —
+    the factory coerces to English and voice keeps working, just
+    transcribing in the wrong language. The message names that
+    coercion behaviour honestly.
+
+    Args:
+        language: Language tag to check (``pt-BR``, ``en-US``, ``en``
+            …). ``None``/blank falls back to ``en`` so the probe stays
+            runnable without an active mind context.
+
+    Returns:
+        Diagnostic result with the normalized code + the supported set
+        in the details dict.
+    """
+    check_name = "stt_language_match"
+    from sovyx.voice.stt import MOONSHINE_SUPPORTED_LANGUAGES, normalize_stt_language
+
+    target_language = (language or "en").strip()
+    if not target_language:
+        target_language = "en"
+    normalized = normalize_stt_language(target_language)
+    supported = sorted(MOONSHINE_SUPPORTED_LANGUAGES)
+
+    if normalized in MOONSHINE_SUPPORTED_LANGUAGES:
+        return DiagnosticResult(
+            check=check_name,
+            status=DiagnosticStatus.PASS,
+            message=(
+                f"Language {target_language!r} (normalized {normalized!r}) has a "
+                f"Moonshine STT model — speech recognition honours it."
+            ),
+            details={
+                "language": target_language,
+                "normalized_language": normalized,
+                "supported_languages": supported,
+                "lenient_mode": True,
+            },
+        )
+
+    return DiagnosticResult(
+        check=check_name,
+        status=DiagnosticStatus.WARN,
+        message=(
+            f"Language {target_language!r} (normalized {normalized!r}) has NO "
+            f"Moonshine STT model. At pipeline start the factory coerces STT "
+            f"to English — voice stays functional but speech is transcribed "
+            f"in English, not {normalized!r}."
+        ),
+        fix_suggestion=(
+            "Moonshine v2 has no model for the requested language. "
+            "Install a multilingual STT engine (Parakeet roadmap) or "
+            "set the mind language to one of: "
+            + ", ".join(supported)
+            + ". Until then voice will transcribe in English."
+        ),
+        details={
+            "language": target_language,
+            "normalized_language": normalized,
+            "coerced_language": "en",
+            "supported_languages": supported,
+            "lenient_mode": True,
+        },
+    )
+
+
 def _check_data_dir_writable(data_dir: Path) -> DiagnosticResult:
     """Check that the data directory exists and is writable.
 

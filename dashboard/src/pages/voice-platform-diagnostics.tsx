@@ -26,14 +26,18 @@ import {
 import { ApiError, api, isAbortError } from "@/lib/api";
 import type {
   BluetoothDevicePayload,
+  CoreAudiodPayload,
   EtwChannelPayload,
   EtwEventLevelToken,
   HalPayload,
+  MacosAudioLogLevelToken,
+  MacosAudioLogPayload,
   PlatformDiagnosticsResponse,
   PlatformLinuxBranch,
   PlatformMacOSBranch,
   PlatformMicPermissionPayload,
   PlatformWindowsBranch,
+  SandboxPayload,
   VoiceBypassTierStatusResponse,
   WindowsAudioServicePayload,
 } from "@/types/api";
@@ -112,6 +116,48 @@ function halTone(payload: HalPayload): Tone {
     return "warn";
   }
   return "neutral";
+}
+
+// MACOS-4 — coreaudiod MISSING means capture is structurally
+// impossible (launchd failed to respawn the daemon) → error;
+// unknown is inconclusive → warn, matching the mic-permission tone.
+function coreaudiodTone(verdict: CoreAudiodPayload["verdict"]): Tone {
+  switch (verdict) {
+    case "running":
+      return "ok";
+    case "missing":
+      return "error";
+    case "unknown":
+    default:
+      return "warn";
+  }
+}
+
+// MACOS-4 — SANDBOXED is a constraint (not an error) that blocks the
+// subprocess-based probes → warn; unsandboxed is the standard build.
+function sandboxTone(verdict: SandboxPayload["verdict"]): Tone {
+  switch (verdict) {
+    case "unsandboxed":
+      return "ok";
+    case "sandboxed":
+      return "warn";
+    case "unknown":
+    default:
+      return "neutral";
+  }
+}
+
+function macosLogLevelTone(level: MacosAudioLogLevelToken): Tone {
+  switch (level) {
+    case "fault":
+      return "error";
+    case "warning":
+      return "warn";
+    case "info":
+    case "debug":
+    default:
+      return "neutral";
+  }
 }
 
 function toneClasses(tone: Tone): string {
@@ -579,7 +625,110 @@ function MacOSBranchCard({ branch }: { branch: PlatformMacOSBranch }) {
         )}
         <NotesList notes={branch.code_signing.notes} />
       </div>
+
+      {/* MACOS-4 — coreaudiod daemon state (MA10). */}
+      <div
+        className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-primary)] p-4"
+        data-testid="macos-coreaudiod-card"
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold">
+            {t("platform.macosSection.coreaudiodTitle")}
+          </h3>
+          <StatusPill
+            tone={coreaudiodTone(branch.coreaudiod.verdict)}
+            label={branch.coreaudiod.verdict}
+          />
+        </div>
+        {branch.coreaudiod.remediation_hint && (
+          <p
+            className="mt-2 text-sm text-[var(--svx-color-text-secondary)]"
+            data-testid="macos-coreaudiod-hint"
+          >
+            {branch.coreaudiod.remediation_hint}
+          </p>
+        )}
+        <NotesList notes={branch.coreaudiod.notes} />
+      </div>
+
+      {/* MACOS-4 — App Sandbox verdict (MA13). */}
+      <div
+        className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-primary)] p-4"
+        data-testid="macos-sandbox-card"
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold">
+            {t("platform.macosSection.sandboxTitle")}
+          </h3>
+          <StatusPill
+            tone={sandboxTone(branch.sandbox.verdict)}
+            label={branch.sandbox.verdict}
+          />
+        </div>
+        {branch.sandbox.executable_path && (
+          <p className="mt-2 font-mono text-[10px] text-[var(--svx-color-text-tertiary)]">
+            {branch.sandbox.executable_path}
+          </p>
+        )}
+        {branch.sandbox.remediation_hint && (
+          <p className="mt-2 text-sm text-[var(--svx-color-text-secondary)]">
+            {branch.sandbox.remediation_hint}
+          </p>
+        )}
+        <NotesList notes={branch.sandbox.notes} />
+      </div>
+
+      {/* MACOS-4 — recent com.apple.audio unified-log events (MA14). */}
+      <MacosAudioLogCard payload={branch.audio_log_events} />
     </section>
+  );
+}
+
+function MacosAudioLogCard({ payload }: { payload: MacosAudioLogPayload }) {
+  const { t } = useTranslation("voice");
+  return (
+    <div
+      className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-primary)] p-4"
+      data-testid="macos-audio-log-card"
+    >
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold">
+          {t("platform.macosSection.audioLogTitle")}
+        </h3>
+        <p className="font-mono text-[10px] text-[var(--svx-color-text-tertiary)]">
+          {t("platform.macosSection.audioLogLookback", {
+            lookback: payload.lookback,
+          })}
+        </p>
+      </div>
+      {payload.events.length === 0 ? (
+        <p className="mt-2 text-xs text-[var(--svx-color-text-tertiary)]">
+          {t("platform.macosSection.audioLogEmpty")}
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {payload.events.slice(0, 10).map((ev) => (
+            <li
+              key={`${ev.timestamp_iso}-${ev.process}-${ev.description}`}
+              className="flex items-start gap-2 text-xs"
+            >
+              <StatusPill tone={macosLogLevelTone(ev.level)} label={ev.level} />
+              <div className="min-w-0 flex-1">
+                <p className="font-mono">
+                  {ev.timestamp_iso} {ev.process}
+                </p>
+                {ev.description && (
+                  <p className="text-[var(--svx-color-text-secondary)]">
+                    {ev.description}
+                  </p>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <NotesList notes={payload.notes} />
+    </div>
   );
 }
 

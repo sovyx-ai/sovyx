@@ -188,6 +188,32 @@ class TestDarwinBranch:
         assert "bluetooth" in body["macos"]
         assert "code_signing" in body["macos"]
 
+    def test_darwin_branch_includes_macos4_probe_sections(
+        self,
+        client: TestClient,
+    ) -> None:
+        """MACOS-4 — coreaudiod (MA10) / sandbox (MA13) / audio log
+        (MA14) are part of the branch payload, not boot-log-only.
+
+        Verdict VALUES are not asserted: on a non-darwin test host the
+        real probes legitimately return UNKNOWN (missing pgrep /
+        codesign / log binaries) — the contract under test is that the
+        sections exist with their operator-actionable fields.
+        """
+        with patch.object(sys, "platform", "darwin"):
+            response = client.get("/api/voice/platform-diagnostics")
+        assert response.status_code == 200
+        macos = response.json()["macos"]
+        assert macos is not None
+        for key in ("coreaudiod", "sandbox", "audio_log_events"):
+            assert key in macos, f"MACOS-4 section {key!r} missing from macos branch"
+        assert "verdict" in macos["coreaudiod"]
+        assert "remediation_hint" in macos["coreaudiod"]
+        assert "verdict" in macos["sandbox"]
+        assert "remediation_hint" in macos["sandbox"]
+        assert isinstance(macos["audio_log_events"]["events"], list)
+        assert "lookback" in macos["audio_log_events"]
+
 
 class TestUnknownPlatform:
     def test_freebsd_returns_other(self, client: TestClient) -> None:
@@ -255,6 +281,29 @@ class TestProbeFailureIsolation:
         # Bluetooth + code signing still populated (non-null).
         assert "devices" in body["macos"]["bluetooth"]
         assert "verdict" in body["macos"]["code_signing"]
+
+    def test_macos_coreaudiod_probe_crash_keeps_other_macos_branches(
+        self,
+        client: TestClient,
+    ) -> None:
+        """MACOS-4 — the new probes use the same isolation contract."""
+        with (
+            patch.object(sys, "platform", "darwin"),
+            patch(
+                "sovyx.voice.health._coreaudiod_recovery.probe_coreaudiod_state",
+                side_effect=RuntimeError("coreaudiod boom"),
+            ),
+        ):
+            response = client.get("/api/voice/platform-diagnostics")
+        assert response.status_code == 200
+        body = response.json()
+        # Crashed probe collapsed to unknown + probe-failed note.
+        assert body["macos"]["coreaudiod"]["verdict"] == "unknown"
+        assert any("probe failed" in n.lower() for n in body["macos"]["coreaudiod"]["notes"])
+        # Siblings (old + new) still populated.
+        assert "verdict" in body["macos"]["code_signing"]
+        assert "verdict" in body["macos"]["sandbox"]
+        assert "events" in body["macos"]["audio_log_events"]
 
 
 # ── Mic permission OS-aware remediation ──────────────────────────

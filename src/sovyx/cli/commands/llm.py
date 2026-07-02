@@ -50,11 +50,89 @@ console = Console()
 llm_app = typer.Typer(help="LLM provider health + setup")
 
 
-async def _gather_live_report() -> LLMRouterDiscoveryReport:
+def resolve_mind_llm_defaults(
+    mind_id: str | None,
+    *,
+    data_dir: Path | None = None,
+) -> tuple[str, str]:
+    """Resolve the target mind's ``(llm.default_provider, llm.default_model)``.
+
+    DOCTOR-4 closure (AP #71 class) — pre-fix the CLI doctors passed
+    ``default_provider=""``/``default_model=""`` to
+    :func:`scan_llm_provider_health`, making the
+    ``DEFAULT_MODEL_UNAVAILABLE`` and configured-default
+    ``OLLAMA_UNREACHABLE`` verdicts structurally unreachable: a mind
+    pinned to a nonexistent Ollama model still showed
+    ``FULLY_AVAILABLE`` (reachability-only probe). This helper loads
+    the real values from the mind's ``mind.yaml`` via the same
+    :func:`~sovyx.engine._rpc_handlers._load_mind_config_best_effort`
+    resolver the daemon RPC handlers use.
+
+    Resolution semantics:
+
+    * ``mind_id`` explicit → :func:`resolve_mind_id` semantics: an
+      unknown mind raises ``typer.BadParameter`` LOUDLY (AP #48 —
+      silently scanning with empty defaults would be a semantic lie).
+    * ``mind_id`` omitted → best-effort: exactly one mind on disk
+      resolves to it; zero or 2+ minds (ambiguous) degrade to
+      ``("", "")`` so the scan keeps its pre-fix env-only behaviour.
+    * Any config-load failure degrades to ``("", "")``.
+
+    Args:
+        mind_id: Raw ``--mind-id`` flag value (``None`` when omitted).
+        data_dir: Override for tests / callers that already resolved
+            it. ``None`` → ``EngineConfig().data_dir`` (env-driven),
+            falling back to ``~/.sovyx``.
+
+    Returns:
+        ``(default_provider, default_model)`` — both ``""`` when no
+        mind context could be resolved.
+    """
+    from sovyx.cli._mind_resolver import resolve_mind_id
+    from sovyx.engine._rpc_handlers import _load_mind_config_best_effort
+    from sovyx.engine.types import MindId
+
+    if data_dir is None:
+        try:
+            from sovyx.engine.config import EngineConfig
+
+            data_dir = EngineConfig().data_dir
+        except Exception:  # noqa: BLE001 — best-effort resolution
+            data_dir = Path.home() / ".sovyx"
+
+    if mind_id is not None:
+        # Explicit flag — fail loudly on typos (raises typer.BadParameter).
+        resolved = resolve_mind_id(mind_id, data_dir)
+    else:
+        try:
+            resolved = resolve_mind_id(None, data_dir)
+        except typer.BadParameter:
+            # 0 minds (fresh install) or 2+ minds (ambiguous without
+            # --mind-id) — no single mind context; scan env-only.
+            return "", ""
+
+    config = _load_mind_config_best_effort(data_dir, MindId(str(resolved)))
+    if config is None:
+        return "", ""
+    return config.llm.default_provider, config.llm.default_model
+
+
+async def _gather_live_report(
+    *,
+    default_provider: str = "",
+    default_model: str = "",
+) -> LLMRouterDiscoveryReport:
     """Run the scanner against live os.environ + a fresh Ollama ping.
 
     No I/O outside the Ollama ping (anti-pattern #14 — bounded with the
     provider's 2-second internal timeout).
+
+    Args:
+        default_provider: The target mind's ``llm.default_provider``
+            (from :func:`resolve_mind_llm_defaults`). ``""`` disables
+            the default-model verdicts — pre-DOCTOR-4 this was
+            hardcoded ``""``, starving the verdict machinery.
+        default_model: The target mind's ``llm.default_model``.
     """
     import os
 
@@ -73,8 +151,8 @@ async def _gather_live_report() -> LLMRouterDiscoveryReport:
         env=os.environ,
         ollama_ping_result=ollama.is_available,
         ollama_models=ollama_models if ollama.is_available else None,
-        default_provider="",
-        default_model="",
+        default_provider=default_provider,
+        default_model=default_model,
     )
 
 
@@ -196,17 +274,36 @@ def _print_doctor_report(report: LLMRouterDiscoveryReport) -> None:
 @llm_app.command("doctor")
 def doctor(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON output."),
+    mind_id: str | None = typer.Option(
+        None,
+        "--mind-id",
+        help="Mind whose llm.default_provider/default_model the scan "
+        "checks (DEFAULT_MODEL_UNAVAILABLE / configured-default "
+        "verdicts). Default: auto-detected when exactly one mind "
+        "exists under <data_dir>/; with zero or multiple minds the "
+        "scan runs env-only (no default-model check).",
+    ),
 ) -> None:
     """Verify LLM provider health (Mission C6 §T3.1).
 
     Runs :func:`scan_llm_provider_health` against the live process env +
-    a fresh Ollama ping, prints the verdict + per-provider matrix +
-    remediation hint, and exits with code 1 on any non-healthy verdict.
+    a fresh Ollama ping + the target mind's configured
+    ``llm.default_provider``/``default_model`` (DOCTOR-4 — pre-fix the
+    defaults were hardcoded ``""``, so a mind pinned to a nonexistent
+    model still reported FULLY_AVAILABLE), prints the verdict +
+    per-provider matrix + remediation hint, and exits with code 1 on
+    any non-healthy verdict.
 
     Use ``--json`` for machine-readable output (e.g.
     ``sovyx llm doctor --json | jq '.verdict'``).
     """
-    report = asyncio.run(_gather_live_report())
+    default_provider, default_model = resolve_mind_llm_defaults(mind_id)
+    report = asyncio.run(
+        _gather_live_report(
+            default_provider=default_provider,
+            default_model=default_model,
+        ),
+    )
     if json_output:
         console.print_json(json.dumps(_report_to_json_dict(report), sort_keys=True))
     else:
@@ -221,9 +318,14 @@ def doctor(
 @llm_app.command("health")
 def health(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON output."),
+    mind_id: str | None = typer.Option(
+        None,
+        "--mind-id",
+        help="Mind whose llm defaults the scan checks (see `sovyx llm doctor --help`).",
+    ),
 ) -> None:
     """Alias for ``sovyx llm doctor`` (operator-facing language)."""
-    doctor(json_output=json_output)
+    doctor(json_output=json_output, mind_id=mind_id)
 
 
 def _provider_choice_prompt() -> LLMProviderKey:

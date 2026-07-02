@@ -85,6 +85,13 @@ class TestPerOsBranch:
         assert "hal_plugins" in body["macos"]
         assert "bluetooth" in body["macos"]
         assert "code_signing" in body["macos"]
+        # MACOS-4 — formerly boot-log-only probes are now branch
+        # sections (verdict VALUES not asserted: a non-darwin host's
+        # real probes legitimately report unknown).
+        assert "verdict" in body["macos"]["coreaudiod"]
+        assert "remediation_hint" in body["macos"]["coreaudiod"]
+        assert "verdict" in body["macos"]["sandbox"]
+        assert "events" in body["macos"]["audio_log_events"]
 
 
 # ── Unknown platform fallback ─────────────────────────────────────

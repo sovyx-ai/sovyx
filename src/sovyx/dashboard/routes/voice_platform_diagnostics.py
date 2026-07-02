@@ -22,7 +22,10 @@ matching ``sys.platform`` is populated; other branches are ``null``):
       "macos": {
         "hal_plugins": { ... HalReport ... },
         "bluetooth": { ... BluetoothReport ... },
-        "code_signing": { ... EntitlementReport ... }
+        "code_signing": { ... EntitlementReport ... },
+        "coreaudiod": { ... CoreAudiodReport (MA10) ... },
+        "sandbox": { ... SandboxReport (MA13) ... },
+        "audio_log_events": { ... MacosLogQueryResult (MA14) ... }
       }
     }
 
@@ -42,6 +45,12 @@ Design contract:
 
 Reference: F1 inventory tasks MA1/MA2/MA5/MA6/F3/F4/WI2/#34 — this
 endpoint is the dashboard surface that finally exposes them all.
+MACOS-4 (2026-07-02) added the three boot-log-only macOS probes —
+coreaudiod daemon state (MA10, carries the manual ``sudo killall
+coreaudiod`` recovery hint), App Sandbox verdict (MA13), and recent
+``com.apple.audio`` unified-log events (MA14) — restoring parity with
+the Windows branch, which already surfaced its audio-daemon
+(Audiosrv) state on demand.
 """
 
 from __future__ import annotations
@@ -157,6 +166,44 @@ class CodeSigningPayload(BaseModel):
     remediation_hint: str = ""
 
 
+class CoreAudiodPayload(BaseModel):
+    """MA10 — coreaudiod daemon state (MISSING = capture structurally
+    impossible; ``remediation_hint`` carries the manual ``sudo killall
+    coreaudiod`` recovery path)."""
+
+    verdict: str
+    notes: list[str] = Field(default_factory=list)
+    remediation_hint: str = ""
+
+
+class SandboxPayload(BaseModel):
+    """MA13 — macOS App Sandbox verdict (a sandboxed build blocks the
+    subprocess-based probes + constrains the audio capture path)."""
+
+    verdict: str
+    executable_path: str = ""
+    notes: list[str] = Field(default_factory=list)
+    remediation_hint: str = ""
+
+
+class MacosAudioLogEventPayload(BaseModel):
+    """MA14 — one parsed ``log show`` event from ``com.apple.audio``."""
+
+    timestamp_iso: str
+    level: str
+    subsystem: str = ""
+    process: str = ""
+    description: str = ""
+
+
+class MacosAudioLogPayload(BaseModel):
+    """MA14 — bounded recent audio-subsystem unified-log query."""
+
+    events: list[MacosAudioLogEventPayload] = Field(default_factory=list)
+    lookback: str = "5m"
+    notes: list[str] = Field(default_factory=list)
+
+
 class LinuxBranch(BaseModel):
     pipewire: PipeWirePayload
     alsa_ucm: UcmPayload
@@ -171,6 +218,10 @@ class MacOSBranch(BaseModel):
     hal_plugins: HalPayload
     bluetooth: BluetoothPayload
     code_signing: CodeSigningPayload
+    # MACOS-4 — the three formerly boot-log-only probes.
+    coreaudiod: CoreAudiodPayload
+    sandbox: SandboxPayload
+    audio_log_events: MacosAudioLogPayload
 
 
 class PlatformDiagnosticsResponse(BaseModel):
@@ -374,6 +425,62 @@ def _build_code_signing_payload(report: Any) -> CodeSigningPayload:  # noqa: ANN
     )
 
 
+def _build_coreaudiod_payload(report: Any) -> CoreAudiodPayload:  # noqa: ANN401
+    """MACOS-4 / MA10 — probe-isolation shape mirrors the siblings."""
+    if report is None:
+        return CoreAudiodPayload(
+            verdict="unknown",
+            notes=["coreaudiod probe failed (returned None)"],
+        )
+    return CoreAudiodPayload(
+        verdict=report.verdict.value,
+        notes=list(report.notes),
+        remediation_hint=report.remediation_hint,
+    )
+
+
+def _build_sandbox_payload(report: Any) -> SandboxPayload:  # noqa: ANN401
+    """MACOS-4 / MA13 — probe-isolation shape mirrors the siblings.
+
+    ``raw_codesign_output`` is deliberately NOT forwarded — it is
+    forensic bulk (up to 4 KB) the dashboard has no renderer for;
+    the verdict + notes + remediation hint carry the operator value.
+    """
+    if report is None:
+        return SandboxPayload(
+            verdict="unknown",
+            notes=["sandbox probe failed (returned None)"],
+        )
+    return SandboxPayload(
+        verdict=report.verdict.value,
+        executable_path=report.executable_path,
+        notes=list(report.notes),
+        remediation_hint=report.remediation_hint,
+    )
+
+
+def _build_audio_log_payload(result: Any) -> MacosAudioLogPayload:  # noqa: ANN401
+    """MACOS-4 / MA14 — probe-isolation shape mirrors the siblings."""
+    if result is None:
+        return MacosAudioLogPayload(
+            notes=["audio log probe failed (returned None)"],
+        )
+    return MacosAudioLogPayload(
+        events=[
+            MacosAudioLogEventPayload(
+                timestamp_iso=ev.timestamp_iso,
+                level=ev.level.value,
+                subsystem=ev.subsystem,
+                process=ev.process,
+                description=ev.description,
+            )
+            for ev in result.events
+        ],
+        lookback=result.lookback,
+        notes=list(result.notes),
+    )
+
+
 # ── Endpoint ──────────────────────────────────────────────────────
 
 
@@ -430,20 +537,43 @@ async def get_platform_diagnostics() -> PlatformDiagnosticsResponse:
         )
         from sovyx.voice._codesign_verify_mac import verify_microphone_entitlement
         from sovyx.voice._hal_detector_mac import detect_hal_plugins
+        from sovyx.voice.health._coreaudiod_recovery import probe_coreaudiod_state
+        from sovyx.voice.health._macos_sandbox_detect import detect_sandbox_state
+        from sovyx.voice.health._macos_sysdiagnose import query_audio_log_events
 
         hal_task = _safe_probe(detect_hal_plugins)
         bt_task = _safe_probe(detect_bluetooth_audio_profile)
         cs_task = _safe_probe(verify_microphone_entitlement)
-        mic_report, hal_report, bt_report, cs_report = await asyncio.gather(
+        # MACOS-4 — formerly boot-log-only probes (factory
+        # _maybe_log_macos_diagnostics was their only caller); now
+        # exposed on demand with the same probe isolation.
+        coreaudiod_task = _safe_probe(probe_coreaudiod_state)
+        sandbox_task = _safe_probe(detect_sandbox_state)
+        audio_log_task = _safe_probe(query_audio_log_events)
+        (
+            mic_report,
+            hal_report,
+            bt_report,
+            cs_report,
+            coreaudiod_report,
+            sandbox_report,
+            audio_log_result,
+        ) = await asyncio.gather(
             mic_task,
             hal_task,
             bt_task,
             cs_task,
+            coreaudiod_task,
+            sandbox_task,
+            audio_log_task,
         )
         macos_branch = MacOSBranch(
             hal_plugins=_build_hal_payload(hal_report),
             bluetooth=_build_bluetooth_payload(bt_report),
             code_signing=_build_code_signing_payload(cs_report),
+            coreaudiod=_build_coreaudiod_payload(coreaudiod_report),
+            sandbox=_build_sandbox_payload(sandbox_report),
+            audio_log_events=_build_audio_log_payload(audio_log_result),
         )
     else:
         # Unknown platform — only mic_permission still runs.

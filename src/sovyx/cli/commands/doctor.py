@@ -20,10 +20,14 @@ Composes three doctor surfaces under one command:
   forensic scripts: the same data, structured, OS-agnostic, and
   reproducible from any operator shell.
 
-The voice surface is intentionally standalone — it does NOT require a
-running daemon. Daemon-dependent bits (ComboStore fast-path, live
-device default-change watcher, TTS open probe against the configured
-engine) land in the follow-up that wires the L7 backend RPC.
+The voice surface does NOT require a running daemon, but prefers one
+when reachable: the quarantine / failover-history / degraded-banner
+sections query the daemon's ``voice.health.snapshot`` RPC (DOCTOR-3;
+same pattern as ``doctor resources``) and fall back to this CLI
+process's own in-memory stores with an explicit disclosure otherwise.
+Remaining daemon-dependent bits (ComboStore fast-path, live device
+default-change watcher, TTS open probe against the configured engine)
+still land with the fuller L7 backend RPC follow-up.
 """
 
 from __future__ import annotations
@@ -36,11 +40,14 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
+
+if TYPE_CHECKING:
+    from sovyx.engine._degraded_store import DegradedEntry
 
 from sovyx.cli._mind_resolver import resolve_mind_id
 from sovyx.cli.rpc_client import DaemonClient
@@ -404,7 +411,9 @@ def doctor_voice(
         "Default: auto-detected when exactly one mind exists under "
         "<data_dir>/. When multiple minds exist, --mind-id is required "
         "and the command errors with the available-minds list. The "
-        "persisted profile lands at <data_dir>/<mind_id>/calibration.json.",
+        "persisted profile lands at <data_dir>/<mind_id>/calibration.json. "
+        "In the default preflight mode it also scopes the LLM provider-"
+        "health surface to that mind's llm.default_provider/default_model.",
     ),
     explain: bool = typer.Option(
         False,
@@ -713,6 +722,18 @@ def _run_voice_doctor(
     report = _run_voice_preflight()
     _render_voice_report(report, output_json=output_json, device=device)
 
+    # DOCTOR-3 — one shared daemon round-trip serves the quarantine +
+    # failover + degraded surfaces below (`voice.health.snapshot`,
+    # mirroring the `doctor resources` RPC-first pattern). JSON mode
+    # skips those surfaces entirely, so skip the fetch too.
+    voice_health_payload: dict[str, Any] | None = None
+    voice_health_source: str | None = None
+    if not output_json:
+        try:
+            voice_health_payload, voice_health_source = _fetch_voice_health_payload()
+        except Exception:  # noqa: BLE001 — surfaces degrade to self-fetch/empty
+            voice_health_payload, voice_health_source = None, None
+
     # Mission C1 §T2.4 — surface the quarantine inventory + verdict-
     # derived reason class + remediation hint per entry. Greenfield
     # surface (the pre-mission doctor had ZERO quarantine awareness);
@@ -721,20 +742,31 @@ def _run_voice_doctor(
     _render_voice_quarantine_surface(
         output_json=output_json,
         reason_filter=reason_filter,
+        payload=voice_health_payload,
+        source=voice_health_source,
     )
 
     # Mission C3 §T2.11 — surface the runtime failover-history ring.
     # Greenfield observability for the loop-in-place ladder iteration
     # (v0.45.2). Operators can now triage why a ladder exhausted from
     # the CLI without parsing structured logs.
-    _render_voice_failover_history_surface(output_json=output_json)
+    _render_voice_failover_history_surface(
+        output_json=output_json,
+        payload=voice_health_payload,
+        source=voice_health_source,
+    )
 
     # Mission C4 §Phase 3 §T3.6 — surface the cross-axis degraded
-    # banner state. Mirrors the dashboard's composite banner so
+    # banner state. Mirrors the dashboard's composite banner (both now
+    # read the DAEMON's store when one is reachable — DOCTOR-3) so
     # CLI-only operators see (a) which axes are currently degraded,
     # (b) the composite severity (warn / error / critical), (c) the
     # per-axis action chips the dashboard would render.
-    _render_voice_degraded_banner_surface(output_json=output_json)
+    _render_voice_degraded_banner_surface(
+        output_json=output_json,
+        payload=voice_health_payload,
+        source=voice_health_source,
+    )
 
     # Mission C5 §T3.4 — surface dashboard bundle integrity alongside
     # the voice surfaces. Pure read; never blocks the doctor exit path.
@@ -742,7 +774,9 @@ def _run_voice_doctor(
 
     # Mission C6 §T3.2 — surface LLM provider health alongside the voice
     # + dashboard surfaces. Pure read; never blocks the doctor exit path.
-    _render_llm_health_surface(output_json=output_json)
+    # DOCTOR-4: passes the target mind through so the scan checks the
+    # mind's configured default provider/model, not hardcoded "".
+    _render_llm_health_surface(output_json=output_json, mind_id=mind_id)
 
     failure_count = sum(1 for s in report.steps if not s.passed)
 
@@ -1710,17 +1744,63 @@ def _render_voice_report(
         )
 
 
+_VOICE_HEALTH_LOCAL_DISCLOSURE = (
+    "Daemon not reachable — showing this CLI process only (empty for non-daemon processes)."
+)
+"""DOCTOR-3 truth disclosure printed atop each voice-health surface
+whose data came from the CLI process's own in-memory stores rather
+than the live daemon. Pre-fix the surfaces silently rendered the CLI
+process's freshly-constructed (empty) singletons — a live daemon with
+a quarantined mic still got a clean bill (AP #70/#71 class)."""
+
+
+def _fetch_voice_health_payload() -> tuple[dict[str, Any], str]:
+    """Resolve the voice-health triple via daemon RPC when available.
+
+    DOCTOR-3 — mirrors :func:`_fetch_resource_payload` (the ``doctor
+    resources`` exemplar). Returns ``(payload, source)`` where
+    ``source`` is ``"daemon"`` when the live daemon answered the
+    ``voice.health.snapshot`` call, else ``"local"`` (the CLI
+    process's own stores, serialized by the SAME
+    :func:`~sovyx.engine._rpc_handlers.collect_voice_health_snapshot`
+    the daemon handler runs — one shape symbol, no drift; AP #40/#53).
+    """
+    from sovyx.engine._rpc_handlers import collect_voice_health_snapshot
+
+    client = DaemonClient()
+    if client.is_daemon_running():
+        try:
+            result = asyncio.run(client.call("voice.health.snapshot"))
+            if isinstance(result, dict):
+                return result, "daemon"
+        except Exception:  # noqa: BLE001 — degrade to local on any RPC failure
+            pass
+    return collect_voice_health_snapshot(), "local"
+
+
+def _print_voice_health_source_disclosure(source: str | None) -> None:
+    """Print the yellow local-scope disclosure when ``source`` is local."""
+    if source == "local":
+        console.print(f"[yellow]{_VOICE_HEALTH_LOCAL_DISCLOSURE}[/yellow]")
+
+
 def _render_voice_quarantine_surface(
     *,
     output_json: bool,
     reason_filter: str | None,
+    payload: dict[str, Any] | None = None,
+    source: str | None = None,
 ) -> None:
     """Mission C1 §T2.4 — render the "Voice — quarantined endpoints" section.
 
-    Greenfield: pre-mission ``sovyx doctor voice`` had zero quarantine
-    awareness; this helper queries the process-local
-    :class:`EndpointQuarantine` (shared with the cascade + watchdog
-    rechecker) and renders one row per live entry. Each row carries:
+    DOCTOR-3: renders the DAEMON's :class:`EndpointQuarantine` when a
+    daemon is reachable (``payload``/``source`` from
+    :func:`_fetch_voice_health_payload`, shared with the failover +
+    degraded surfaces so one RPC serves all three). When no daemon is
+    reachable it falls back to this CLI process's own store and says
+    so with an explicit yellow disclosure — pre-fix it ALWAYS read the
+    CLI-process singleton and printed "No endpoints in quarantine"
+    even while the running daemon had live entries. Each row carries:
 
     * The friendly device name + endpoint GUID.
     * The verdict-derived reason class (``apo_degraded`` /
@@ -1730,12 +1810,15 @@ def _render_voice_quarantine_surface(
     * The operator-facing remediation hint from
       :func:`diagnosis_user_remediation` (the same single-source-of-
       truth dict the dashboard's service-health card consumes).
-    * Seconds-until-expiry so operators can correlate with the TTL knob.
+    * ``recheck_in_s`` (producer-computed — monotonic deadlines don't
+      cross process boundaries) so operators can correlate with the
+      TTL knob.
 
     ``reason_filter`` (when non-empty) drops entries whose
-    ``derived_reason`` / legacy ``reason`` doesn't match. Empty filter
-    OR empty quarantine renders an empty section — silence is OK here,
-    "no entries" is the typical (healthy) state.
+    ``resolved_reason`` / ``derived_reason`` / legacy ``reason``
+    doesn't match. Empty filter OR empty quarantine renders an empty
+    section — silence is OK here, "no entries" is the typical
+    (healthy) state.
 
     JSON mode (``output_json=True``) skips this surface entirely; the
     preflight JSON shape is consumed by external monitors that already
@@ -1744,20 +1827,22 @@ def _render_voice_quarantine_surface(
     """
     if output_json:
         return
-    from sovyx.voice.health._quarantine import get_default_quarantine
     from sovyx.voice.health._user_remediation import diagnosis_user_remediation
 
-    quarantine = get_default_quarantine()
-    entries = quarantine.snapshot()
+    if payload is None:
+        payload, source = _fetch_voice_health_payload()
+    entries = [e for e in payload.get("quarantine", []) if isinstance(e, dict)]
     if reason_filter:
         filter_value = reason_filter.strip()
-        entries = tuple(
+        entries = [
             entry
             for entry in entries
-            if (entry.resolved_reason or entry.derived_reason or entry.reason) == filter_value
-        )
+            if (entry.get("resolved_reason") or entry.get("derived_reason") or entry.get("reason"))
+            == filter_value
+        ]
 
     console.print("\n[bold]Voice — quarantined endpoints[/bold]")
+    _print_voice_health_source_disclosure(source)
     if not entries:
         if reason_filter:
             console.print(f"[dim]No quarantined endpoints match reason {reason_filter!r}.[/dim]")
@@ -1765,19 +1850,23 @@ def _render_voice_quarantine_surface(
             console.print("[dim]No endpoints in quarantine.[/dim]")
         return
 
-    now = time.monotonic()
     for entry in entries:
         # Mission H3 §T3.2 — H3-canonical field-chain fallback.
-        reason_key = entry.resolved_reason or entry.derived_reason or entry.reason or "unknown"
-        seconds_left = max(0.0, entry.expires_at_monotonic - now)
-        friendly = entry.device_friendly_name or entry.endpoint_guid or "(unknown)"
+        reason_key = (
+            entry.get("resolved_reason")
+            or entry.get("derived_reason")
+            or entry.get("reason")
+            or "unknown"
+        )
+        seconds_left = max(0.0, float(entry.get("recheck_in_s", 0.0)))
+        friendly = entry.get("device_friendly_name") or entry.get("endpoint_guid") or "(unknown)"
         console.print(f"  • [bold]{friendly}[/bold]  [dim](reason: {reason_key})[/dim]")
-        hint = diagnosis_user_remediation(reason_key)
+        hint = diagnosis_user_remediation(str(reason_key))
         if hint:
             console.print(f"    [dim]{hint}[/dim]")
         console.print(
-            f"    [dim]Endpoint: {entry.endpoint_guid or '—'}  "
-            f"Host API: {entry.host_api or '—'}  "
+            f"    [dim]Endpoint: {entry.get('endpoint_guid') or '—'}  "
+            f"Host API: {entry.get('host_api') or '—'}  "
             f"Recheck in: {int(seconds_left)}s[/dim]"
         )
 
@@ -1786,75 +1875,93 @@ def _render_voice_failover_history_surface(
     *,
     output_json: bool,
     limit: int = 8,
+    payload: dict[str, Any] | None = None,
+    source: str | None = None,
 ) -> None:
     """Mission C3 §T2.11 — render the "Voice — failover history" section.
 
-    Surfaces the most recent ``limit`` ladder runs from the process-local
+    Surfaces the most recent ``limit`` ladder runs from the
     :class:`sovyx.voice.health._failover_history.FailoverHistoryRing`
     (populated by ``_try_runtime_failover`` per ladder complete).
+    DOCTOR-3: the ring rendered is the DAEMON's when a daemon is
+    reachable (via ``payload``/``source`` from
+    :func:`_fetch_voice_health_payload`); otherwise this CLI process's
+    own — with an explicit yellow disclosure. Pre-fix the empty-state
+    line claimed "on this daemon process" while ALWAYS reading the CLI
+    process's freshly-constructed (empty) ring.
 
     JSON mode skips this surface entirely (operators using JSON output
     consume the ``/api/voice/health/failover-history`` endpoint
     directly).
 
-    Renders gracefully on a fresh-boot daemon where no ladder has yet
-    run — prints a single ``[dim]No failover ladder has run yet.[/dim]``
-    line.
+    Renders gracefully when no ladder has yet run — prints a single
+    ``[dim]No failover ladder has run yet.[/dim]`` line.
 
     Args:
         output_json: When True, the surface is suppressed.
         limit: Max number of ladder runs to render. Default 8 covers
             the most recent operator-session timeframe without flooding
             the terminal.
+        payload: Pre-fetched voice-health payload (shared across the
+            three surfaces by ``_run_voice_doctor``). ``None`` →
+            self-fetch via :func:`_fetch_voice_health_payload`.
+        source: ``"daemon"`` / ``"local"`` provenance of ``payload``.
     """
     if output_json:
         return
-    try:
-        from sovyx.voice.health._failover_history import get_default_failover_history
-    except Exception as exc:  # noqa: BLE001 — observability-only surface
-        console.print(
-            f"[dim]Voice — failover history: unavailable ({exc}).[/dim]",
-        )
-        return
+    if payload is None:
+        try:
+            payload, source = _fetch_voice_health_payload()
+        except Exception as exc:  # noqa: BLE001 — observability-only surface
+            console.print(
+                f"[dim]Voice — failover history: unavailable ({exc}).[/dim]",
+            )
+            return
 
-    ring = get_default_failover_history()
-    entries = ring.entries()[:limit]
+    entries = [e for e in payload.get("failover_history", []) if isinstance(e, dict)][:limit]
 
     console.print("\n[bold]Voice — failover history[/bold]")
+    _print_voice_health_source_disclosure(source)
     if not entries:
-        console.print("[dim]No failover ladder has run yet on this daemon process.[/dim]")
+        console.print("[dim]No failover ladder has run yet.[/dim]")
         return
 
     for entry in entries:
+        verdict = str(entry.get("verdict", ""))
         verdict_color = {
             "succeeded": "green",
             "exhausted": "red",
             "in_progress": "yellow",
-        }.get(entry.verdict, "white")
-        elapsed = f"{entry.elapsed_ms}ms" if entry.elapsed_ms is not None else "—"
+        }.get(verdict, "white")
+        elapsed_ms = entry.get("elapsed_ms")
+        elapsed = f"{elapsed_ms}ms" if elapsed_ms is not None else "—"
         console.print(
-            f"  • [bold]{entry.ladder_id}[/bold]  "
-            f"[{verdict_color}]{entry.verdict}[/{verdict_color}]  "
-            f"[dim](candidates={entry.candidates_tried}, elapsed={elapsed})[/dim]",
+            f"  • [bold]{entry.get('ladder_id', '?')}[/bold]  "
+            f"[{verdict_color}]{verdict}[/{verdict_color}]  "
+            f"[dim](candidates={entry.get('candidates_tried', 0)}, elapsed={elapsed})[/dim]",
         )
-        if entry.from_endpoint:
-            console.print(f"    [dim]From: {entry.from_endpoint}[/dim]")
-        for candidate in entry.candidates:
+        if entry.get("from_endpoint"):
+            console.print(f"    [dim]From: {entry['from_endpoint']}[/dim]")
+        for candidate in entry.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            cand_verdict = str(candidate.get("verdict", ""))
             cand_color = {
                 "succeeded": "green",
                 "failed": "red",
                 "skipped": "yellow",
-            }.get(candidate.verdict, "white")
-            cand_elapsed = f"{candidate.elapsed_ms}ms" if candidate.elapsed_ms is not None else "—"
+            }.get(cand_verdict, "white")
+            cand_elapsed_ms = candidate.get("elapsed_ms")
+            cand_elapsed = f"{cand_elapsed_ms}ms" if cand_elapsed_ms is not None else "—"
             extra = ""
-            if candidate.error_class:
-                extra = f" [dim]error_class={candidate.error_class}[/dim]"
-            elif candidate.skipped_reason:
-                extra = f" [dim]reason={candidate.skipped_reason}[/dim]"
+            if candidate.get("error_class"):
+                extra = f" [dim]error_class={candidate['error_class']}[/dim]"
+            elif candidate.get("skipped_reason"):
+                extra = f" [dim]reason={candidate['skipped_reason']}[/dim]"
             console.print(
-                f"    {candidate.index}. "
-                f"[{cand_color}]{candidate.verdict}[/{cand_color}]  "
-                f"{candidate.target_endpoint}  [dim]({cand_elapsed})[/dim]" + extra,
+                f"    {candidate.get('index', '?')}. "
+                f"[{cand_color}]{cand_verdict}[/{cand_color}]  "
+                f"{candidate.get('target_endpoint', '?')}  [dim]({cand_elapsed})[/dim]" + extra,
             )
 
 
@@ -1874,17 +1981,71 @@ def _doctor_composite_severity_by_max_enabled() -> bool:
         return False
 
 
+def _degraded_entries_from_payload(payload: dict[str, Any]) -> list[DegradedEntry]:
+    """Rebuild typed :class:`DegradedEntry` rows from the wire payload.
+
+    DOCTOR-3 — the composite-severity computation stays on the
+    dashboard route's SSoT helpers (Mission D.1 / D-P0-1), which
+    consume real ``DegradedEntry`` objects; this reconstructs them
+    from the ``voice.health.snapshot`` dicts (the paired producer is
+    :func:`~sovyx.engine._rpc_handlers.collect_voice_health_snapshot`
+    — AP #40's typed-boundary round-trip). Malformed rows are dropped,
+    never raised.
+    """
+    from sovyx.engine._degraded_store import ActionChip
+    from sovyx.engine._degraded_store import DegradedEntry as _DegradedEntry
+
+    def _entry_from_row(row: dict[str, Any]) -> DegradedEntry | None:
+        try:
+            return _DegradedEntry(
+                axis=str(row.get("axis", "")),
+                reason=str(row.get("reason", "")),
+                severity=str(row.get("severity", "warn")),
+                title_token=str(row.get("title_token", "")),
+                body_token=str(row.get("body_token", "")),
+                action_chips=tuple(
+                    ActionChip(
+                        label_token=str(chip.get("label_token", "")),
+                        action=str(chip.get("action", "")),
+                        target=str(chip.get("target", "")),
+                        style=str(chip.get("style", "default")),
+                    )
+                    for chip in row.get("action_chips", [])
+                    if isinstance(chip, dict)
+                ),
+            )
+        except Exception:  # noqa: BLE001 — render path MUST never crash
+            logger.debug("doctor_degraded_row_skipped", reason="malformed_wire_row")
+            return None
+
+    entries: list[DegradedEntry] = []
+    for row in payload.get("degraded", []):
+        if not isinstance(row, dict):
+            continue
+        entry = _entry_from_row(row)
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
 def _render_voice_degraded_banner_surface(
     *,
     output_json: bool,
+    payload: dict[str, Any] | None = None,
+    source: str | None = None,
 ) -> None:
     """Mission C4 §Phase 3 §T3.6 — render the "Voice — degraded banner" section.
 
-    Surfaces the cross-axis :class:`EngineDegradedStore` snapshot +
-    current operator-ack state from
-    :class:`OperatorAcksStore` (when registered — Phase 3+ daemon).
-    Pairs with the dashboard's composite banner so CLI-only operators
-    get the same picture as the React surface.
+    Surfaces the cross-axis :class:`EngineDegradedStore` snapshot.
+    DOCTOR-3: the store rendered is the DAEMON's when a daemon is
+    reachable (``payload``/``source`` from
+    :func:`_fetch_voice_health_payload`) — THAT is what pairs this
+    surface with the dashboard's composite banner, since the dashboard
+    reads the daemon-process store. With no daemon reachable it falls
+    back to this CLI process's own (empty in non-daemon processes)
+    store behind an explicit yellow disclosure; pre-fix it silently
+    rendered the CLI-process singleton while its docstring claimed
+    dashboard parity (AP #70 class).
 
     JSON mode skips this surface entirely (operators using JSON output
     consume ``/api/engine/degraded`` directly).
@@ -1894,6 +2055,10 @@ def _render_voice_degraded_banner_surface(
 
     Args:
         output_json: When True, the surface is suppressed.
+        payload: Pre-fetched voice-health payload (shared across the
+            three surfaces by ``_run_voice_doctor``). ``None`` →
+            self-fetch via :func:`_fetch_voice_health_payload`.
+        source: ``"daemon"`` / ``"local"`` provenance of ``payload``.
     """
     if output_json:
         return
@@ -1903,15 +2068,17 @@ def _render_voice_degraded_banner_surface(
             _compute_composite_severity_hybrid,
             _max_per_axis_severity,
         )
-        from sovyx.engine._degraded_store import get_default_degraded_store
     except Exception as exc:  # noqa: BLE001
         console.print(
             f"[dim]Voice — degraded banner: unavailable ({exc}).[/dim]",
         )
         return
 
-    entries = get_default_degraded_store().snapshot()
+    if payload is None:
+        payload, source = _fetch_voice_health_payload()
+    entries = _degraded_entries_from_payload(payload)
     console.print("\n[bold]Voice — degraded banner[/bold]")
+    _print_voice_health_source_disclosure(source)
     if not entries:
         console.print("[dim]No degraded axes.[/dim]")
         return
@@ -2018,13 +2185,24 @@ def _render_dashboard_integrity_surface(
     )
 
 
-def _render_llm_health_surface(*, output_json: bool) -> None:
+def _render_llm_health_surface(*, output_json: bool, mind_id: str | None = None) -> None:
     """Mission C6 §T3.2 — surface LLM provider health in ``sovyx doctor voice``.
 
     Pure read. Never blocks the doctor exit path. JSON mode is a no-op
     here because the ``sovyx doctor voice --json`` output already
     summarizes the voice surfaces; the LLM detail lives at
     ``sovyx llm doctor --json``.
+
+    DOCTOR-4 (AP #71 class): the scan now receives the target mind's
+    real ``llm.default_provider``/``default_model`` (via
+    :func:`sovyx.cli.commands.llm.resolve_mind_llm_defaults`) instead
+    of the pre-fix hardcoded ``""``/``""`` that made the
+    ``DEFAULT_MODEL_UNAVAILABLE`` and configured-default
+    ``OLLAMA_UNREACHABLE`` verdicts structurally unreachable. Best-
+    effort here: any resolution failure (unknown mind, ambiguous
+    multi-mind, malformed YAML) degrades to the env-only scan — this
+    is an auxiliary surface; ``sovyx llm doctor --mind-id`` is the
+    loud path.
     """
     if output_json:
         return
@@ -2041,6 +2219,15 @@ def _render_llm_health_surface(*, output_json: bool) -> None:
         console.print(f"[dim]LLM — provider health: unavailable ({exc}).[/dim]")
         return
 
+    default_provider = ""
+    default_model = ""
+    try:
+        from sovyx.cli.commands.llm import resolve_mind_llm_defaults  # noqa: PLC0415
+
+        default_provider, default_model = resolve_mind_llm_defaults(mind_id)
+    except Exception:  # noqa: BLE001 — auxiliary surface degrades to env-only
+        default_provider, default_model = "", ""
+
     try:
         ollama = OllamaProvider()
         asyncio.run(ollama.ping())
@@ -2054,8 +2241,8 @@ def _render_llm_health_surface(*, output_json: bool) -> None:
             env=os.environ,
             ollama_ping_result=ollama.is_available,
             ollama_models=ollama_models if ollama.is_available else None,
-            default_provider="",
-            default_model="",
+            default_provider=default_provider,
+            default_model=default_model,
         )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[dim]LLM — provider health: scan failed ({exc}).[/dim]")
@@ -2446,6 +2633,18 @@ async def _run_linux_session_manager_grab(*, output_json: bool) -> int:
             )
         elif report.has_grab is False:
             console.print("[bold green]✓ Capture hardware is free.[/]")
+        elif sys.platform != "linux":
+            # DOCTOR-14 — on Windows/macOS the detector short-circuits
+            # before ever attempting pactl or the /proc scan
+            # (_session_manager_detector.py returns has_grab=None with
+            # detection_method="unavailable"); the old fixed
+            # parenthetical misattributed the inconclusive verdict to
+            # tools that were never run. The command docstring promises
+            # a "not applicable" message here.
+            console.print(
+                "[bold blue]ℹ Not applicable on this OS[/]"
+                " (Linux-only detector; see the evidence line).",
+            )
         else:
             console.print(
                 "[bold blue]ℹ Detector could not determine grab state[/]"
@@ -2705,6 +2904,70 @@ def doctor_piper_locale_match(
     raise typer.Exit(0 if result.status == DiagnosticStatus.PASS else 1)
 
 
+@doctor_app.command("stt_language_match")
+def doctor_stt_language_match(
+    language: str | None = typer.Option(
+        None,
+        "--language",
+        "-l",
+        help="Language tag to check (e.g. 'pt-BR', 'en-US', 'ja'). When "
+        "omitted, falls back to 'en' so the probe is runnable without "
+        "an active mind context.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the DiagnosticResult as a single JSON object on stdout.",
+    ),
+) -> None:
+    """Check whether a language has a Moonshine STT model (ENGINES-9).
+
+    The STT sibling of ``sovyx doctor piper_locale_match`` (TTS).
+    Surfaces gaps between the mind's spoken language and Moonshine's
+    model catalog at doctor/setup preflight time — pre-fix the
+    limitation (e.g. no Portuguese) only surfaced at pipeline start
+    via the factory WARN + ``stt_language_coerced`` degraded banner.
+
+    LENIENT semantics per ``feedback_staged_adoption`` (mirrors the
+    sibling):
+
+    * ``0`` — ``PASS`` (Moonshine ships a model; STT honours the
+      language).
+    * ``1`` — ``WARN`` (no model; the factory coerces STT to English —
+      voice still works but speech is transcribed in English).
+    """
+    from sovyx.upgrade.doctor import DiagnosticStatus, _check_stt_language_match
+
+    result = _check_stt_language_match(language=language)
+
+    if output_json:
+        print(json.dumps(result.to_dict(), ensure_ascii=False))
+    else:
+        console = Console()
+        status_style = {
+            DiagnosticStatus.PASS: "green",
+            DiagnosticStatus.WARN: "yellow",
+            DiagnosticStatus.FAIL: "red",
+        }[result.status]
+        marker = {
+            DiagnosticStatus.PASS: "✓",
+            DiagnosticStatus.WARN: "⚠",
+            DiagnosticStatus.FAIL: "✗",
+        }[result.status]
+        console.print(
+            f"[bold {status_style}]{marker} {result.check}: {result.status.value.upper()}[/]",
+        )
+        console.print(f"  {result.message}")
+        if result.fix_suggestion:
+            console.print(f"  [dim]fix:[/] {result.fix_suggestion}")
+        if result.details:
+            normalized = result.details.get("normalized_language")
+            if normalized:
+                console.print(f"  [dim]normalized:[/] {normalized}")
+
+    raise typer.Exit(0 if result.status == DiagnosticStatus.PASS else 1)
+
+
 @doctor_app.command("platform")
 def doctor_platform(
     output_json: bool = typer.Option(
@@ -2725,7 +2988,9 @@ def doctor_platform(
     * **Windows** — Audiosrv + AudioEndpointBuilder service state +
       recent ETW audio operational events.
     * **macOS** — HAL plug-in catalogue + Bluetooth audio profile +
-      Hardened-Runtime mic-entitlement verifier.
+      Hardened-Runtime mic-entitlement verifier + (MACOS-4) coreaudiod
+      daemon state (MA10), App Sandbox verdict (MA13) and recent
+      ``com.apple.audio`` unified-log events (MA14).
 
     Probes are always run in parallel inside each branch via
     ``asyncio.gather``; per-probe failures collapse into structured
@@ -2791,22 +3056,52 @@ async def _run_platform_diagnostics(*, output_json: bool) -> int:
             "etw_audio_events": _serialise_etw_results(etw_report),
         }
     elif platform == "darwin":
+        from sovyx.dashboard.routes.voice_platform_diagnostics import (
+            _build_audio_log_payload,
+            _build_coreaudiod_payload,
+            _build_sandbox_payload,
+        )
         from sovyx.voice._bluetooth_profile_mac import (
             detect_bluetooth_audio_profile,
         )
         from sovyx.voice._codesign_verify_mac import verify_microphone_entitlement
         from sovyx.voice._hal_detector_mac import detect_hal_plugins
+        from sovyx.voice.health._coreaudiod_recovery import probe_coreaudiod_state
+        from sovyx.voice.health._macos_sandbox_detect import detect_sandbox_state
+        from sovyx.voice.health._macos_sysdiagnose import query_audio_log_events
 
-        mic_report, hal_report, bt_report, cs_report = await asyncio.gather(
+        (
+            mic_report,
+            hal_report,
+            bt_report,
+            cs_report,
+            coreaudiod_report,
+            sandbox_report,
+            audio_log_result,
+        ) = await asyncio.gather(
             mic_task,
             _safe(detect_hal_plugins),
             _safe(detect_bluetooth_audio_profile),
             _safe(verify_microphone_entitlement),
+            # MACOS-4 — the three formerly boot-log-only probes (MA10 /
+            # MA13 / MA14), same probe isolation as the siblings.
+            _safe(probe_coreaudiod_state),
+            _safe(detect_sandbox_state),
+            _safe(query_audio_log_events),
         )
         payload["macos"] = {
             "hal_plugins": _serialise_dataclass_or_unknown(hal_report),
             "bluetooth": _serialise_dataclass_or_unknown(bt_report),
             "code_signing": _serialise_dataclass_or_unknown(cs_report),
+            # MACOS-4 — serialize via the dashboard route's builders
+            # (model_dump) so the CLI and GET
+            # /api/voice/platform-diagnostics share ONE payload shape
+            # per probe (AP #40/#53: shared symbol, not twin literals).
+            # The generic dataclass serializer would also drop the
+            # property-backed remediation_hint these reports carry.
+            "coreaudiod": _build_coreaudiod_payload(coreaudiod_report).model_dump(),
+            "sandbox": _build_sandbox_payload(sandbox_report).model_dump(),
+            "audio_log_events": _build_audio_log_payload(audio_log_result).model_dump(),
         }
     else:
         payload["platform"] = "other"
@@ -2902,6 +3197,17 @@ def _render_platform_diagnostics_table(payload: dict[str, object]) -> None:
                         console.print(f"    {k}: {'; '.join(str(x) for x in v)}")
                     elif k in ("notes",):
                         continue
+                    elif k == "events" and isinstance(v, list):
+                        # MACOS-4 audio_log_events — compact render
+                        # (mirrors the ETW list treatment below).
+                        console.print(f"    events: {len(v)} event(s)")
+                        for item in v[:3]:
+                            if isinstance(item, dict):
+                                console.print(
+                                    f"    - [{item.get('level', '?')}] "
+                                    f"{item.get('process', '?')}: "
+                                    f"{str(item.get('description', ''))[:100]}",
+                                )
                     else:
                         console.print(f"    {k}: {v}")
             elif isinstance(data, list):
@@ -3270,6 +3576,15 @@ def doctor_resources(
 # target versions + V-* IDs). It is HAND-MAINTAINED and audited via
 # the CLAUDE.md anti-pattern table — every new gate landing in
 # verify_gates.sh MUST add a row here in the same commit.
+#
+# DOCTOR-2 (2026-07-02): the anchor test at
+# tests/unit/cli/test_doctor_gates.py now parses
+# scripts/verify_gates.sh (GATE_TOTAL + the per-gate GATE_NUM blocks
+# and their scripts/dev/check_*.py names) and asserts this registry
+# matches — a new gate added to the script WITHOUT a registry row now
+# fails the suite instead of silently drifting (gates 16-19 shipped
+# v0.49.38..v0.49.56 without rows; the old anchor pinned range(1, 16)
+# and codified the drift).
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -3278,9 +3593,13 @@ class _GateEntry:
 
     number: int
     name: str
-    status: str  # "STRICT" or "LENIENT"
-    strict_target: str  # version tag like "v0.54.0" or "—" (always strict)
-    validation_gate: str  # V-* ID or "—"
+    # "STRICT", "LENIENT", or "STRICT-when-applicable" (a gate that
+    # hard-fails when its inputs exist on this checkout and SKIPs when
+    # they are structurally absent — Gate 11 dashboard bundle contract,
+    # see verify_gates.sh Gate 11 block + CLAUDE.md gate table).
+    status: str
+    strict_target: str  # version tag like "v0.54.0" or "—" (already strict)
+    validation_gate: str  # V-* ID / mission unblock anchor, or "—"
 
 
 # Mirrors CLAUDE.md ``Gates (in order):`` block. Single-source-of-truth
@@ -3298,11 +3617,34 @@ _QUALITY_GATES: tuple[_GateEntry, ...] = (
     _GateEntry(8, "check_boundary_round_trip_coverage.py (C2)", "STRICT", "—", "V-C2-1"),
     _GateEntry(9, "check_ladder_iteration_discipline.py (C3)", "STRICT", "—", "V-C3-1"),
     _GateEntry(10, "check_degraded_signal_surface.py (C4)", "STRICT", "—", "V-C4-1"),
-    _GateEntry(11, "check_dashboard_bundle_integrity.py (C5)", "LENIENT", "v0.48.0", "V-C5-7"),
+    # Gate 11 flipped LENIENT → STRICT-when-applicable in v0.49.x
+    # (W0.1, MISSION-VOICE-DEEP-INVESTIGATION-2026-06-01): a bundle
+    # that IS present but incomplete FAILS locally; a checkout with no
+    # local dashboard build SKIPs (full STRICT in publish.yml). The
+    # pre-DOCTOR-2 row still said LENIENT / v0.48.0 — a target that
+    # had already shipped without the flip ever being recorded here.
+    _GateEntry(
+        11,
+        "check_dashboard_bundle_integrity.py (C5)",
+        "STRICT-when-applicable",
+        "—",
+        "—",
+    ),
     _GateEntry(12, "check_llm_provider_discipline.py (C6)", "LENIENT", "v0.50.0", "V-C6-11"),
     _GateEntry(13, "check_platform_neutral_event_names.py (H2)", "LENIENT", "v0.51.0", "V-H2-11"),
     _GateEntry(14, "check_quarantine_reason_discipline.py (H3)", "LENIENT", "v0.53.0", "V-H3-11"),
     _GateEntry(15, "check_resource_hygiene_discipline.py (H4)", "LENIENT", "v0.54.0", "V-H4-13"),
+    # Gates 16-18 (Mission C §C.0): STRICT-flip gated on Mission C body
+    # work, not an operator V-* backlog row — the validation_gate cell
+    # carries the mission unblock anchor instead of a V-* ID.
+    _GateEntry(16, "check_zod_twin_completeness.py (C)", "LENIENT", "v0.53.x", "C-P0-1"),
+    _GateEntry(17, "check_response_model_presence.py (C)", "LENIENT", "v0.53.x", "C.4 body"),
+    _GateEntry(18, "check_boundary_helper_real.py (C)", "LENIENT", "v0.53.x", "C.6 body"),
+    # Gate 19 is ALSO STRICT-when-applicable in shape (SKIPs where
+    # docs-internal/ is gitignored-absent — CI runners / fresh
+    # checkouts / PyPI sdists) but its present-inputs verdict is still
+    # LENIENT (warn-only) until v0.52.0 per Mission Ω-3.
+    _GateEntry(19, "check_name_lock_integrity.py (Ω-3)", "LENIENT", "v0.52.0", "Ω-3 #68"),
 )
 
 
@@ -3320,15 +3662,18 @@ def doctor_gates(
 
     Pre-fix operators on v0.49.x relied on memory or grep through
     CLAUDE.md to answer "is Gate 15 going STRICT in v0.54.0 or v0.55.0?".
-    The pending strict-flips are tagged via validation gates
-    (V-C5-7 / V-C6-11 / V-H2-11 / V-H3-11 / V-H4-13) and the operator-
-    validation backlog at
-    ``docs-internal/OPERATOR-VALIDATION-BACKLOG-2026.md``.
+    Pending strict-flips are tagged either via V-* validation gates
+    (V-C6-11 / V-H2-11 / V-H3-11 / V-H4-13 — operator-validation
+    backlog at ``docs-internal/OPERATOR-VALIDATION-BACKLOG-2026.md``)
+    or via a mission body-work anchor (gates 16-19: Mission C /
+    Mission Ω-3).
 
     The table below mirrors CLAUDE.md's Quality Gates section. Every
     new gate landing in ``scripts/verify_gates.sh`` MUST add a row to
-    ``_QUALITY_GATES`` in the same commit (mechanically anchored via
-    the test ``tests/unit/cli/test_doctor_gates.py``).
+    ``_QUALITY_GATES`` in the same commit — mechanically anchored via
+    ``tests/unit/cli/test_doctor_gates.py``, which parses
+    ``verify_gates.sh`` (GATE_TOTAL + per-gate check-script names) and
+    fails when this registry falls behind the script.
     """
     if output_json:
         print(
@@ -3360,7 +3705,9 @@ def doctor_gates(
     table.add_column("STRICT target", justify="center")
     table.add_column("Validation gate", justify="center")
     for gate in _QUALITY_GATES:
-        status_style = "green" if gate.status == "STRICT" else "yellow"
+        # STRICT + STRICT-when-applicable both render green (they hard-
+        # fail whenever their inputs exist); LENIENT renders yellow.
+        status_style = "green" if gate.status.startswith("STRICT") else "yellow"
         table.add_row(
             str(gate.number),
             gate.name,

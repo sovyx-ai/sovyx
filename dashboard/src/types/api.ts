@@ -1583,10 +1583,51 @@ export interface PlatformWindowsBranch {
   etw_audio_events: EtwChannelPayload[];
 }
 
+// MACOS-4 — verdict tokens mirror the backend StrEnums verbatim:
+// CoreAudiodVerdict (health/_coreaudiod_recovery.py), SandboxVerdict
+// (health/_macos_sandbox_detect.py), MacosLogEventLevel
+// (health/_macos_sysdiagnose.py).
+export type CoreAudiodVerdictToken = "running" | "missing" | "unknown";
+
+export interface CoreAudiodPayload {
+  verdict: CoreAudiodVerdictToken;
+  notes: string[];
+  remediation_hint: string;
+}
+
+export type SandboxVerdictToken = "sandboxed" | "unsandboxed" | "unknown";
+
+export interface SandboxPayload {
+  verdict: SandboxVerdictToken;
+  executable_path: string;
+  notes: string[];
+  remediation_hint: string;
+}
+
+export type MacosAudioLogLevelToken = "info" | "debug" | "warning" | "fault";
+
+export interface MacosAudioLogEventPayload {
+  timestamp_iso: string;
+  level: MacosAudioLogLevelToken;
+  subsystem: string;
+  process: string;
+  description: string;
+}
+
+export interface MacosAudioLogPayload {
+  events: MacosAudioLogEventPayload[];
+  lookback: string;
+  notes: string[];
+}
+
 export interface PlatformMacOSBranch {
   hal_plugins: HalPayload;
   bluetooth: BluetoothPayload;
   code_signing: CodeSigningPayload;
+  // MACOS-4 — the three formerly boot-log-only probes.
+  coreaudiod: CoreAudiodPayload;
+  sandbox: SandboxPayload;
+  audio_log_events: MacosAudioLogPayload;
 }
 
 export type PlatformToken = "linux" | "win32" | "darwin" | "other";

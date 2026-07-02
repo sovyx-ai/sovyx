@@ -6,13 +6,24 @@ Mission anchor: ``docs-internal/missions/MISSION-c3-failover-ladder-iteration-20
 Pin the CLI surface: empty-state renders the documented hint;
 populated state renders one row per ladder run + per-candidate
 detail; JSON mode suppresses the surface entirely.
+
+DOCTOR-3 migration: the renderer is now daemon-first (it self-fetches
+via ``_fetch_voice_health_payload`` when no ``payload`` is passed).
+These tests pin the LOCAL-source path hermetically by patching the
+fetch to serialize this process's ring via the shared
+``collect_voice_health_snapshot`` producer — a live daemon on the dev
+box must not leak into the assertions.
 """
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
+from sovyx.cli.commands import doctor as doctor_mod
 from sovyx.cli.commands.doctor import _render_voice_failover_history_surface
+from sovyx.engine._rpc_handlers import collect_voice_health_snapshot
 from sovyx.voice.health._failover_history import (
     FailoverCandidateRecord,
     FailoverLadderRunRecord,
@@ -26,11 +37,42 @@ def _reset_singleton() -> None:
     reset_default_failover_history()
 
 
+def _render_from_local_ring(*, output_json: bool = False, limit: int = 8) -> None:
+    """Render with the fetch pinned to this process's ring (hermetic)."""
+    with patch.object(
+        doctor_mod,
+        "_fetch_voice_health_payload",
+        return_value=(collect_voice_health_snapshot(), "local"),
+    ):
+        _render_voice_failover_history_surface(output_json=output_json, limit=limit)
+
+
 class TestEmptyStateRender:
     def test_renders_empty_state_message(self, capsys: pytest.CaptureFixture[str]) -> None:
-        _render_voice_failover_history_surface(output_json=False)
+        _render_from_local_ring()
         captured = capsys.readouterr()
         assert "Voice — failover history" in captured.out
+        assert "No failover ladder has run yet" in captured.out
+        # DOCTOR-3 wording fix: the pre-fix empty-state falsely claimed
+        # "on this daemon process" while reading the CLI process's ring.
+        assert "on this daemon process" not in captured.out
+
+    def test_local_source_prints_disclosure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """DOCTOR-3 — daemon-unreachable path discloses the local scope."""
+        _render_from_local_ring()
+        captured = capsys.readouterr()
+        assert "Daemon not reachable" in captured.out
+        assert "showing this CLI process only" in captured.out
+
+    def test_daemon_source_prints_no_disclosure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """When the payload came from the daemon RPC, no disclosure."""
+        _render_voice_failover_history_surface(
+            output_json=False,
+            payload={"failover_history": []},
+            source="daemon",
+        )
+        captured = capsys.readouterr()
+        assert "Daemon not reachable" not in captured.out
         assert "No failover ladder has run yet" in captured.out
 
     def test_json_mode_suppresses_surface(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -71,7 +113,7 @@ class TestPopulatedStateRender:
         )
         ring.record_ladder(run)
 
-        _render_voice_failover_history_surface(output_json=False)
+        _render_from_local_ring()
         captured = capsys.readouterr()
 
         assert "abc123def456" in captured.out
@@ -101,7 +143,7 @@ class TestPopulatedStateRender:
         )
         ring.record_ladder(run)
 
-        _render_voice_failover_history_surface(output_json=False)
+        _render_from_local_ring()
         captured = capsys.readouterr()
 
         assert "exhausted" in captured.out
@@ -118,7 +160,7 @@ class TestPopulatedStateRender:
                     verdict="succeeded",
                 ),
             )
-        _render_voice_failover_history_surface(output_json=False, limit=3)
+        _render_from_local_ring(limit=3)
         captured = capsys.readouterr()
         # Newest first — id-9, 8, 7.
         assert "id-00000009" in captured.out

@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from sovyx.cli.commands import llm as llm_cmd
@@ -126,6 +127,137 @@ class TestDoctorCommand:
             result = runner.invoke(llm_cmd.llm_app, ["health"])
         assert result.exit_code == 1
         assert "NO_PROVIDER_CONFIGURED" in result.output
+
+
+def _write_mind_yaml(
+    data_dir: Path,
+    mind_id: str,
+    *,
+    default_provider: str,
+    default_model: str,
+) -> None:
+    mind_dir = data_dir / mind_id
+    mind_dir.mkdir(parents=True, exist_ok=True)
+    (mind_dir / "mind.yaml").write_text(
+        "name: TestMind\n"
+        "language: en\n"
+        "llm:\n"
+        f'  default_provider: "{default_provider}"\n'
+        f'  default_model: "{default_model}"\n',
+        encoding="utf-8",
+    )
+
+
+def _mock_ollama(models: list[str]) -> MagicMock:
+    instance = MagicMock()
+    instance.is_available = True
+    instance.ping = AsyncMock(return_value=True)
+    instance.list_models = AsyncMock(return_value=models)
+    return instance
+
+
+class TestResolveMindLlmDefaults:
+    """DOCTOR-4 — the resolver that ends the hardcoded ""/"" starvation."""
+
+    def test_single_mind_resolves_its_llm_defaults(self, tmp_path: Path) -> None:
+        _write_mind_yaml(
+            tmp_path,
+            "sovyx",
+            default_provider="ollama",
+            default_model="qwen2.5:3b",
+        )
+        provider, model = llm_cmd.resolve_mind_llm_defaults(None, data_dir=tmp_path)
+        assert provider == "ollama"
+        assert model == "qwen2.5:3b"
+
+    def test_zero_minds_degrades_to_env_only(self, tmp_path: Path) -> None:
+        assert llm_cmd.resolve_mind_llm_defaults(None, data_dir=tmp_path) == ("", "")
+
+    def test_multiple_minds_without_flag_degrades_to_env_only(self, tmp_path: Path) -> None:
+        _write_mind_yaml(tmp_path, "alpha", default_provider="ollama", default_model="a")
+        _write_mind_yaml(tmp_path, "beta", default_provider="ollama", default_model="b")
+        assert llm_cmd.resolve_mind_llm_defaults(None, data_dir=tmp_path) == ("", "")
+
+    def test_explicit_mind_selects_it_among_many(self, tmp_path: Path) -> None:
+        _write_mind_yaml(tmp_path, "alpha", default_provider="ollama", default_model="a")
+        _write_mind_yaml(tmp_path, "beta", default_provider="ollama", default_model="b")
+        assert llm_cmd.resolve_mind_llm_defaults("beta", data_dir=tmp_path) == ("ollama", "b")
+
+    def test_explicit_unknown_mind_fails_loudly(self, tmp_path: Path) -> None:
+        """AP #48 — an explicit typo must not silently scan env-only."""
+        import typer
+
+        with pytest.raises(Exception) as exc_info:
+            llm_cmd.resolve_mind_llm_defaults("ghost", data_dir=tmp_path)
+        assert isinstance(exc_info.value, typer.BadParameter)
+
+    def test_malformed_yaml_degrades_to_env_only(self, tmp_path: Path) -> None:
+        mind_dir = tmp_path / "sovyx"
+        mind_dir.mkdir(parents=True)
+        (mind_dir / "mind.yaml").write_text("{not: [valid", encoding="utf-8")
+        assert llm_cmd.resolve_mind_llm_defaults(None, data_dir=tmp_path) == ("", "")
+
+
+class TestDoctorMindConfigWiring:
+    """DOCTOR-4 (AP #71 class) — CLI path exercises the REAL verdict machinery.
+
+    Pre-fix ``sovyx llm doctor`` hardcoded ``default_provider=""`` /
+    ``default_model=""``, so a mind pinned to a nonexistent Ollama
+    model still showed FULLY_AVAILABLE — the DEFAULT_MODEL_UNAVAILABLE
+    branch was structurally unreachable from the CLI.
+    """
+
+    def test_pinned_nonexistent_ollama_model_yields_default_model_unavailable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.llm.providers import ollama
+
+        monkeypatch.setenv("SOVYX_DATA_DIR", str(tmp_path))
+        _write_mind_yaml(
+            tmp_path,
+            "sovyx",
+            default_provider="ollama",
+            default_model="ghost:model",
+        )
+        with patch.object(
+            ollama,
+            "OllamaProvider",
+            return_value=_mock_ollama(["qwen2.5:3b"]),
+        ):
+            result = runner.invoke(llm_cmd.llm_app, ["doctor"])
+        assert result.exit_code == 1
+        assert "DEFAULT_MODEL_UNAVAILABLE" in result.output
+
+    def test_unpinned_mind_keeps_env_only_behaviour(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Empty defaults in mind.yaml → pre-fix behaviour unchanged."""
+        from sovyx.llm.providers import ollama
+
+        monkeypatch.setenv("SOVYX_DATA_DIR", str(tmp_path))
+        _write_mind_yaml(tmp_path, "sovyx", default_provider="", default_model="")
+        with patch.object(
+            ollama,
+            "OllamaProvider",
+            return_value=_mock_ollama(["qwen2.5:3b"]),
+        ):
+            result = runner.invoke(llm_cmd.llm_app, ["doctor"])
+        assert result.exit_code == 0
+        assert "FULLY_AVAILABLE" in result.output
+
+    def test_explicit_unknown_mind_id_exits_with_usage_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SOVYX_DATA_DIR", str(tmp_path))
+        result = runner.invoke(llm_cmd.llm_app, ["doctor", "--mind-id", "ghost"])
+        assert result.exit_code == 2
+        assert "not found" in result.output
 
 
 class TestSetupCommandValidation:

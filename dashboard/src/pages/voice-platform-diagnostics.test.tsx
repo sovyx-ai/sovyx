@@ -180,6 +180,34 @@ const DARWIN_RESPONSE: PlatformDiagnosticsResponse = {
       remediation_hint:
         "Sovyx is running from an unsigned interpreter (typical for Homebrew / pyenv). Hardened Runtime isn't enforced.",
     },
+    // MACOS-4 — the three formerly boot-log-only probes are now part
+    // of the branch payload (required fields; the backend route always
+    // emits them with probe-isolation fallbacks).
+    coreaudiod: {
+      verdict: "missing",
+      notes: [],
+      remediation_hint:
+        "coreaudiod is not running. macOS launchd should auto-respawn it; if not, run ``sudo killall coreaudiod`` to force a restart (this kills audio for every app momentarily). If the daemon repeatedly dies after restart, check Console.app for crash reports under /Library/Logs/DiagnosticReports/coreaudiod-*.crash.",
+    },
+    sandbox: {
+      verdict: "unsandboxed",
+      executable_path: "/usr/local/bin/python3",
+      notes: [],
+      remediation_hint: "",
+    },
+    audio_log_events: {
+      events: [
+        {
+          timestamp_iso: "2026-07-02 10:15:00.123456-0300",
+          level: "fault",
+          subsystem: "com.apple.audio.AudioHardwareService",
+          process: "coreaudiod",
+          description: "HALS_IOEngine2.cpp:1234 something faulted",
+        },
+      ],
+      lookback: "5m",
+      notes: [],
+    },
   },
 };
 
@@ -377,6 +405,41 @@ describe("VoicePlatformDiagnosticsPage — macOS branch", () => {
     // Exactly one hint — the a2dp_only device's; not_connected is
     // informative-neutral (MACOS-1 tone contract).
     expect(screen.getAllByTestId("bluetooth-a2dp-hint")).toHaveLength(1);
+  });
+
+  it("renders the coreaudiod card with the manual recovery hint (MACOS-4 / MA10)", async () => {
+    mockGet.mockResolvedValueOnce(DARWIN_RESPONSE);
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("macos-coreaudiod-card")).toBeInTheDocument();
+    });
+    // MISSING renders the red error pill (capture structurally
+    // impossible) + the operator-actionable killall recovery hint.
+    const pill = screen.getByText("missing");
+    expect(pill).toHaveClass("text-[var(--svx-color-status-red)]");
+    expect(screen.getByTestId("macos-coreaudiod-hint")).toHaveTextContent(
+      /sudo killall coreaudiod/,
+    );
+  });
+
+  it("renders the App Sandbox card (MACOS-4 / MA13)", async () => {
+    mockGet.mockResolvedValueOnce(DARWIN_RESPONSE);
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("macos-sandbox-card")).toBeInTheDocument();
+    });
+    expect(screen.getByText("unsandboxed")).toBeInTheDocument();
+  });
+
+  it("renders recent audio-log events with level pills (MACOS-4 / MA14)", async () => {
+    mockGet.mockResolvedValueOnce(DARWIN_RESPONSE);
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("macos-audio-log-card")).toBeInTheDocument();
+    });
+    const faultPill = screen.getByText("fault");
+    expect(faultPill).toHaveClass("text-[var(--svx-color-status-red)]");
+    expect(screen.getByText(/something faulted/)).toBeInTheDocument();
   });
 });
 

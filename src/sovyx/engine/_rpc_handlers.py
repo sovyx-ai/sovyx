@@ -64,6 +64,118 @@ def _load_mind_config_best_effort(
         return None
 
 
+def collect_voice_health_snapshot() -> dict[str, Any]:
+    """Serialize this process's voice-health stores to a JSON-safe dict.
+
+    DOCTOR-3 closure (AP #70/#71 class) — single serializer for the
+    quarantine / failover-history / degraded-store triple, shared by:
+
+    * the daemon-side ``voice.health.snapshot`` RPC handler (the
+      producer the CLI prefers), and
+    * ``sovyx.cli.commands.doctor``'s local fallback (same function,
+      run inside the CLI process when no daemon is reachable),
+
+    so the wire shape and the fallback shape cannot drift (AP #40 /
+    #53 sibling — one shared symbol, never two independent literals).
+
+    Field notes:
+
+    * ``recheck_in_s`` is computed HERE (producer-side) because
+      ``expires_at_monotonic`` is a ``time.monotonic()`` value that is
+      meaningless across process boundaries.
+    * Degraded entries carry ``title_token``/``body_token`` +
+      full action chips so the CLI can rebuild real
+      :class:`~sovyx.engine._degraded_store.DegradedEntry` objects and
+      reuse the dashboard's SSoT composite-severity helpers.
+
+    Every axis degrades independently to an empty list — a partially
+    wired process (e.g. voice disabled) must never break the snapshot.
+    """
+    import time  # noqa: PLC0415 — lazy; only needed for quarantine TTLs
+
+    quarantine_rows: list[dict[str, Any]] = []
+    try:
+        from sovyx.voice.health._quarantine import get_default_quarantine  # noqa: PLC0415
+
+        now = time.monotonic()
+        for entry in get_default_quarantine().snapshot():
+            quarantine_rows.append(
+                {
+                    "endpoint_guid": entry.endpoint_guid,
+                    "device_friendly_name": entry.device_friendly_name,
+                    "host_api": entry.host_api,
+                    "reason": entry.reason,
+                    "derived_reason": entry.derived_reason,
+                    "resolved_reason": entry.resolved_reason,
+                    "recheck_in_s": max(0.0, entry.expires_at_monotonic - now),
+                },
+            )
+    except Exception:  # noqa: BLE001 — observability-only surface
+        logger.debug("voice_health_snapshot_quarantine_failed")
+
+    failover_rows: list[dict[str, Any]] = []
+    try:
+        from sovyx.voice.health._failover_history import (  # noqa: PLC0415
+            get_default_failover_history,
+        )
+
+        for run in get_default_failover_history().entries():
+            failover_rows.append(
+                {
+                    "ladder_id": run.ladder_id,
+                    "verdict": run.verdict,
+                    "candidates_tried": run.candidates_tried,
+                    "elapsed_ms": run.elapsed_ms,
+                    "from_endpoint": run.from_endpoint,
+                    "candidates": [
+                        {
+                            "index": candidate.index,
+                            "verdict": candidate.verdict,
+                            "target_endpoint": candidate.target_endpoint,
+                            "elapsed_ms": candidate.elapsed_ms,
+                            "error_class": candidate.error_class,
+                            "skipped_reason": candidate.skipped_reason,
+                        }
+                        for candidate in run.candidates
+                    ],
+                },
+            )
+    except Exception:  # noqa: BLE001 — observability-only surface
+        logger.debug("voice_health_snapshot_failover_failed")
+
+    degraded_rows: list[dict[str, Any]] = []
+    try:
+        from sovyx.engine._degraded_store import get_default_degraded_store  # noqa: PLC0415
+
+        for degraded in get_default_degraded_store().snapshot():
+            degraded_rows.append(
+                {
+                    "axis": degraded.axis,
+                    "reason": degraded.reason,
+                    "severity": degraded.severity,
+                    "title_token": degraded.title_token,
+                    "body_token": degraded.body_token,
+                    "action_chips": [
+                        {
+                            "label_token": chip.label_token,
+                            "action": chip.action,
+                            "target": chip.target,
+                            "style": chip.style,
+                        }
+                        for chip in degraded.action_chips
+                    ],
+                },
+            )
+    except Exception:  # noqa: BLE001 — observability-only surface
+        logger.debug("voice_health_snapshot_degraded_failed")
+
+    return {
+        "quarantine": quarantine_rows,
+        "failover_history": failover_rows,
+        "degraded": degraded_rows,
+    }
+
+
 async def _brain_row_counts(
     registry: ServiceRegistry,
     mind_id: MindId,
@@ -822,6 +934,26 @@ def register_cli_handlers(
             "name": path.name,
         }
 
+    async def _voice_health_snapshot() -> dict[str, Any]:
+        """Daemon-side voice-health triple for ``sovyx doctor voice``.
+
+        DOCTOR-3 closure — pre-fix the CLI rendered quarantine /
+        failover-history / degraded-banner from its OWN process
+        singletons (always empty in a non-daemon process), so a live
+        daemon with a quarantined mic still printed "No endpoints in
+        quarantine" (AP #70/#71 class: surface claims state it never
+        observed). This handler is the producer half; the consumer is
+        ``sovyx.cli.commands.doctor._fetch_voice_health_payload``,
+        which prefers this RPC and falls back to the CLI process's own
+        (disclosed) local state.
+
+        Wiring: :func:`collect_voice_health_snapshot` — the SAME
+        serializer the CLI fallback runs locally, so producer and
+        consumer share one shape symbol (AP #40 / #53). Read-only;
+        safe at any cadence.
+        """
+        return collect_voice_health_snapshot()
+
     async def _doctor() -> dict[str, Any]:
         """Run the daemon-side online health checks for ``sovyx doctor``.
 
@@ -916,5 +1048,6 @@ def register_cli_handlers(
         "engine.resources.tracemalloc_snapshot",
         _engine_resources_tracemalloc_snapshot,
     )
+    rpc.register_method("voice.health.snapshot", _voice_health_snapshot)
     rpc.register_method("doctor", _doctor)
-    logger.debug("cli_rpc_handlers_registered", count=13)
+    logger.debug("cli_rpc_handlers_registered", count=14)

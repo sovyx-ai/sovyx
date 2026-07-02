@@ -1270,10 +1270,66 @@ export const PlatformWindowsBranchSchema = z.object({
   etw_audio_events: z.array(EtwChannelPayloadSchema),
 });
 
+// MACOS-4 — the three formerly boot-log-only macOS probes, exposed by
+// GET /api/voice/platform-diagnostics. Verdict tokens mirror the
+// backend StrEnums verbatim (#46 SSoT enum discipline):
+// CoreAudiodVerdict (health/_coreaudiod_recovery.py), SandboxVerdict
+// (health/_macos_sandbox_detect.py), MacosLogEventLevel
+// (health/_macos_sysdiagnose.py).
+export const CoreAudiodVerdictTokenSchema = z.enum([
+  "running",
+  "missing",
+  "unknown",
+]);
+
+export const CoreAudiodPayloadSchema = z.object({
+  verdict: CoreAudiodVerdictTokenSchema,
+  notes: z.array(z.string()),
+  remediation_hint: z.string(),
+});
+
+export const SandboxVerdictTokenSchema = z.enum([
+  "sandboxed",
+  "unsandboxed",
+  "unknown",
+]);
+
+export const SandboxPayloadSchema = z.object({
+  verdict: SandboxVerdictTokenSchema,
+  executable_path: z.string(),
+  notes: z.array(z.string()),
+  remediation_hint: z.string(),
+});
+
+export const MacosAudioLogLevelTokenSchema = z.enum([
+  "info",
+  "debug",
+  "warning",
+  "fault",
+]);
+
+export const MacosAudioLogEventPayloadSchema = z.object({
+  timestamp_iso: z.string(),
+  level: MacosAudioLogLevelTokenSchema,
+  subsystem: z.string(),
+  process: z.string(),
+  description: z.string(),
+});
+
+export const MacosAudioLogPayloadSchema = z.object({
+  events: z.array(MacosAudioLogEventPayloadSchema),
+  lookback: z.string(),
+  notes: z.array(z.string()),
+});
+
 export const PlatformMacOSBranchSchema = z.object({
   hal_plugins: HalPayloadSchema,
   bluetooth: BluetoothPayloadSchema,
   code_signing: CodeSigningPayloadSchema,
+  // MACOS-4 additive fields (same release ships route + twin).
+  coreaudiod: CoreAudiodPayloadSchema,
+  sandbox: SandboxPayloadSchema,
+  audio_log_events: MacosAudioLogPayloadSchema,
 });
 
 export const PlatformTokenSchema = z.enum([

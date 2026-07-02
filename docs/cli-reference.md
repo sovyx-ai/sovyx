@@ -265,6 +265,7 @@ sovyx doctor --json           # machine-readable output
 | `sovyx doctor voice_capture_apo` | Scan Windows capture-APO chain for Voice Clarity (Mission F2-M07). |
 | `sovyx doctor voice_capture_integrity` | Alias of `voice_capture_apo` (platform-neutral name, Mission H2). |
 | `sovyx doctor piper_locale_match` | Check whether a locale has a curated Piper voice (F2-M03↑). |
+| `sovyx doctor stt_language_match` | Check whether a language has a Moonshine STT model (ENGINES-9 — STT sibling of `piper_locale_match`; WARN = STT coerces to English at pipeline start). |
 | `sovyx doctor platform` | Cross-OS platform-diagnostics report. |
 | `sovyx doctor resources [--json] [--cohort <name>] [--explain <field>] [--watch] [--tracemalloc-snapshot]` | Render the engine resource-cohort snapshot (Mission H4) — live daemon RPC when reachable, in-process registry otherwise. |
 | `sovyx doctor gates [--json]` | Print the Quality Gates registry — STRICT/LENIENT state + sunset target per gate. |
@@ -291,8 +292,14 @@ these surfaces:
    matrix summary + remediation hint. Full per-provider detail via
    `sovyx llm doctor`.
 
-CLI-only operators see the same picture as the dashboard's composite
-banner — no log-grep required.
+Sections 1-3 are daemon-first (DOCTOR-3): when a daemon is reachable
+they query its `voice.health.snapshot` RPC, so CLI-only operators see
+the same live picture as the dashboard's composite banner — no
+log-grep required. When no daemon is reachable they fall back to the
+CLI process's own in-memory stores and print an explicit yellow
+"Daemon not reachable — showing this CLI process only (empty for
+non-daemon processes)." disclosure — in that mode the sections are
+NOT the dashboard picture.
 
 ---
 
