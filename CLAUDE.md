@@ -61,6 +61,8 @@ Gates (in order):
 
 Plus `uv lock --check` on version bumps. Always grep gate summary line — never trust harness exit code (pre-v0.42.2 `2>&1 | tail -N` masked 6 failures; see `feedback_ci_preflight`).
 
+**Where gates live:** gates 1-7 are stock tooling (ruff/mypy/bandit/pytest/tsc/vitest); gates 8-19 are custom AST/contract checkers in `scripts/dev/check_*.py`, invoked by `scripts/verify_gates.sh`. The OTHER `scripts/check_*.py` files (log schemas, metrics cardinality, otel semconv, exception chains, log noise, test PII, constant-time token, perf regression) are **CI-only** — they run in `.github/workflows/ci.yml`/`publish.yml`, not in the local pre-push set.
+
 **Version bump:** any `pyproject.toml` `version` change requires `uv lock`.
 
 **Post-tag verification:** after `git push origin <tag>`, `gh run list --workflow=publish.yml --limit 3` to confirm prior tag passed BEFORE bumping next. Skipping shipped 6 tags atop broken pipeline in v0.41.x.
@@ -82,8 +84,13 @@ src/sovyx/
 ├── tiers.py, license.py  # ServiceTier enum + Ed25519 offline license validator
 ├── voice/         # STT/TTS/VAD/wake/Wyoming. Per-mind via MindConfig.
 │   ├── capture/   # Ring buffer + lifecycle + loop + restart mixins
-│   ├── pipeline/  # State machine + output queue + barge-in
-│   └── health/    # Capture-health lifecycle, quarantine reasons, cascade (AP #46/#47)
+│   ├── pipeline/  # Turn state machine + output queue + barge-in + heartbeat/dwell watchdog
+│   ├── health/    # Capture-health lifecycle, quarantine reasons (AP #46/#47); probe/ (cold/warm), cascade/, bypass/, combo_store/, contract/
+│   ├── factory/   # create_voice_pipeline wiring + wake-word wire-up + validation + diagnostics
+│   ├── calibration/  # Signed calibration profiles (AP #37), wizard, applier
+│   ├── diagnostics/  # triage.py analyzer + Linux bash toolkit producer
+│   ├── device_test/  # Interactive device-test session (dashboard)
+│   └── wake_word_training/  # Wake-word sample synthesis + training
 ├── plugins/       # Loader + sandbox + SDK. Use SandboxedHttpClient.
 ├── upgrade/       # Doctor, importer, blue-green, backup manager
 └── benchmarks/    # Budget baselines
@@ -102,7 +109,7 @@ docs-internal/     # Internal missions/ADRs (gitignored)
 
 ### Python
 - **Logging:** `from sovyx.observability.logging import get_logger` → `logger = get_logger(__name__)`. Never `print()` or `logging.getLogger()` directly.
-- **Config:** All via `EngineConfig` (pydantic-settings). Env: `SOVYX_*`, `__` for nesting. Tuning: `EngineConfig.tuning.{safety,brain,voice}` via `SOVYX_TUNING__*`.
+- **Config:** All via `EngineConfig` (pydantic-settings). Env: `SOVYX_*`, `__` for nesting. Tuning: `EngineConfig.tuning.{safety,brain,voice,llm,retention,dashboard}` via `SOVYX_TUNING__*`.
 - **Errors:** Custom exceptions in `engine/errors.py`; include `context` dict.
 - **Types:** Fully typed. `from __future__ import annotations` everywhere. `TYPE_CHECKING` for type-only imports.
 - **Async:** All DB/IO async. Sync CPU-bound MUST wrap in `asyncio.to_thread()`. Tests: `pytest-asyncio mode=auto`.
@@ -129,7 +136,7 @@ docs-internal/     # Internal missions/ADRs (gitignored)
 
 Each entry = **rule + why + pointer**. Forensic detail lives in referenced commit/mission/file. Preserve numbering (append, never renumber).
 
-**Index by category:** Logging & Config: 1, 3, 4, 5, 6, 7, 17, 23, 35 · Imports & Test Patches: 2, 11, 20, 36, 38 · Concurrency & Async: 14, 15, 30 · Cross-Platform: 21, 22, 24 · Voice Subsystem: 25, 26, 27, 28, 29, 39 · Tests: 8, 9, 10, 12, 31 · Architecture & Design: 13, 16, 18, 19, 32, 33, 34, 37, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55
+**Index by category:** Logging & Config: 1, 3, 4, 5, 6, 7, 17, 23, 35 · Imports & Test Patches: 2, 11, 20, 36, 38 · Concurrency & Async: 14, 15, 30, 69 · Cross-Platform: 21, 22, 24 · Voice Subsystem: 25, 26, 27, 28, 29, 39, 69, 70 · Tests: 8, 9, 10, 12, 31 · Architecture & Design: 13, 16, 18, 19, 32, 33, 34, 37, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 69, 70, 71 · (56-67 reserved by the frozen Mission C/Σ-B promotion batch; 68 DRAFT per Ω-3)
 
 ---
 
@@ -184,10 +191,16 @@ Each entry = **rule + why + pointer**. Forensic detail lives in referenced commi
 49. **Counter fields `*_estimate`/`*_count` MUST decay or be suffixed `_lifetime_*`/`_cumulative_*`.** Monotonic `+=` under gauge name = permanently BUDGET_EXCEEDED. Every cardinality-bounded resource emits `<resource>.cumulative_*` (forensic) + `<resource>.window_*` (rolling). Governor reads WINDOW. Legacy LENIENT dual-emit via `legacy_alias=` + `# a1-allowlist: sunset vX.Y.Z`. ADR-D14. **Sibling #47, #52.** Mission `MISSION-A1-runtime-truth-remediation-2026-05-20.md`.
 50. **Self-observing fields MUST declare themselves; OBSERVATION PARADOX forbidden.** F-005: `asyncio.current_running_task_name` from inside `ResourceSnapshotter.run()` = always snapshotter itself. "current X"/"active Y" from inside observer MUST (a) prefix `observer.`/suffix `_at_observer_time`, OR (b) list-typed snapshot of OTHER tasks. ADR-D15. **Sibling #48.**
 51. **Twin-name fields differing by freshness/math MUST disambiguate via suffix.** F-007: stale `to_thread.pool_size` vs live `asyncio.default_executor_state.pool_size`. F-014: `running_count` counted `not t.done()` (incl. await-blocked). Freshness → `_at_<event>`; math-vs-name → rename (`not_done_count`, `awaiting_count`). LENIENT `legacy_alias=` + sunset. ADR-D16. **Sibling #48, #49, #50.**
-52. **Comment-vs-code mismatch in filter logic is P0 incident class.** F-001: `anomaly.py:331` `[x for x in c if ts <= window_start]` w/ comment "oldest in-window" selected samples OUTSIDE window. Producer/consumer pairs sharing window MUST use consistent direction. Detection: baseline-age regression test (`baseline_age_s ≈ window_s ± tick_jitter`). Adjacent comment MUST describe SET selected + test anchor downstream. **Sibling #40.**
+52. **Comment-vs-code mismatch in filter logic is P0 incident class.** F-001 (`observability/anomaly.py`, fixed — window comprehension selected samples OUTSIDE the window its comment described). Producer/consumer pairs sharing window MUST use consistent direction. Detection: baseline-age regression test (`baseline_age_s ≈ window_s ± tick_jitter`). Adjacent comment MUST describe SET selected + test anchor downstream. **Sibling #40.**
 53. **HTTP path strings of producer↔consumer contract round-trip through ONE shared symbol — never independent literals.** B-P0-1: 16 sites used `/api/voice/degraded/ack`; FastAPI registered `/api/engine/degraded/ack`; ack inert v0.46.4..v0.49.36. Every frontend POST/PUT/PATCH/DELETE MUST be exercised by integration test against `TestClient(create_app())` asserting `status_code != 404`, OR import shared constants asserted by boundary test enumerating `app.routes`. Vitest `mockApiPost.toHaveBeenCalledWith` verifies INTENT, not contract. **Sibling #40, #45.** Mission: `MISSION-B-REMEDIATION-PLAN-2026-05-21.md` §11.
 54. **Every `EngineDegradedStore.record()` MUST have paired clear-edge tied to verifiable HEALTHY verdict.** Record-without-clear = stale banner (consumer-side #49). B-P0-3: `emit_axis_entries` skipped non-BUDGET_EXCEEDED → stuck-at-breach forever. Categorical (LLM/dashboard) clears on first HEALTHY; numeric (governor) clears after N consecutive HEALTHY (default `tuning.cohort_clear_consecutive_healthy_threshold=3`). Clear also clears `OperatorAcksStore` row (B-P1-15). Flag `observability.features.cohort_axis_auto_clear` default True (INVERSE #34). Allowlist `# b-p0-3-allowlist`. **Sibling #42, #49.** Mission: `MISSION-B-REMEDIATION-PLAN-2026-05-21.md` §5.
 55. **Mission closure referencing V-* gates MUST land corresponding rows in `OPERATOR-VALIDATION-BACKLOG-2026.md` SAME tag.** B-P0-4: v0.49.36 closed A.1+A.2 referencing V-A1/V-A2; backlog had ZERO matches; Mission B couldn't unblock. Report + backlog are SIBLING surfaces. Detection: pre-tag-cut `grep "V-<mission>-" backlog | wc -l == 0` = tag-cut hold. **Sibling #42.** Mission: `MISSION-B-REMEDIATION-PLAN-2026-05-21.md` §11.
+
+*(56-67 reserved for the frozen Mission C/Σ-B promotion batch — superstate-gated; 68 DRAFT per Ω-3.)*
+
+69. **A session/turn-owned state MUST have an explicit ownership flag written by the owning surface — never a live-status boolean proxy.** VTI-1: `_handle_speaking` used `output.is_playing` (False both BEFORE playback starts and after it ends) to decide SPEAKING→IDLE while TTS-out surfaces also wrote the state → per-frame SPEAKING↔IDLE flapping, duplicate lifecycle events, anti-echo duck released mid-turn, self-echo re-recording. Fix shape: `_speech_session_active` opened by speak/stream_text, closed by speak-finally/flush/cancel-chain/stop; poll handlers may take over only when ownership is released. Two uncoordinated writers of one state = the bug, whatever the proxy. **Sibling #40, #52.** Mission: `MISSION-VOICE-TURN-INTEGRITY-2026-07-01.md`.
+70. **Recovery machinery shipped "observe-only" MUST carry a tracked wiring task — grep for callers before trusting a docstring that says "called by X".** VTI-5: `PipelineStateMachine.fire_watchdog`/`is_watchdog_expired` were built ("Phase 1: observe"), their docstrings claimed the heartbeat called them, and NOTHING ever did — THINKING zombies latched forever while the cure sat as dead code. Staged adoption (#3 North Star) requires the flip/wire-up to be a named task with a target version, like every LENIENT→STRICT gate. **Sibling #34, #52.** Mission: `MISSION-VOICE-TURN-INTEGRITY-2026-07-01.md`.
+71. **Provider "available" ≠ "answerable" — empty-config sentinels MUST resolve to a concrete resource (or fail loudly at setup), never leak into per-request calls.** VTI-9: key-less installs left `mind.llm.default_model=""` → router normalised to `"default"` → Ollama 404 on EVERY turn while `llm doctor` said FULLY_AVAILABLE. Fix shape: the provider resolves the sentinel against its real inventory (`_ensure_concrete_model`, cached, loud WARN); explicit names still fail loudly (#48 — silent model substitution is a semantic lie). Availability probes must round-trip a unit of real work, not just reachability. **Sibling #44, #48.** Mission: `MISSION-VOICE-TURN-INTEGRITY-2026-07-01.md`.
 
 ## Testing Patterns
 
@@ -268,6 +281,7 @@ with patch("sovyx.brain._model_downloader.httpx.AsyncClient", ...): ...
     - **Coarse clock** (#22) and **file handle-lock** (#30, the lint-rule fixture flake) are the other recurring Windows-CI-only classes.
     - **Gate/test self-checks that resolve against gitignored or environment-specific filesystem state** are NOT platform flakes — they pass locally (the state exists in the dev tree) and HARD-FAIL on every CI leg + a fresh `git clone` + the PyPI sdist (the state is structurally absent). **v0.49.55's publish FAILED exactly this way:** Gate 19's end-to-end test (`test_live_repo_has_no_dead_links`) resolved `docs-internal/*` docstring links against the filesystem, but `docs-internal/` is gitignored → present locally (gate PASS) → absent on the runner (76 false violations → hard fail on the Linux *hard* gates, both py3.11+3.12). No local run could ever catch it. **Rule:** any gate self-test whose inputs are gitignored / build-time / local-only MUST be applicable-gated — emit a SKIP verdict (exit 0) when its inputs are structurally absent, the same STRICT-when-applicable contract as Gate 11 (dashboard bundle). Fixed v0.49.56 (`cb3834c0`). **Sibling Gate 11 / #43.**
     Practical discipline: when a change touches async lifecycle / timers / files / subprocess **— or adds a gate whose inputs may be absent in a fresh checkout —** assume the matrix may catch what local cannot; write the teardown (or the applicability-skip) defensively up front. The operator surfaces CI-matrix failures (per `feedback_ci_watching` — don't `gh run watch`); on a surfaced failure, root-cause + fix the test hygiene (don't just re-run). **Exception — active remediation:** when YOU are shipping a fix for a known-broken pipeline (as in the v0.49.55→56 Gate-19 repair), a SINGLE post-push `gh run list`/run-status confirmation that the fix cleared the failure is responsible verification, NOT prohibited watching.
+13. **Unit mocks structurally cannot catch turn-lifecycle coupling — "the realtime flow works" claims require a live-timing exercise of the DEFAULT config path.** 2026-07-01: the default streaming voice turn shipped broken in 5 coupled ways (AP #69/#70) while 17k unit tests were green — every seam was mocked, and voice had never run live anywhere (63 MB of daemon logs, zero pipeline events). Before asserting a realtime pipeline works: exercise the default path with real timing (integration/soak or a real-component smoke), and grep any live run for `pipeline.state.invalid_transition` — the observe-only validator screams exactly where the mocks were lying. Local shell note: `verify_gates.sh` launched from a NESTED background bash can fail diagnostics tests with exit `0xC0000142` (msys subprocess DLL-init) — run gates from a PowerShell-hosted bash instead; the failures are environmental, not code.
 
 ## Working Style
 
@@ -276,6 +290,36 @@ with patch("sovyx.brain._model_downloader.httpx.AsyncClient", ...): ...
 **Tests:** never workarounds (if test needs patching to pass, prod needs better interface — e.g. `create_app(token=...)` over monkeypatch); DI > mocking; one assertion pattern (xdist-safe #8); delete dead workarounds.
 
 **God file split:** public surface stable (`__init__.py` re-exports); one responsibility per `_*.py`; migrate tests in same commit (#20); preserve docstring on `__init__.py`.
+
+**Parallel subagents on the shared tree:** their prompts MUST forbid `git stash`/`git checkout`/`git reset`/any tree-wide git state command (2026-07-01 incident: an agent's stash captured 38 files of concurrent work and a mis-indexed drop nearly destroyed operator WIP). To prove pre-fix behavior, invert the specific edit with the Edit tool — never via git. Prefer worktree isolation for agents that must mutate many files.
+
+## Documentation Sync Contract (MANDATORY)
+
+Docs are part of the change, not an afterthought. A behavior-changing commit MUST update, in the SAME commit:
+
+1. **Module docstrings** of every touched module whose header narrates flow / state fields / step counts (AP #52: comment-vs-code mismatch is a P0 incident class; AP #69/#70 both hid behind stale docstrings). Numeric claims in comments ("four steps", "5 fields", "called by X") are liabilities — re-count them or drop the number.
+2. **The Docs Map row(s)** below covering the touched subsystem — public page under `docs/` AND the internal canonical doc. If neither needs changing, say so in the commit body ("docs-sync: n/a — internals only").
+3. **CLAUDE.md itself** when the change alters: gates, repo layout, conventions, tuning namespaces, CLI surface, or teaches a new anti-pattern (append, never renumber; 56-67 reserved, next free ≥ 72).
+4. **Mission/ADR lifecycle:** closing a mission = archive it (footer + `archive/INDEX.md` row + GOVERNANCE-INDEX repoint) in the same session — never leave CLOSED files sitting in `missions/`. New docstring links into `docs-internal/` must respect Gate 19 + `_meta/NAME-LOCK-REGISTRY.md`.
+
+Definition of done: *a senior dev reading only the docs would not be misled by this change.*
+
+## Docs Map (SSoT — which doc covers what)
+
+| Subsystem | Code root | Public doc (`docs/`) | Internal canonical (`docs-internal/`) |
+|---|---|---|---|
+| Cognitive loop (7 phases) | `cognitive/`, `brain/` | `modules/cognitive.md` + `modules/brain.md` | `architecture/cognitive-loop.md` (CANONICAL) + `modules/cognitive.md` |
+| Voice pipeline + turn | `voice/pipeline/`, `voice/cognitive_bridge.py` | `modules/voice.md` | `archive/missions-completed/MISSION-VOICE-TURN-INTEGRITY-2026-07-01.md` (turn semantics) |
+| Voice capture + health | `voice/capture/`, `voice/health/` | `modules/voice-troubleshooting-*.md` | `ADR-voice-capture-health-lifecycle.md`, `ADR-voice-bypass-tier-system.md`, `ADR-voice-mixer-sanity-l2.5-bidirectional.md` |
+| Voice calibration | `voice/calibration/` | `modules/voice-calibration.md` | `ADR-voice-*` + KB rotation: `docs/contributing/voice-kb-rotation.md` |
+| LLM routing/providers | `llm/` | `llm-router.md` | `missions/MISSION-c6-llm-provider-cognitive-loop-integrity-2026-05-18.md` |
+| Engine/config/degraded | `engine/` | `configuration.md` | ADR-D5/D14/D15/D16 + `missions/MISSION-c4-degraded-mode-banner-2026-05-17.md` |
+| Dashboard (SPA + API) | `dashboard/`, `dashboard/src/` | `modules/dashboard*.md` | `MISSION-c5-…` (bundle integrity), Mission D register |
+| CLI | `cli/` | `cli-reference.md` + `modules/cli.md` | — |
+| Resource hygiene/observability | `observability/` | `operations/` pages | `missions/MISSION-h4-resource-hygiene-instrumentation-2026-05-19.md`, ADR-D14/D15/D16 |
+| Governance/missions | — | — | `GOVERNANCE-INDEX.md` (ENTRYPOINT) → PLATFORM-SUPERSTATE, GATE-MATRIX, NAME-LOCK-REGISTRY |
+
+**Reading order for a new session:** CLAUDE.md → auto-memory `MEMORY.md` → `docs-internal/GOVERNANCE-INDEX.md` → the Docs Map row for your subsystem.
 
 ## Deploy Flow
 
