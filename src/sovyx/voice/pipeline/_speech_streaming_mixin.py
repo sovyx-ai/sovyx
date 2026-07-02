@@ -69,6 +69,12 @@ State the mixin reads/writes (initialised on the HOST in
 * ``_stream_segment_guard: Callable[[str], str] | None`` — per-
   segment safety hook (regex-tier output/PII guard) applied before
   synthesis; fail-closed on guard errors.
+* ``_running: bool`` — pipeline-active gate; ``speak`` /
+  ``stream_text`` refuse to open a session on a stopped pipeline
+  (PIPELINE-5, 2026-07-02).
+* ``_barge_in: BargeInDetector`` — sustain counter, reset at every
+  session open so a run accumulated in a previous SPEAKING window
+  never leaks into the next turn's gate (PIPELINE-2 redesign).
 """
 
 from __future__ import annotations
@@ -99,6 +105,7 @@ if TYPE_CHECKING:
 
     from sovyx.voice.health._self_feedback import SelfFeedbackGate
     from sovyx.voice.jarvis import JarvisIllusion
+    from sovyx.voice.pipeline._barge_in import BargeInDetector
     from sovyx.voice.pipeline._config import VoicePipelineConfig
     from sovyx.voice.pipeline._frame_types import PipelineFrame
     from sovyx.voice.pipeline._output_queue import AudioOutputQueue
@@ -140,6 +147,8 @@ class SpeechStreamingMixin:
         _speech_session_active: bool
         _stream_drain_task: asyncio.Task[None] | None
         _stream_segment_guard: Callable[[str], str] | None
+        _running: bool
+        _barge_in: BargeInDetector
 
         # Cross-mixin host-resident methods (resolved via MRO at
         # runtime). Anti-pattern #32 case (b) forward declarations —
@@ -266,15 +275,31 @@ class SpeechStreamingMixin:
     async def speak(self, text: str) -> None:
         """Synthesize and play text (called by CogLoop.act).
 
+        PIPELINE-5 (2026-07-02): refuses to run on a stopped pipeline
+        — a bridge task surviving ``stop()`` must not re-open a speech
+        session, re-duck the mic, or enqueue audio into the torn-down
+        output surface.
+
         Args:
             text: Text to speak.
         """
+        if not self._running:
+            logger.debug(
+                "voice.tts.speak_ignored_not_running",
+                mind_id=self._config.mind_id,
+                text_chars=len(text),
+            )
+            return
         # v0.32.3 Phase 3.B.1 — emit the LLMFullResponseEndFrame BEFORE
         # the SPEAKING transition so the frame ring buffer reflects
         # THINKING-end → SPEAKING-start in temporal order. Helper is a
         # no-op when no preceding THINKING phase fired (proactive
         # cogloop speak), preserving the start-end pairing contract.
         self._emit_llm_full_response_end_frame(output_chars=len(text))
+        # Session boundary — zero the barge-in sustain counter so a
+        # speech run accumulated in a previous SPEAKING window can't
+        # trip the gate on this turn's first frame (PIPELINE-2).
+        self._barge_in.reset()
         # Open the speech session BEFORE the state write so a frame
         # arriving between the SPEAKING transition and playback start
         # (synthesis takes hundreds of ms) can't misread "not yet
@@ -356,11 +381,52 @@ class SpeechStreamingMixin:
         Called by CogLoop as LLM tokens arrive.  Accumulates text and
         synthesizes at sentence boundaries (Jarvis Illusion §3).
 
+        2026-07-02 (PIPELINE-1/5) entry guards:
+
+        * Stopped pipeline — same refusal as :meth:`speak`; a bridge
+          task surviving ``stop()`` must not stream into the torn-down
+          surfaces.
+        * RECORDING ownership — when ``_handle_speaking`` has handed
+          the turn to the USER via barge-in (state = RECORDING), a
+          late/rogue LLM chunk must NOT re-assert SPEAKING, re-open
+          the session, or re-duck the mic over the user's recording
+          (the #69 dual-writer class). The chunk belongs to a
+          discarded utterance — drop it with a structured WARN.
+
         Args:
             text_chunk: Partial LLM output text.
         """
+        if not self._running:
+            logger.debug(
+                "voice.tts.stream_text_ignored_not_running",
+                mind_id=self._config.mind_id,
+                chunk_chars=len(text_chunk),
+            )
+            return
+        if self._state is VoicePipelineState.RECORDING:
+            logger.warning(
+                "voice.tts.stream_text_dropped_recording_owns_turn",
+                **{
+                    "voice.mind_id": self._config.mind_id,
+                    "voice.chunk_chars": len(text_chunk),
+                    "voice.utterance_id": self._current_utterance_id,
+                    "voice.action_required": (
+                        "An LLM stream delivered a chunk after barge-in "
+                        "handed the turn to the user's RECORDING. The "
+                        "chunk was dropped. If this repeats, the "
+                        "upstream cancellation chain (llm_cancel / "
+                        "cogloop_tasks_cancel) is not stopping the LLM "
+                        "stream — check voice.tts.cancellation_chain "
+                        "verdicts."
+                    ),
+                },
+            )
+            return
         self._speech_session_active = True
         if self._state != VoicePipelineState.SPEAKING:
+            # Session boundary — zero the barge-in sustain counter
+            # (same rationale as speak(); PIPELINE-2).
+            self._barge_in.reset()
             self._state = VoicePipelineState.SPEAKING
             if self._self_feedback_gate is not None:
                 self._self_feedback_gate.on_tts_start()
@@ -485,23 +551,50 @@ class SpeechStreamingMixin:
                         self._consecutive_tts_segment_failures = 0
                     return
             except asyncio.CancelledError:
-                # T1 barge-in cancelled this segment via
-                # cancel_speech_chain. Stop iterating and let the
-                # next turn re-establish the LLM stream — the
-                # remaining segments belong to a discarded utterance.
+                # Two distinct cancellation sources land here as the
+                # same exception, at the same awaits:
                 #
-                # Mission Phase 1 / T1.15 — clear ``_text_buffer``
-                # directly in this handler. Pre-T1.15 the cleanup was
-                # assumed via cancel_speech_chain step 5, but this
-                # path can be reached without the chain running
-                # (cognitive-layer task cancellation, event-loop
-                # shutdown). Clearing locally makes the cleanup
-                # invariant hold regardless of which cancel source
-                # fired. ``cancel_speech_chain`` step 5 stays as the
-                # belt-and-suspenders cleanup for paths that don't
-                # touch ``stream_text`` at all.
+                # 1. INNER synth-task cancel — cancel_speech_chain
+                #    step 2 cancelled the tracked TTS task while this
+                #    coroutine awaited it (``_synthesize_tracked`` →
+                #    ``await task``). The stream task itself was NOT
+                #    cancelled: swallow, clean the buffer, and return
+                #    so the caller survives the barged-in segment.
+                # 2. TASK-level cancel — THIS task (the cogloop /
+                #    bridge task) is being cancelled: chain step 2.5
+                #    (cogloop task cancel), step 3's _llm_cancel_hook,
+                #    pipeline.stop(), or loop teardown. MUST re-raise
+                #    (PIPELINE-1, 2026-07-02): pre-fix the swallow ate
+                #    the cancellation, the LLM kept streaming, and the
+                #    next stream_text call re-asserted SPEAKING over
+                #    the user's RECORDING and re-opened the
+                #    session/duck the chain had just closed (the exact
+                #    #69 dual-writer class the VTI mission fixed).
+                #
+                # py3.11+ discriminator: ``Task.cancel()`` bumps the
+                # target task's ``cancelling()`` count before
+                # delivering the exception; cancelling an INNER task
+                # never touches the OUTER task's count. So
+                # ``current_task().cancelling() > 0`` is True exactly
+                # for source 2. No ``uncancel()`` bookkeeping is
+                # needed: path 2 re-raises (cancellation completes
+                # normally) and path 1 never had a pending cancel.
+                #
+                # Mission Phase 1 / T1.15 — clear ``_text_buffer`` in
+                # BOTH paths (this handler can be reached without the
+                # chain running; chain step 5 stays as the belt-and-
+                # suspenders cleanup for paths that never touch
+                # ``stream_text`` at all).
                 buffered_chars = len(self._text_buffer)
                 self._text_buffer = ""
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    logger.info(
+                        "voice.tts.stream_text_task_cancelled",
+                        mind_id=self._config.mind_id,
+                        buffered_text_chars=buffered_chars,
+                    )
+                    raise
                 logger.info(
                     "voice.tts.stream_text_cancelled",
                     mind_id=self._config.mind_id,

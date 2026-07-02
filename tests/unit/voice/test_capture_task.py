@@ -2642,6 +2642,85 @@ class TestQueueOverflowStormT627:
             task._enqueue(frame)  # noqa: SLF001
 
 
+class TestStaleStreamEpochDropPipeline9:
+    """PIPELINE-9 (2026-07-02) — restart-window stale-callback frames.
+
+    Restart paths drain the frame queue after ``_close_stream``, but an
+    ``_enqueue`` already scheduled via ``call_soon_threadsafe`` can
+    still EXECUTE during the subsequent ``await open_input_stream``
+    — landing an old-stream raw block after the drain and pushing it
+    through the NEW FrameNormalizer (wrong rate/channels). The fix
+    epoch-stamps every callback dispatch: ``_drain_stale_frames`` bumps
+    ``_stream_epoch`` before draining, and ``_enqueue`` drops blocks
+    whose stamp predates the current epoch.
+    """
+
+    @staticmethod
+    def _bare_task() -> AudioCaptureTask:
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._queue = asyncio.Queue(maxsize=256)  # noqa: SLF001
+        task._queue_evictions_total = 0  # noqa: SLF001
+        task._last_eviction_warning_monotonic = None  # noqa: SLF001
+        return task
+
+    @pytest.mark.asyncio()
+    async def test_stale_epoch_block_dropped_after_drain(self) -> None:
+        """A scheduled old-stream block landing mid-open is discarded."""
+        task = self._bare_task()
+        old_epoch = task._stream_epoch  # noqa: SLF001
+
+        # Old-stream block enqueued normally before the restart.
+        task._enqueue(np.full(8, 1, dtype=np.int16), old_epoch)  # noqa: SLF001
+        assert task._queue.qsize() == 1  # noqa: SLF001
+
+        # Restart path: close (elided) → drain + epoch bump.
+        task._drain_stale_frames()  # noqa: SLF001
+        assert task._queue.qsize() == 0  # noqa: SLF001
+
+        # Simulate the already-scheduled callback executing DURING the
+        # subsequent `await open_input_stream(...)` — it carries the
+        # OLD epoch stamp and must be dropped, not normalized.
+        task._enqueue(np.full(8, 2, dtype=np.int16), old_epoch)  # noqa: SLF001
+        assert task._queue.qsize() == 0  # noqa: SLF001
+
+        # New-stream callbacks (fresh stamp) flow normally.
+        task._enqueue(np.full(8, 3, dtype=np.int16), task._stream_epoch)  # noqa: SLF001
+        assert task._queue.qsize() == 1  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_unstamped_enqueue_keeps_legacy_contract(self) -> None:
+        """Direct callers without a stamp (T1.30 empty-marker path,
+        pre-existing tests) skip the epoch check."""
+        task = self._bare_task()
+        task._drain_stale_frames()  # noqa: SLF001
+        task._enqueue(np.zeros(8, dtype=np.int16))  # noqa: SLF001
+        assert task._queue.qsize() == 1  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_audio_callback_stamps_current_epoch(self) -> None:
+        """The PortAudio callback dispatches blocks with the epoch it
+        observed at capture time."""
+        task = self._bare_task()
+        task._loop = asyncio.get_running_loop()  # noqa: SLF001
+        task._stream_overflows = 0  # noqa: SLF001
+        task._stream_underruns = 0  # noqa: SLF001
+        task._stream_callback_frames = 0  # noqa: SLF001
+        task._stream_id = "test-stream"  # noqa: SLF001
+
+        block = np.ones((512, 1), dtype=np.int16)
+        task._audio_callback(block, 512, None, None)  # noqa: SLF001
+        # Bump the epoch BEFORE the scheduled _enqueue runs — exactly
+        # the restart race — and confirm the stale dispatch is dropped.
+        task._drain_stale_frames()  # noqa: SLF001
+        await asyncio.sleep(0)
+        assert task._queue.qsize() == 0  # noqa: SLF001
+
+        # A callback firing on the NEW stream (post-bump) is accepted.
+        task._audio_callback(block, 512, None, None)  # noqa: SLF001
+        await asyncio.sleep(0)
+        assert task._queue.qsize() == 1  # noqa: SLF001
+
+
 class TestQueueEvictionObservabilityD4:
     """D4 — drop-oldest evictions are counted + WARN-throttled, never silent.
 

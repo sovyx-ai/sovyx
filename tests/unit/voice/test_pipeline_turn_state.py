@@ -83,6 +83,10 @@ class TestSpeakingSessionOwnership:
 
     async def test_stream_text_opens_session_and_flush_closes_it(self) -> None:
         pipeline, _refs = _make_pipeline()
+        # PIPELINE-5 (2026-07-02): speak/stream_text refuse a stopped
+        # pipeline; these surface-level tests arm the gate directly
+        # instead of running the full start() lifecycle.
+        pipeline._running = True
         with patch.object(_output_queue_mod, "_play_audio", AsyncMock()):
             await pipeline.stream_text("Hello there. ")
             assert pipeline._speech_session_active is True
@@ -96,6 +100,10 @@ class TestStreamingBackgroundDrainer:
 
     async def test_first_segment_plays_before_flush(self) -> None:
         pipeline, _refs = _make_pipeline()
+        # PIPELINE-5 (2026-07-02): speak/stream_text refuse a stopped
+        # pipeline; these surface-level tests arm the gate directly
+        # instead of running the full start() lifecycle.
+        pipeline._running = True
         play_mock = AsyncMock()
         with patch.object(_output_queue_mod, "_play_audio", play_mock):
             await pipeline.stream_text("First sentence is done. still generating more here")
@@ -110,6 +118,10 @@ class TestStreamingBackgroundDrainer:
         """flush_stream must hand off from the background drainer — after
         flush the drainer slot is cleared and all audio has played."""
         pipeline, _refs = _make_pipeline()
+        # PIPELINE-5 (2026-07-02): speak/stream_text refuse a stopped
+        # pipeline; these surface-level tests arm the gate directly
+        # instead of running the full start() lifecycle.
+        pipeline._running = True
         with patch.object(_output_queue_mod, "_play_audio", AsyncMock()):
             await pipeline.stream_text(
                 "Sentence number one done. Sentence number two done. still generating more here"
@@ -148,6 +160,10 @@ class TestFlushDiscardAndClobberGuards:
 
     async def test_speak_finally_does_not_clobber_recording(self) -> None:
         pipeline, refs = _make_pipeline()
+        # PIPELINE-5 (2026-07-02): speak/stream_text refuse a stopped
+        # pipeline; these surface-level tests arm the gate directly
+        # instead of running the full start() lifecycle.
+        pipeline._running = True
 
         async def _synth_then_barge(_text: str) -> object:
             # Simulate a barge-in handing the turn to RECORDING while
@@ -220,6 +236,10 @@ class TestStreamSegmentGuard:
 
     async def test_guard_filters_segment_before_synthesis(self) -> None:
         pipeline, refs = _make_pipeline()
+        # PIPELINE-5 (2026-07-02): speak/stream_text refuse a stopped
+        # pipeline; these surface-level tests arm the gate directly
+        # instead of running the full start() lifecycle.
+        pipeline._running = True
         pipeline.set_stream_segment_guard(lambda text: text.replace("secret", "[X]"))
         with patch.object(_output_queue_mod, "_play_audio", AsyncMock()):
             await pipeline.stream_text("my secret plan is here. still generating more here")
@@ -231,6 +251,10 @@ class TestStreamSegmentGuard:
 
     async def test_guard_exception_drops_segment_fail_closed(self) -> None:
         pipeline, refs = _make_pipeline()
+        # PIPELINE-5 (2026-07-02): speak/stream_text refuse a stopped
+        # pipeline; these surface-level tests arm the gate directly
+        # instead of running the full start() lifecycle.
+        pipeline._running = True
 
         def _broken_guard(_text: str) -> str:
             raise ValueError("guard bug")
@@ -244,6 +268,10 @@ class TestStreamSegmentGuard:
 
     async def test_no_guard_passes_through(self) -> None:
         pipeline, refs = _make_pipeline()
+        # PIPELINE-5 (2026-07-02): speak/stream_text refuse a stopped
+        # pipeline; these surface-level tests arm the gate directly
+        # instead of running the full start() lifecycle.
+        pipeline._running = True
         with patch.object(_output_queue_mod, "_play_audio", AsyncMock()):
             await pipeline.stream_text("Plain sentence goes here. still generating more here")
             await pipeline.flush_stream()

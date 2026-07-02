@@ -151,8 +151,15 @@ def _make_pipeline(
     ww_detected: bool = False,
     stt_text: str = "hello world",
     on_perception: AsyncMock | None = None,
+    barge_in_threshold: int = 1,
 ) -> tuple[VoicePipeline, dict[str, Any]]:
-    """Create a pipeline with mocked components and return it with refs."""
+    """Create a pipeline with mocked components and return it with refs.
+
+    ``barge_in_threshold`` defaults to 1 (fire on the first sustained
+    speech frame) so pre-PIPELINE-2 tests that pinned single-frame
+    barge-in semantics keep their shape; counter-semantics tests pass
+    an explicit higher threshold.
+    """
     config = VoicePipelineConfig(
         mind_id="test-mind",
         wake_word_enabled=wake_word_enabled,
@@ -161,6 +168,7 @@ def _make_pipeline(
         filler_delay_ms=100,
         silence_frames_end=3,
         max_recording_frames=10,
+        barge_in_threshold=barge_in_threshold,
     )
     vad = _make_vad(speech=vad_speech)
     ww = _make_wake_word(detected=ww_detected)
@@ -1016,27 +1024,50 @@ class TestPipelineInvalidTransitionChaos:
 
 
 class TestBargeInDetector:
-    """Tests for barge-in detection."""
+    """Tests for the barge-in sustain counter (PIPELINE-2 redesign).
 
-    def test_check_frame_speech(self) -> None:
-        vad = _make_vad(speech=True)
-        output = AudioOutputQueue()
-        detector = BargeInDetector(vad, output, threshold_frames=3)
-        assert detector.check_frame(_speech_frame()) is True
+    The detector is a pure consecutive-speech-frame counter fed the
+    verdict from ``feed_frame``'s single VAD inference — it holds no
+    VAD/output references and runs no inference of its own.
+    """
 
-    def test_check_frame_silence(self) -> None:
-        vad = _make_vad(speech=False)
-        output = AudioOutputQueue()
-        detector = BargeInDetector(vad, output, threshold_frames=3)
-        assert detector.check_frame(_silence_frame()) is False
+    def test_fires_after_threshold_consecutive_speech_frames(self) -> None:
+        detector = BargeInDetector(threshold_frames=3)
+        assert detector.observe(is_speech=True) is False
+        assert detector.observe(is_speech=True) is False
+        assert detector.observe(is_speech=True) is True
+        assert detector.frames_sustained == 3
 
-    @pytest.mark.asyncio
-    async def test_monitor_no_barge_in_when_not_playing(self) -> None:
-        vad = _make_vad(speech=True)
-        output = AudioOutputQueue()
-        detector = BargeInDetector(vad, output, threshold_frames=1)
-        result = await detector.monitor(get_frame=lambda: _speech_frame())
-        assert result is False  # Not playing → no barge-in
+    def test_non_speech_resets_run(self) -> None:
+        detector = BargeInDetector(threshold_frames=3)
+        assert detector.observe(is_speech=True) is False
+        assert detector.observe(is_speech=True) is False
+        assert detector.observe(is_speech=False) is False
+        assert detector.frames_sustained == 0
+        # A fresh run must need the full threshold again.
+        assert detector.observe(is_speech=True) is False
+        assert detector.observe(is_speech=True) is False
+        assert detector.observe(is_speech=True) is True
+
+    def test_reset_zeroes_counter(self) -> None:
+        detector = BargeInDetector(threshold_frames=2)
+        assert detector.observe(is_speech=True) is False
+        detector.reset()
+        assert detector.frames_sustained == 0
+        assert detector.observe(is_speech=True) is False
+
+    def test_threshold_one_fires_on_first_speech_frame(self) -> None:
+        detector = BargeInDetector(threshold_frames=1)
+        assert detector.observe(is_speech=False) is False
+        assert detector.observe(is_speech=True) is True
+
+    def test_holds_no_vad_reference(self) -> None:
+        """PIPELINE-4 regression — the barge-in path must not capture a
+        VAD instance, or the C1 L2 ``swap_vad`` recovery would leave it
+        consulting the discarded, known-corrupt ONNX session."""
+        detector = BargeInDetector(threshold_frames=3)
+        assert not hasattr(detector, "_vad")
+        assert not hasattr(detector, "_output")
 
 
 # ===========================================================================
@@ -1660,13 +1691,9 @@ class TestPipelineBargeIn:
         pipeline._state = VoicePipelineState.SPEAKING
         pipeline._output._playing = True
 
-        # Force the barge-in detector to fire on the first speech frame
-        # so this test pins the orchestrator-level ordering, not the
-        # detector's threshold-frames hysteresis.
-        from unittest.mock import AsyncMock
-
-        pipeline._barge_in.check_frame_async = AsyncMock(return_value=True)  # type: ignore[method-assign]
-
+        # ``_make_pipeline`` defaults barge_in_threshold=1, so the
+        # sustain counter fires on the first speech frame — this test
+        # pins the orchestrator-level ordering, not the counter.
         states_observed: list[tuple[str, str]] = []
         original_cancel = pipeline.cancel_speech_chain
 
@@ -2652,29 +2679,54 @@ class TestAudioOutputQueueEdgeCases:
 
 
 class TestHandleSpeakingBargeInAsync:
-    """Regression: `_handle_speaking` MUST use the async barge-in check.
+    """Regression: `_handle_speaking` MUST NOT run a second VAD inference.
 
-    ``BargeInDetector.check_frame`` runs ONNX VAD inference synchronously.
-    Calling it from inside an ``async def`` coroutine blocks the event
-    loop on EVERY mic frame while TTS is playing — capture falls behind,
-    dashboard WS stalls, and barge-in itself is detected late. The
-    ``check_frame_async`` variant offloads to ``asyncio.to_thread``.
+    PIPELINE-3 (2026-07-02): the pre-fix path called
+    ``BargeInDetector.check_frame(_async)``, which re-ran
+    ``SileroVAD.process_frame`` on the SAME stateful instance
+    ``feed_frame`` had already advanced — double-advancing the shared
+    LSTM + hysteresis FSM and bypassing the #50 stall guard. The
+    barge-in verdict must reuse the ``vad_event`` computed by
+    ``feed_frame``'s single inference.
     """
 
     @pytest.mark.asyncio
-    async def test_orchestrator_awaits_check_frame_async(self) -> None:
+    async def test_handle_speaking_runs_no_second_inference(self) -> None:
         import inspect
 
         from sovyx.voice.pipeline import VoicePipeline
 
         src = inspect.getsource(VoicePipeline._handle_speaking)
-        # The sync variant must not be used in this hot path.
-        assert "self._barge_in.check_frame(" not in src, (
-            "`_handle_speaking` must not call the sync `check_frame` — use `check_frame_async`"
+        assert "process_frame" not in src, (
+            "`_handle_speaking` must not run VAD inference — reuse the "
+            "vad_event from feed_frame's single inference (PIPELINE-3)"
         )
-        assert "check_frame_async" in src, (
-            "`_handle_speaking` must await `check_frame_async` to avoid blocking the event loop"
+        assert "check_frame" not in src, (
+            "`_handle_speaking` must not call the retired "
+            "BargeInDetector inference API (PIPELINE-2/3)"
         )
+        assert "self._barge_in.observe" in src, (
+            "`_handle_speaking` must gate barge-in on the real "
+            "consecutive-speech-frame counter (PIPELINE-2)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vad_inference_runs_once_per_frame_in_speaking(self) -> None:
+        """Behavioural pin — one ``process_frame`` call per fed frame."""
+        pipeline, refs = _make_pipeline(vad_speech=True, barge_in_threshold=50)
+        await pipeline.start()
+        try:
+            pipeline._state = VoicePipelineState.SPEAKING
+            pipeline._output._playing = True
+            for _ in range(4):
+                await pipeline.feed_frame(_speech_frame())
+            assert refs["vad"].process_frame.call_count == 4, (
+                "expected exactly one VAD inference per frame during "
+                "SPEAKING; a second inference double-advances the shared "
+                "stateful SileroVAD (PIPELINE-3)"
+            )
+        finally:
+            await pipeline.stop()
 
     @pytest.mark.asyncio
     async def test_play_audio_import_error_zero_duration(self) -> None:
@@ -2691,96 +2743,90 @@ class TestHandleSpeakingBargeInAsync:
             await _play_audio(chunk)
 
 
-class TestBargeInDetectorMonitor:
-    """Cover the BargeInDetector.monitor() loop with active playback."""
+class TestBargeInSustainCounterInSpeaking:
+    """PIPELINE-2 — the orchestrator's live path enforces the REAL
+    consecutive-speech-frame threshold (replaces the retired
+    ``BargeInDetector.monitor()`` coverage — that loop was dead code
+    with zero production callers; anti-pattern #70)."""
 
     @pytest.mark.asyncio
-    async def test_monitor_barge_in_during_playback(self) -> None:
-        """monitor() detects barge-in when output is_playing and speech frames."""
-        vad = _make_vad(speech=True)
-        output = AudioOutputQueue()
-        detector = BargeInDetector(vad, output, threshold_frames=2)
-
-        # Simulate is_playing for a few iterations then stop
-        play_count = 0
-
-        @property  # type: ignore[misc]
-        def _fake_playing(self: AudioOutputQueue) -> bool:
-            nonlocal play_count
-            play_count += 1
-            return play_count <= 5
-
-        with patch.object(type(output), "is_playing", _fake_playing):
-            result = await detector.monitor(get_frame=lambda: _speech_frame())
-        assert result is True
+    async def test_threshold_not_reached_stays_speaking(self) -> None:
+        pipeline, _refs = _make_pipeline(vad_speech=True, barge_in_threshold=3)
+        await pipeline.start()
+        try:
+            pipeline._state = VoicePipelineState.SPEAKING
+            pipeline._output._playing = True
+            for _ in range(2):
+                result = await pipeline.feed_frame(_speech_frame())
+                assert result["state"] == "SPEAKING"
+        finally:
+            await pipeline.stop()
 
     @pytest.mark.asyncio
-    async def test_monitor_none_frame_skipped(self) -> None:
-        """monitor() skips None frames and waits."""
-        vad = _make_vad(speech=True)
-        output = AudioOutputQueue()
-        detector = BargeInDetector(vad, output, threshold_frames=1)
-
-        frames_returned = 0
-
-        def get_frame() -> np.ndarray | None:
-            nonlocal frames_returned
-            frames_returned += 1
-            if frames_returned <= 2:
-                return None
-            return _speech_frame()
-
-        play_count = 0
-
-        @property  # type: ignore[misc]
-        def _fake_playing(self: AudioOutputQueue) -> bool:
-            nonlocal play_count
-            play_count += 1
-            return play_count <= 10
-
-        with patch.object(type(output), "is_playing", _fake_playing):
-            result = await detector.monitor(get_frame=get_frame)
-        assert result is True
+    async def test_threshold_reached_fires_barge_in(self) -> None:
+        pipeline, _refs = _make_pipeline(vad_speech=True, barge_in_threshold=3)
+        await pipeline.start()
+        try:
+            pipeline._state = VoicePipelineState.SPEAKING
+            pipeline._output._playing = True
+            await pipeline.feed_frame(_speech_frame())
+            await pipeline.feed_frame(_speech_frame())
+            result = await pipeline.feed_frame(_speech_frame())
+            assert result["state"] == "RECORDING"
+            assert result["event"] == "barge_in_recording"
+        finally:
+            await pipeline.stop()
 
     @pytest.mark.asyncio
-    async def test_monitor_silence_resets_consecutive(self) -> None:
-        """Silence frames reset the consecutive counter."""
-        speech_vad = _make_vad(speech=True)
-        output = AudioOutputQueue()
-        detector = BargeInDetector(speech_vad, output, threshold_frames=3)
+    async def test_silence_resets_the_run(self) -> None:
+        pipeline, refs = _make_pipeline(vad_speech=True, barge_in_threshold=3)
+        await pipeline.start()
+        try:
+            pipeline._state = VoicePipelineState.SPEAKING
+            pipeline._output._playing = True
+            await pipeline.feed_frame(_speech_frame())
+            await pipeline.feed_frame(_speech_frame())
+            # One silence frame resets the counter.
+            refs["vad"].process_frame.return_value = _vad_event(False)
+            result = await pipeline.feed_frame(_silence_frame())
+            assert result["state"] == "SPEAKING"
+            # Two more speech frames — still below threshold.
+            refs["vad"].process_frame.return_value = _vad_event(True)
+            await pipeline.feed_frame(_speech_frame())
+            result = await pipeline.feed_frame(_speech_frame())
+            assert result["state"] == "SPEAKING"
+            # Third consecutive frame fires.
+            result = await pipeline.feed_frame(_speech_frame())
+            assert result["state"] == "RECORDING"
+        finally:
+            await pipeline.stop()
 
-        frame_idx = 0
+    @pytest.mark.asyncio
+    async def test_warn_reports_real_sustained_count(self) -> None:
+        """Anti-pattern #48 — ``voice.frames_sustained`` must be the
+        measured run, not a config echo."""
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
 
-        def get_frame() -> np.ndarray:
-            nonlocal frame_idx
-            frame_idx += 1
-            return _speech_frame() if frame_idx != 2 else _silence_frame()
-
-        # Override check_frame to alternate
-        checks = [True, False, True, True, True]
-        check_idx = 0
-
-        def _patched_check(frame: np.ndarray) -> bool:
-            nonlocal check_idx
-            if check_idx < len(checks):
-                val = checks[check_idx]
-                check_idx += 1
-                return val
-            return True
-
-        detector.check_frame = _patched_check  # type: ignore[assignment]
-
-        play_count = 0
-
-        @property  # type: ignore[misc]
-        def _fake_playing(self: AudioOutputQueue) -> bool:
-            nonlocal play_count
-            play_count += 1
-            return play_count <= 10
-
-        with patch.object(type(output), "is_playing", _fake_playing):
-            result = await detector.monitor(get_frame=get_frame)
-        assert result is True
+        pipeline, _refs = _make_pipeline(vad_speech=True, barge_in_threshold=2)
+        await pipeline.start()
+        try:
+            pipeline._state = VoicePipelineState.SPEAKING
+            pipeline._output._playing = True
+            with patch.object(orch_mod.logger, "warning") as mock_warn:
+                await pipeline.feed_frame(_speech_frame())
+                result = await pipeline.feed_frame(_speech_frame())
+            assert result["state"] == "RECORDING"
+            barge_calls = [
+                c
+                for c in mock_warn.call_args_list
+                if c.args and c.args[0] == "voice.barge_in.detected"
+            ]
+            assert len(barge_calls) == 1
+            kwargs = barge_calls[0].kwargs
+            assert kwargs["voice.frames_sustained"] == 2
+            assert kwargs["voice.output_was_playing"] is True
+        finally:
+            await pipeline.stop()
 
 
 class TestPipelineCoverageGaps:

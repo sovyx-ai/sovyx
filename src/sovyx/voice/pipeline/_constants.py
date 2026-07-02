@@ -6,7 +6,9 @@ _SAMPLE_RATE = 16_000
 _FRAME_SAMPLES = 512  # 32ms at 16kHz
 _SILENCE_FRAMES_END = 22  # ~700ms silence -> end of utterance
 _MAX_RECORDING_FRAMES = 312  # ~10s max recording
-_BARGE_IN_THRESHOLD_FRAMES = 5  # ~160ms sustained speech -> barge-in
+_BARGE_IN_THRESHOLD_FRAMES = (
+    5  # 5 consecutive VAD-speech frames (~160ms) counted in _handle_speaking -> barge-in
+)
 _FILLER_DELAY_MS = 800  # Play filler if no LLM token within this
 _TEXT_MIN_WORDS = 3  # Min words before TTS synthesis
 

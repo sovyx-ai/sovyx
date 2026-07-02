@@ -18,12 +18,15 @@ Lifecycle contract:
   listeners. Double-start logs a structured no-op rather than orphaning
   the prior session's tasks.
 * ``stop`` — Mission Phase 1 / T1.10 drain-before-return. Sequence:
-  emit stop_begin → flip ``_running=False`` → cancel + drain filler →
-  cancel + drain heartbeat → interrupt output → cancel + drain the
-  streaming background drainer + clear ``_speech_session_active`` →
-  cancel + drain TTS tasks (snapshot under ``_task_tracking_lock``) →
-  reset state → release self-feedback gate → unregister listeners →
-  emit stop_complete with drain counters.
+  emit stop_begin → flip ``_running=False`` → cancel + drain cogloop
+  bridge tasks (PIPELINE-5 — the upstream producers, quiesced FIRST
+  so nothing streams into the surfaces being torn down) → cancel +
+  drain filler → cancel + drain heartbeat → interrupt output →
+  cancel + drain the streaming background drainer + clear
+  ``_speech_session_active`` → cancel + drain TTS tasks (snapshot
+  under ``_task_tracking_lock``) → reset state → release
+  self-feedback gate → unregister listeners → emit stop_complete
+  with drain counters.
 
 Anti-pattern #32 contract: the mixin makes 4 cross-mixin method
 calls — all forward-declared in the TYPE_CHECKING block so MRO
@@ -50,6 +53,8 @@ State the mixin reads/writes (initialised on the HOST in
   on stop.
 * ``_task_tracking_lock: asyncio.Lock`` — guards TTS-set snapshot.
 * ``_in_flight_tts_tasks: set[asyncio.Task[Any]]`` — drain target.
+* ``_in_flight_cogloop_tasks: set[asyncio.Task[Any]]`` — cogloop
+  bridge tasks cancelled + drained on stop (PIPELINE-5).
 * ``_config: VoicePipelineConfig`` — read for mind_id +
   wake_word_enabled log attribution.
 * ``_speech_session_active: bool`` — turn-ownership flag cleared on
@@ -103,6 +108,7 @@ class LifecycleMixin:
         _self_feedback_gate: SelfFeedbackGate | None
         _task_tracking_lock: asyncio.Lock
         _in_flight_tts_tasks: set[asyncio.Task[Any]]
+        _in_flight_cogloop_tasks: set[asyncio.Task[Any]]
         _config: VoicePipelineConfig
         _speech_session_active: bool
         _stream_drain_task: asyncio.Task[None] | None
@@ -177,6 +183,18 @@ class LifecycleMixin:
            tear-down boundary.
         2. Set ``_running=False`` so :meth:`feed_frame` short-circuits
            with ``"not_running"`` for any concurrent producer.
+        2.5. (PIPELINE-5, 2026-07-02) Snapshot + cancel + drain
+           ``_in_flight_cogloop_tasks`` — the cogloop bridge tasks are
+           the UPSTREAM producers of speak/stream_text calls. Pre-fix
+           stop() never touched them, so a stop during an active turn
+           left the LLM bridge streaming into the stopped pipeline:
+           re-opening SPEAKING (a dual-writer against step 7's IDLE),
+           re-ducking the mic the gate release below had just
+           released, and enqueuing audio post-stop. Quiesced FIRST —
+           before the output/drainer/TTS teardown — so nothing
+           re-populates the surfaces the later steps tear down. The
+           speak/stream_text ``_running`` guards are the companion
+           belt for a task that ignores cancellation within budget.
         3. Snapshot ``_filler_task`` BEFORE :meth:`_cancel_filler`
            nulls it out, then await the cancellation with a
            ``_CANCELLATION_TASK_TIMEOUT_S`` budget.
@@ -196,6 +214,36 @@ class LifecycleMixin:
         logger.info("voice.pipeline.stop_begin", mind_id=self._config.mind_id)
 
         self._running = False
+
+        # Step 2.5 (PIPELINE-5) — cancel + drain in-flight cogloop
+        # bridge tasks first; see the docstring for the full rationale.
+        # The set is mutated only on the loop thread (see
+        # register_cogloop_task) so a plain snapshot needs no lock.
+        # The bridge converts its own CancelledError into a sentinel
+        # result, so `await shield(task)` typically returns normally;
+        # CancelledError/TimeoutError are equally fine — either way we
+        # proceed with teardown (stop must never raise or stall).
+        cogloop_snapshot = tuple(self._in_flight_cogloop_tasks)
+        cogloop_drained = 0
+        for cogloop_task in cogloop_snapshot:
+            if cogloop_task.done():
+                cogloop_drained += 1
+                continue
+            cogloop_task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(cogloop_task),
+                    timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                )
+                cogloop_drained += 1
+            except (asyncio.CancelledError, TimeoutError):
+                cogloop_drained += 1
+            except Exception as exc:  # noqa: BLE001 — stop must never raise
+                logger.warning(
+                    "voice.pipeline.stop_cogloop_task_unexpected",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
 
         # Snapshot the filler task BEFORE _cancel_filler() nulls it.
         filler_task = self._filler_task
@@ -305,6 +353,8 @@ class LifecycleMixin:
             mind_id=self._config.mind_id,
             tts_tasks_drained=tts_drained,
             tts_tasks_total=len(tts_snapshot),
+            cogloop_tasks_drained=cogloop_drained,
+            cogloop_tasks_total=len(cogloop_snapshot),
             filler_was_active=filler_was_active,
         )
         logger.info("VoicePipeline stopped", mind_id=self._config.mind_id)

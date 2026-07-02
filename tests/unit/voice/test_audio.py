@@ -313,6 +313,40 @@ class TestAudioCapture:
         assert frame is not None
         assert len(frame) == 320
 
+    def test_callback_survives_closed_loop(self) -> None:
+        """PIPELINE-8 regression — wizard-teardown loop-closed race.
+
+        ``call_soon_threadsafe`` on a closed loop raises RuntimeError
+        INSIDE the PortAudio thread (CallbackAbort class). The legacy
+        callback must suppress it, mirroring the T1.30-hardened
+        production callback in ``capture/_loop_mixin.py``.
+        """
+        cap = AudioCapture()
+        loop = asyncio.new_event_loop()
+        loop.close()
+        cap._loop = loop
+        indata = np.ones((320, 1), dtype=np.int16)
+        status = MagicMock()
+        status.__bool__ = lambda self: False  # noqa: ARG005
+
+        # Must not raise despite the closed loop.
+        cap._audio_callback(indata, 320, None, status)
+
+    def test_callback_shields_internal_exception(self) -> None:
+        """PIPELINE-8 regression — T1.30 BaseException shield parity.
+
+        Any raise inside the callback body must be swallowed (logged),
+        never propagated into sounddevice's CallbackAbort path.
+        """
+        cap = AudioCapture()
+        cap._ring_buffer = None  # type: ignore[assignment] — force AttributeError inside the body
+        indata = np.ones((320, 1), dtype=np.int16)
+        status = MagicMock()
+        status.__bool__ = lambda self: False  # noqa: ARG005
+
+        # Must not raise despite the poisoned ring buffer.
+        cap._audio_callback(indata, 320, None, status)
+
     def test_list_devices(self) -> None:
         mock_sd = MagicMock()
         mock_sd.query_devices.return_value = [

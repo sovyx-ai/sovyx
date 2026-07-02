@@ -10,9 +10,19 @@ samples from the PortAudio callback thread into the
   ``loop.call_soon_threadsafe``. T1.30-wrapped in
   ``try/except BaseException`` so no raise can ever propagate out
   of the audio thread (would otherwise drop into PortAudio's
-  ``CallbackAbort`` and stall the entire capture chain).
+  ``CallbackAbort`` and stall the entire capture chain). Each
+  dispatch is stamped with the stream epoch observed at callback
+  time (PIPELINE-9, 2026-07-02).
 * :meth:`_enqueue` — runs on the asyncio loop; non-blocking
-  enqueue with oldest-frame eviction on overflow.
+  enqueue with oldest-frame eviction on overflow. Drops blocks
+  whose stream-epoch stamp predates the current epoch — an
+  ``_enqueue`` already scheduled via ``call_soon_threadsafe`` when
+  the old stream closed can still execute DURING the restart
+  path's subsequent ``await open_input_stream(...)``, i.e. AFTER
+  the queue drain, and would otherwise push an old-stream raw
+  block through the NEW FrameNormalizer built for the new
+  stream's rate/channels (PIPELINE-9; see
+  ``RestartMixin._drain_stale_frames``).
 * :meth:`_check_sustained_underrun_rate` — band-aid #9
   replacement; rolling-window xrun-fraction WARN with rate
   limiting.
@@ -122,6 +132,18 @@ class LoopMixin:
     _reconnect_backoff: BackoffSchedule | None
     _chaos: ChaosInjector
 
+    # PIPELINE-9 (2026-07-02) — monotonic stream-generation counter.
+    # Bumped by ``RestartMixin._drain_stale_frames`` after every
+    # ``_close_stream`` on a restart path; ``_audio_callback`` stamps
+    # the value it observes onto each dispatched block and
+    # ``_enqueue`` drops stamps that predate the current epoch.
+    # Unlike the annotations above this is a REAL class-level default
+    # (not host-``__init__``-initialised): the epoch is owned entirely
+    # by the two capture mixins, ``0`` is the correct pre-first-
+    # restart value, and instance writes (`+=`) shadow the class
+    # attribute per normal Python semantics.
+    _stream_epoch: int = 0
+
     # Method-via-MRO declarations — these live on AudioCaptureTask
     # or other mixins (RingMixin / LifecycleMixin / RestartMixin)
     # and resolve through the composed instance.
@@ -198,9 +220,16 @@ class LoopMixin:
             loop = self._loop
             if loop is None:
                 return
+            # PIPELINE-9 — stamp the stream epoch observed NOW (audio
+            # thread, GIL-atomic int read). Restart paths bump the
+            # epoch after _close_stream returns, so a callback from
+            # the dying stream carries the OLD stamp and _enqueue can
+            # drop it even when the dispatch executes after the
+            # restart's queue drain.
+            stream_epoch = self._stream_epoch
             # Loop may be closed mid-shutdown — swallow that and move on.
             with contextlib.suppress(RuntimeError):
-                loop.call_soon_threadsafe(self._enqueue, block)
+                loop.call_soon_threadsafe(self._enqueue, block, stream_epoch)
         except BaseException as exc:  # noqa: BLE001 — must NEVER raise out of PortAudio thread (T1.30)
             with contextlib.suppress(Exception):
                 logger.error(
@@ -222,7 +251,11 @@ class LoopMixin:
                     empty_marker = np.zeros(0, dtype=np.int16)
                     loop.call_soon_threadsafe(self._enqueue, empty_marker)
 
-    def _enqueue(self, frame: npt.NDArray[np.int16]) -> None:
+    def _enqueue(
+        self,
+        frame: npt.NDArray[np.int16],
+        stream_epoch: int | None = None,
+    ) -> None:
         """Enqueue a frame; drop the oldest on overflow.
 
         D4 — evictions are no longer silent. Every dropped frame bumps
@@ -235,7 +268,29 @@ class LoopMixin:
         pattern as ``voice.vad.inference_timeout``). The common
         (non-full) path is untouched: one ``full()`` check, no
         allocation, no logging.
+
+        PIPELINE-9 (2026-07-02): ``stream_epoch`` is the stamp the
+        audio callback observed at capture time. A stamp older than
+        the current :attr:`_stream_epoch` means the block came from a
+        stream that a restart path has since closed — the dispatch was
+        already scheduled when the restart drained the queue, so
+        accepting it would feed old-stream raw audio through the NEW
+        FrameNormalizer (wrong rate/channels → tempo-shifted samples
+        into VAD/ring once per restart). Dropped with a DEBUG log
+        (bounded to the handful of in-flight callbacks per restart).
+        ``None`` (direct callers, the T1.30 empty-marker path) skips
+        the check.
         """
+        if stream_epoch is not None and stream_epoch != self._stream_epoch:
+            logger.debug(
+                "voice.capture.stale_epoch_frame_dropped",
+                **{
+                    "voice.block_epoch": stream_epoch,
+                    "voice.current_epoch": self._stream_epoch,
+                    "voice.block_samples": int(frame.size),
+                },
+            )
+            return
         if self._queue.full():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self._queue.get_nowait()

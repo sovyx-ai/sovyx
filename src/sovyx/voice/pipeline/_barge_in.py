@@ -1,99 +1,107 @@
-"""Auto-extracted from voice/pipeline.py - see __init__.py for the public re-exports."""
+"""Barge-in sustain gating — real consecutive-speech-frame counter.
+
+2026-07-02 audio-engine audit redesign (findings PIPELINE-2/3/4;
+register: MISSION-AUDIO-ENGINE-CROSS-PLATFORM-AUDIT-2026-07-02):
+
+* The original ``BargeInDetector`` held its own references to the
+  shared :class:`~sovyx.voice.vad.SileroVAD` + output queue and re-ran
+  ONNX inference per frame (``check_frame``) — a SECOND inference on
+  the same stateful LSTM+FSM instance during SPEAKING, which
+  double-advanced the shared hysteresis (offset window ~256 ms →
+  ~128 ms of wall time) and bypassed the #50 VAD-stall timeout guard
+  in ``feed_frame`` (PIPELINE-3).
+* Its ``monitor()`` loop — the ONLY consumer of ``threshold_frames``
+  — had zero production callers, so ``barge_in_threshold`` was dead
+  code: barge-in fired on a single frame while the operator-facing
+  WARN echoed the config value as a fabricated
+  ``voice.frames_sustained`` (PIPELINE-2; anti-pattern #48/#70 class).
+
+The detector is now a pure sustain counter. ``_handle_speaking``
+feeds it the ``vad_event.is_speech`` verdict ALREADY computed by
+``feed_frame``'s single (timeout-guarded) VAD inference — no second
+inference exists anywhere on the barge-in path — and it reports a
+sustained interruption only after ``threshold_frames`` CONSECUTIVE
+speech frames (~32 ms each; reset on any non-speech frame). Holding
+no VAD reference also closes PIPELINE-4 structurally: the C1 L2
+``swap_vad`` recovery cannot leave a stale ONNX session captured on
+the barge-in path, because no such capture exists.
+
+The actual interruption is owned by the orchestrator's
+``cancel_speech_chain`` (see ``_tts_cancel_chain_mixin``); this class
+only answers "has the user spoken long enough for this to be a real
+interruption rather than a blip or an echo tail?".
+"""
 
 from __future__ import annotations
 
-import asyncio
-from typing import TYPE_CHECKING
-
-from sovyx.observability.logging import get_logger
 from sovyx.voice.pipeline._constants import _BARGE_IN_THRESHOLD_FRAMES
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    import numpy as np
-    import numpy.typing as npt
-
-    from sovyx.voice.pipeline._output_queue import AudioOutputQueue
-    from sovyx.voice.vad import SileroVAD
-
-logger = get_logger(__name__)
 
 
 class BargeInDetector:
-    """Detects when the user speaks while TTS is playing (barge-in).
+    """Consecutive-speech-frame sustain counter for barge-in.
 
-    Monitors the VAD while :class:`AudioOutputQueue` is playing.
-    If consecutive speech frames exceed the threshold, triggers
-    barge-in by interrupting the output queue.
+    ``_handle_speaking`` calls :meth:`observe` once per frame with the
+    verdict from the pipeline's single per-frame VAD inference. The
+    counter increments on speech, resets on non-speech, and reports
+    ``True`` once ``threshold_frames`` consecutive speech frames have
+    been observed (default 5 × 32 ms ≈ 160 ms of sustained speech, on
+    top of the VAD FSM's own onset hysteresis). The orchestrator then
+    runs the T1 cancellation chain and calls :meth:`reset`.
 
     Args:
-        vad: The voice-activity detector.
-        output: The audio output queue to interrupt on barge-in.
-        threshold_frames: Consecutive speech frames needed to trigger.
+        threshold_frames: Consecutive speech frames needed to report a
+            sustained interruption. This is
+            ``VoicePipelineConfig.barge_in_threshold`` — a REAL gate
+            since the 2026-07-02 redesign (see module docstring).
     """
 
-    def __init__(
-        self,
-        vad: SileroVAD,
-        output: AudioOutputQueue,
-        threshold_frames: int = _BARGE_IN_THRESHOLD_FRAMES,
-    ) -> None:
-        self._vad = vad
-        self._output = output
+    def __init__(self, threshold_frames: int = _BARGE_IN_THRESHOLD_FRAMES) -> None:
         self._threshold = threshold_frames
+        self._consecutive = 0
 
-    def check_frame(self, frame: npt.NDArray[np.int16]) -> bool:
-        """Process one audio frame and return True if speech is detected.
+    @property
+    def threshold_frames(self) -> int:
+        """Configured consecutive-speech-frame firing threshold."""
+        return self._threshold
 
-        Synchronous variant — used by tests and any non-async callers.
-        Async callers running inside the voice pipeline should use
-        :meth:`check_frame_async` instead so the ONNX VAD inference does
-        not block the event loop.
+    @property
+    def frames_sustained(self) -> int:
+        """Current run of consecutive speech frames (a real measurement).
+
+        Read by the orchestrator at fire time so the
+        ``voice.barge_in.detected`` WARN reports the measured sustain,
+        not a config echo (anti-pattern #48 — falsifiability).
         """
-        import numpy as np
+        return self._consecutive
 
-        audio_f32 = frame.astype(np.float32) / 32768.0
-        event = self._vad.process_frame(audio_f32)
-        return event.is_speech
-
-    async def check_frame_async(self, frame: npt.NDArray[np.int16]) -> bool:
-        """Async variant of :meth:`check_frame` that offloads the ONNX
-        inference to a worker thread.
-
-        Use this from any ``async def`` context (e.g. :meth:`monitor`)
-        to keep dashboard/HTTP traffic responsive while barge-in is
-        being evaluated frame-by-frame.
-        """
-        return await asyncio.to_thread(self.check_frame, frame)
-
-    async def monitor(
-        self,
-        get_frame: Callable[[], npt.NDArray[np.int16] | None],
-    ) -> bool:
-        """Monitor for barge-in while output is playing.
+    def observe(self, *, is_speech: bool) -> bool:
+        """Advance the counter with one frame's VAD verdict.
 
         Args:
-            get_frame: Callable that returns the next audio frame or None.
+            is_speech: The ``vad_event.is_speech`` verdict from
+                ``feed_frame``'s single VAD inference for this frame.
 
         Returns:
-            ``True`` if barge-in was detected and output was interrupted.
+            ``True`` when the consecutive-speech run has reached the
+            threshold — the caller fires the barge-in chain and calls
+            :meth:`reset`. ``False`` otherwise; a non-speech frame
+            resets the run to zero.
         """
-        consecutive = 0
-        while self._output.is_playing:
-            frame = get_frame()
-            if frame is None:
-                await asyncio.sleep(0.01)
-                continue
-            if await self.check_frame_async(frame):
-                consecutive += 1
-                if consecutive >= self._threshold:
-                    self._output.interrupt()
-                    return True
-            else:
-                consecutive = 0
-            # Yielding is implicit in `await to_thread(...)` above.
-        return False
+        if not is_speech:
+            self._consecutive = 0
+            return False
+        self._consecutive += 1
+        return self._consecutive >= self._threshold
+
+    def reset(self) -> None:
+        """Zero the consecutive counter (session boundary or post-fire).
+
+        Called by the orchestrator after a barge-in fires and by the
+        TTS-out surfaces when a new speech session opens, so a run
+        accumulated in a previous SPEAKING window never leaks into the
+        next turn's gate.
+        """
+        self._consecutive = 0
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,14 @@
 """Audio I/O — Microphone capture and speaker playback.
 
 Platform-aware audio I/O built on ``sounddevice`` (PortAudio).
-Supports ALSA (Pi 5), PulseAudio (desktop), CoreAudio (macOS).
+Supports ALSA (Pi 5), PulseAudio/PipeWire (Linux desktop), WASAPI
+(Windows — the platform the dashboard voice wizard most runs on),
+and CoreAudio (macOS).
+
+Legacy surface note: the production capture path is
+:class:`~sovyx.voice._capture_task.AudioCaptureTask`; this module's
+:class:`AudioCapture` remains live only via the dashboard voice
+wizard's mic path (``dashboard/routes/voice_wizard.py``).
 
 References:
     - SPE-010 §2 (AudioCapture)
@@ -13,6 +20,7 @@ References:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import enum
 import time
 from dataclasses import dataclass, field
@@ -390,29 +398,54 @@ class AudioCapture:
         on a 320-sample int16 frame and the emit path is queue-backed
         (BackgroundLogWriter) — both safe to call from the PortAudio
         callback thread.
+
+        PIPELINE-8 (2026-07-02) — T1.30 parity with the production
+        callback in ``capture/_loop_mixin.py::_audio_callback``: the
+        ENTIRE body is wrapped in ``try/except BaseException`` so no
+        raise can propagate into sounddevice's ``CallbackAbort`` path,
+        and the loop hand-off is wrapped in
+        ``contextlib.suppress(RuntimeError)`` for the loop-closed race
+        during wizard teardown (``call_soon_threadsafe`` on a closed
+        loop raises ``RuntimeError`` inside the audio thread). Pre-fix
+        this legacy callback (still live via the dashboard voice
+        wizard) never received the shield the production callback got.
+        Unlike the production callback, no empty marker frame is
+        queued on failure — the wizard's consumers poll with timeouts
+        and have no FrameNormalizer size==0 contract to lean on.
         """
-        if status:
-            logger.warning("audio_input_status", status=str(status))
-        # Extract mono channel
-        mono = indata[:, 0].copy() if indata.ndim > 1 else indata.copy()
-        # Write to ring buffer
-        self._ring_buffer.write(mono)
-        # Acoustic telemetry — sampled by SamplingProcessor in the
-        # structlog chain so emit is cheap and bounded.
-        rms_dbfs, peak_dbfs, clipping = _frame_metrics(mono)
-        logger.info(
-            "audio.frame",
-            **{
-                "audio.rms_db": rms_dbfs,
-                "audio.peak_db": peak_dbfs,
-                "audio.clipping": clipping,
-                "voice.stream_id": self._stream_id,
-                "voice.device_id": self._device_label,
-            },
-        )
-        # Thread-safe enqueue into asyncio
-        if self._loop is not None and not self._queue.full():
-            self._loop.call_soon_threadsafe(self._queue.put_nowait, mono)
+        try:
+            if status:
+                logger.warning("audio_input_status", status=str(status))
+            # Extract mono channel
+            mono = indata[:, 0].copy() if indata.ndim > 1 else indata.copy()
+            # Write to ring buffer
+            self._ring_buffer.write(mono)
+            # Acoustic telemetry — sampled by SamplingProcessor in the
+            # structlog chain so emit is cheap and bounded.
+            rms_dbfs, peak_dbfs, clipping = _frame_metrics(mono)
+            logger.info(
+                "audio.frame",
+                **{
+                    "audio.rms_db": rms_dbfs,
+                    "audio.peak_db": peak_dbfs,
+                    "audio.clipping": clipping,
+                    "voice.stream_id": self._stream_id,
+                    "voice.device_id": self._device_label,
+                },
+            )
+            # Thread-safe enqueue into asyncio. Loop may be closed
+            # mid-teardown — swallow that and move on (T1.30 parity).
+            if self._loop is not None and not self._queue.full():
+                with contextlib.suppress(RuntimeError):
+                    self._loop.call_soon_threadsafe(self._queue.put_nowait, mono)
+        except BaseException as exc:  # noqa: BLE001 — must NEVER raise out of PortAudio thread (T1.30 parity)
+            with contextlib.suppress(Exception):
+                logger.error(
+                    "voice.audio_callback.uncaught_raise",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    stream_id=self._stream_id,
+                )
 
     # -- Device helpers -----------------------------------------------------
 

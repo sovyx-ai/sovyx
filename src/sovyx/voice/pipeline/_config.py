@@ -126,7 +126,12 @@ class VoicePipelineConfig:
         filler_delay_ms: Milliseconds to wait before playing a filler.
         silence_frames_end: Consecutive silent frames to end utterance (~32ms each).
         max_recording_frames: Maximum frames before force-ending recording.
-        barge_in_threshold: Consecutive speech frames to trigger barge-in.
+        barge_in_threshold: Consecutive VAD-speech frames (~32 ms each)
+            required to trigger barge-in — a REAL per-frame counter in
+            ``_handle_speaking``, reset on any non-speech frame
+            (PIPELINE-2 redesign 2026-07-02; pre-fix the threshold was
+            dead code and barge-in fired on a single frame). Applies
+            on top of the VAD FSM's own onset hysteresis.
         confirmation_tone: Type of tone on wake word (``"beep"`` or ``"none"``).
         filler_phrases: Phrases used during LLM thinking time.
     """

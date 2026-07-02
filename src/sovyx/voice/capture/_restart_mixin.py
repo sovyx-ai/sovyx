@@ -147,6 +147,10 @@ class RestartMixin:
     _phase_inversion_auto_recovery_enabled: bool
     _resolved_device_name: str | None
     _pipeline: VoicePipeline
+    # PIPELINE-9 — stream-generation counter; the REAL class-level
+    # default (0) lives on LoopMixin, which owns the callback/enqueue
+    # side. This annotation documents the write access below.
+    _stream_epoch: int
 
     # Method-via-MRO declarations — these live on AudioCaptureTask
     # (or future LoopMixin) and resolve through the composed
@@ -168,6 +172,34 @@ class RestartMixin:
         status: object,
     ) -> None: ...
     def _allocate_ring_buffer(self, tuning: VoiceTuningConfig) -> None: ...
+
+    def _drain_stale_frames(self) -> None:
+        """Advance the stream epoch, then drain queued raw blocks.
+
+        Single drain site for every restart path (PIPELINE-9,
+        2026-07-02). Draining the queue alone was not enough:
+        ``_audio_callback`` posts ``_enqueue`` via
+        ``loop.call_soon_threadsafe``, so dispatches already scheduled
+        when the old stream closed can still EXECUTE during the
+        subsequent ``await open_input_stream(...)`` — landing
+        old-stream raw blocks AFTER this drain and pushing them
+        through the NEW FrameNormalizer built for the new stream's
+        rate/channels (misinterpreted, tempo-shifted audio once per
+        restart). Bumping :attr:`_stream_epoch` FIRST makes those late
+        arrivals structurally droppable: each callback stamps the
+        epoch it observed at capture time and ``_enqueue`` discards
+        stamps that predate the current epoch.
+
+        Call AFTER ``_close_stream`` has returned (no further
+        callbacks will fire) and BEFORE the replacement stream opens
+        (its callbacks observe the new epoch). The ring-buffer epoch
+        (``EpochMixin``/``RingMixin``) is a separate mechanism — it
+        protects probe taps, not this queue feed.
+        """
+        self._stream_epoch += 1
+        while not self._queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._queue.get_nowait()
 
     def _build_normalizer(self, *, source_rate: int, source_channels: int) -> FrameNormalizer:
         """Construct the :class:`FrameNormalizer` for a freshly-opened stream.
@@ -288,9 +320,7 @@ class RestartMixin:
         # returns AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED on our own stream.
         await asyncio.to_thread(self._close_stream, "exclusive_restart")
         # Clear any residual frames from the shared-mode callback.
-        while not self._queue.empty():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self._queue.get_nowait()
+        self._drain_stale_frames()
 
         try:
             stream, info = await open_input_stream(
@@ -563,9 +593,7 @@ class RestartMixin:
         # stream on the PortAudio thread so the shared reopen does not
         # race against our own exclusive handle.
         await asyncio.to_thread(self._close_stream, "shared_restart")
-        while not self._queue.empty():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self._queue.get_nowait()
+        self._drain_stale_frames()
 
         try:
             stream, info = await open_input_stream(
@@ -747,9 +775,7 @@ class RestartMixin:
         # we grab the kernel device — some ALSA drivers reject a second
         # client even for read-only capture.
         await asyncio.to_thread(self._close_stream, "alsa_hw_direct_restart")
-        while not self._queue.empty():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self._queue.get_nowait()
+        self._drain_stale_frames()
 
         try:
             stream, info = await open_input_stream(
@@ -992,9 +1018,7 @@ class RestartMixin:
         )
 
         await asyncio.to_thread(self._close_stream, "session_manager_restart")
-        while not self._queue.empty():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self._queue.get_nowait()
+        self._drain_stale_frames()
 
         try:
             stream, info = await open_input_stream(
@@ -1245,9 +1269,7 @@ class RestartMixin:
         # second client even for read-only capture (mirrors the close
         # pattern used by request_exclusive_restart).
         await asyncio.to_thread(self._close_stream, "host_api_rotate")
-        while not self._queue.empty():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self._queue.get_nowait()
+        self._drain_stale_frames()
 
         try:
             stream, info = await open_input_stream(
@@ -1519,9 +1541,7 @@ class RestartMixin:
         # request_host_api_rotate (anti-pattern #14 compliance —
         # sd.InputStream.close() is sync).
         await asyncio.to_thread(self._close_stream, "device_change")
-        while not self._queue.empty():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self._queue.get_nowait()
+        self._drain_stale_frames()
 
         try:
             stream, info = await open_input_stream(

@@ -10,6 +10,11 @@ each chain run produces a single auditable
 step-1.5 stream-drainer hand-off that has no verdict of its own:
 
 1.   Output queue flush (idempotent ``interrupt()``).
+1.1. Synchronous filler cancel (PIPELINE-6, 2026-07-02) — no await
+     separates it from step 1, so a pending filler can never fire
+     ``play_immediate`` (which clears the interrupt flag at entry)
+     inside the chain's awaited window and resurrect playback over
+     the user's barge-in.
 1.5. Stream-drainer hand-off — cancel + briefly await the streaming
      background playback drainer and clear
      ``_speech_session_active`` so playback is genuinely silent
@@ -18,7 +23,7 @@ step-1.5 stream-drainer hand-off that has no verdict of its own:
 2.5. (T3.2 / M5) Cogloop bridge task cancellation — fallback when
      ``_llm_cancel_hook`` is None during the CR1 race window.
 3.   Upstream LLM cancellation via the registered hook.
-4.   Filler + self-feedback gate cleanup.
+4.   Filler (idempotent re-cancel) + self-feedback gate cleanup.
 5.   Text-buffer cleanup (band-aid #15 final fix — pre-this-step the
      chain left ``_text_buffer`` populated, leaking residue into the
      next turn).
@@ -350,6 +355,19 @@ class TtsCancelChainMixin:
         1. **Output queue flush** — interrupt active playback so the
            user hears barge-in immediately. Synchronous + always
            succeeds (idempotent ``interrupt()``).
+        1.1. **Synchronous filler cancel** (PIPELINE-6, 2026-07-02) —
+           ``_cancel_filler`` runs with NO await between it and the
+           step-1 interrupt, so the event loop cannot schedule a
+           pending filler task in between. Pre-fix the filler was
+           cancelled only at step 4 — behind up to four awaited steps
+           (1.5/2/2.5/3, each with a ``_CANCELLATION_TASK_TIMEOUT_S``
+           budget) — and a filler whose delay expired inside that
+           window called ``play_immediate``, which clears the
+           interrupt flag at entry, resurrecting playback + un-muting
+           the queue during the user's barge-in. (The other
+           ``play_immediate`` producer, ``speak()``, is covered by
+           steps 2/2.5: cancelling the synth/cogloop task also
+           cancels an in-flight ``await play_immediate``.)
         1.5. **Stream-drainer hand-off** — cancel + briefly await the
            streaming background playback drainer (which observes the
            step-1 interrupt at its next slice boundary) and clear
@@ -370,8 +388,11 @@ class TtsCancelChainMixin:
            :attr:`_llm_cancel_hook` is awaited if present. Without
            this step, the LLM keeps producing tokens that flow into
            the next turn (the pre-T1 silent failure mode).
-        4. **Filler + self-feedback gate cleanup** — cancel the
-           pending filler task and release the mic-ducking gate.
+        4. **Filler + self-feedback gate cleanup** — re-run the
+           (idempotent) filler cancel for verdict continuity and
+           release the mic-ducking gate. The load-bearing filler
+           cancel moved to step 1.1; this step's verdict now
+           primarily reports the gate release.
         5. **Text-buffer cleanup** — wipe ``_text_buffer``
            unconditionally so a barged-in turn's streamed residue
            never prepends onto the next turn's speech.
@@ -401,6 +422,25 @@ class TtsCancelChainMixin:
                 logger.warning(
                     "voice.tts.cancellation_step_failed",
                     step="output_flush",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # Step 1.1 (PIPELINE-6, 2026-07-02): cancel the pending
+            # filler SYNCHRONOUSLY, before the chain's first await.
+            # With no await between the step-1 interrupt and this
+            # cancel, the event loop cannot run a pending filler task
+            # in between — closing the window where a filler's
+            # ``play_immediate`` (which clears the interrupt flag at
+            # entry) resurrected playback during the user's barge-in.
+            # ``_cancel_filler`` is sync + idempotent; step 4 keeps
+            # its own call for verdict continuity + gate cleanup.
+            try:
+                self._cancel_filler()
+            except Exception as exc:  # noqa: BLE001 — chain shield
+                logger.warning(
+                    "voice.tts.cancellation_step_failed",
+                    step="filler_early_cancel",
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )

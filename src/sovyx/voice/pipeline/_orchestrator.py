@@ -114,7 +114,9 @@ _SAMPLE_RATE = 16_000
 _FRAME_SAMPLES = 512  # 32ms at 16kHz
 _SILENCE_FRAMES_END = 22  # ~700ms silence -> end of utterance
 _MAX_RECORDING_FRAMES = 312  # ~10s max recording
-_BARGE_IN_THRESHOLD_FRAMES = 5  # ~160ms sustained speech -> barge-in
+_BARGE_IN_THRESHOLD_FRAMES = (
+    5  # 5 consecutive VAD-speech frames (~160ms) counted in _handle_speaking -> barge-in
+)
 _FILLER_DELAY_MS = 800  # Play filler if no LLM token within this
 _TEXT_MIN_WORDS = 3  # Min words before TTS synthesis
 # Heartbeat-specific tuning constants moved to ``_heartbeat_mixin.py``
@@ -405,8 +407,10 @@ class VoicePipeline(
 
         # Self-feedback isolation (ADR §4.4.6). Structural half-duplex
         # gating is encoded directly in the state machine (wake-word
-        # only runs in IDLE, barge-in only in SPEAKING with a 5-frame
-        # sustained threshold); this optional component adds mic
+        # only runs in IDLE, barge-in only in SPEAKING after a
+        # ``barge_in_threshold``-frame consecutive-speech counter —
+        # a REAL per-frame counter in ``_handle_speaking`` since the
+        # 2026-07-02 PIPELINE-2 redesign); this optional component adds mic
         # ducking around TTS. ``None`` means the factory didn't wire
         # a gate (tests, push-to-talk fallback) — the pipeline still
         # works, it just lacks the ducking layer.
@@ -480,7 +484,11 @@ class VoicePipeline(
             confirmation_tone=config.confirmation_tone,
         )
         self._jarvis = JarvisIllusion(jarvis_cfg, tts)
-        self._barge_in = BargeInDetector(vad, self._output, config.barge_in_threshold)
+        # Sustain counter only — the detector holds NO vad/output
+        # references since the 2026-07-02 PIPELINE-2/3/4 redesign;
+        # ``_handle_speaking`` feeds it the verdict from feed_frame's
+        # single VAD inference (see ``_barge_in.py`` module docstring).
+        self._barge_in = BargeInDetector(config.barge_in_threshold)
 
         # Tasks
         self._filler_task: asyncio.Task[bool] | None = None
@@ -954,7 +962,7 @@ class VoicePipeline(
         timeline clean rather than letting handles dangle indefinitely.
         """
         if self._voice_saga is not None:
-            end_saga(
+            self._end_saga_context_safe(
                 self._voice_saga,
                 exc=RuntimeError("voice_turn saga abandoned by state machine"),
             )
@@ -971,8 +979,43 @@ class VoicePipeline(
         """
         if self._voice_saga is None:
             return
-        end_saga(self._voice_saga)
+        self._end_saga_context_safe(self._voice_saga)
         self._voice_saga = None
+
+    def _end_saga_context_safe(
+        self,
+        handle: SagaHandle,
+        *,
+        exc: BaseException | None = None,
+    ) -> None:
+        """``end_saga`` hardened for cross-task closure (PIPELINE-5).
+
+        The saga's contextvar tokens belong to the asyncio task that
+        OPENED it (the TTS-out surface writing IDLE→SPEAKING). When the
+        saga is closed from a DIFFERENT task — ``stop()`` writing IDLE
+        after cancelling a mid-turn cogloop task, or
+        ``_handle_speaking``'s consume-loop fallback — the token reset
+        inside ``end_saga`` raises ``ValueError`` ("created in a
+        different Context") AFTER the ``saga.completed`` event has
+        already been emitted. Nothing meaningful is lost by skipping
+        the reset (the opener's context is gone; its vars are
+        unreachable from here by design), while letting it propagate
+        breaks stop()'s never-raise contract. Anti-pattern #27:
+        suppress + debug log.
+        """
+        try:
+            if exc is not None:
+                end_saga(handle, exc=exc)
+            else:
+                end_saga(handle)
+        except ValueError:
+            logger.debug(
+                "voice.saga.cross_context_token_reset_skipped",
+                reason=(
+                    "saga closed from a different task than the one that "
+                    "opened it; contextvar reset is a no-op there"
+                ),
+            )
 
     # -- Properties ----------------------------------------------------------
 
@@ -1389,15 +1432,51 @@ class VoicePipeline(
         frame: npt.NDArray[np.int16],
         vad_event: VADEvent,
     ) -> dict[str, Any]:
-        """SPEAKING: monitor for barge-in while TTS plays."""
+        """SPEAKING: monitor for barge-in while a speech session is open.
+
+        2026-07-02 audio-engine audit redesign (PIPELINE-2/3/7):
+
+        * The barge-in verdict REUSES ``vad_event`` — the verdict from
+          ``feed_frame``'s single, timeout-guarded VAD inference. The
+          pre-fix path ran a SECOND inference on the same stateful
+          SileroVAD per speech frame (the detector's retired
+          per-frame inference API), double-advancing the shared
+          LSTM + hysteresis FSM (offset window ~256 ms → ~128 ms of
+          wall time) and bypassing the band-aid #50 stall guard.
+        * Sustain gating is a REAL consecutive-speech-frame counter
+          (:class:`BargeInDetector.observe`) compared against
+          ``config.barge_in_threshold`` — pre-fix the threshold was
+          dead code (``monitor()`` had no callers), barge-in fired on
+          a single frame, and the WARN echoed the config value as a
+          fabricated ``voice.frames_sustained`` (anti-pattern #48).
+        * The barge-in window is the OPEN SPEECH SESSION
+          (``_speech_session_active`` OR ``_output.is_playing``), not
+          instantaneous playback: during a streaming turn's gaps
+          (between segments / LLM stalls) ``is_playing`` is False but
+          the turn is still assistant-owned and there is NO assistant
+          audio to self-echo — sustained user speech there is a
+          genuine interruption (pre-fix those frames were silently
+          discarded for the whole LLM-generation window). One
+          threshold covers both windows: the self-feedback duck stays
+          engaged for the entire session (released only at session
+          close / chain step 4), and the sustain requirement (default
+          5 frames ≈ 160 ms on top of the VAD FSM's 3-frame onset
+          hysteresis) exceeds any playback echo tail — the drainer
+          flips ``is_playing`` False only after the final slice has
+          actually finished writing to PortAudio.
+        """
         if not self._config.barge_in_enabled:
             return {"state": "SPEAKING"}
 
-        if (
-            vad_event.is_speech
-            and self._output.is_playing
-            and await self._barge_in.check_frame_async(frame)
-        ):
+        output_was_playing = self._output.is_playing
+        in_barge_in_window = output_was_playing or self._speech_session_active
+        if not in_barge_in_window:
+            # Session closed and playback finished — nothing left to
+            # interrupt; a stale run must not leak into the next turn.
+            self._barge_in.reset()
+        elif self._barge_in.observe(is_speech=vad_event.is_speech):
+            frames_sustained = self._barge_in.frames_sustained
+            self._barge_in.reset()
             # T1 atomic cancellation chain — single transactional
             # surface replacing the pre-T1 inline cleanup. Stops
             # output, cancels in-flight TTS, signals LLM, releases
@@ -1426,10 +1505,13 @@ class VoicePipeline(
                 "voice.barge_in.detected",
                 **{
                     "voice.mind_id": self._config.mind_id,
-                    "voice.frames_sustained": self._config.barge_in_threshold,
+                    # Real measured sustain (PIPELINE-2 fix) — pre-fix
+                    # this field echoed the config constant while the
+                    # live path fired on a single frame (#48 class).
+                    "voice.frames_sustained": frames_sustained,
                     "voice.prob": round(float(vad_event.probability), 3),
                     "voice.threshold_frames": self._config.barge_in_threshold,
-                    "voice.output_was_playing": True,
+                    "voice.output_was_playing": output_was_playing,
                     "voice.utterance_id": interrupted_utterance_id,
                 },
             )
@@ -2040,7 +2122,24 @@ class VoicePipeline(
     # TYPE_CHECKING block). Anti-pattern #16 — Phase 5.F.26.
 
     def reset(self) -> None:
-        """Reset the pipeline to IDLE state (for testing or error recovery)."""
+        """Reset the pipeline to IDLE state — test surface + manual recovery.
+
+        Caller status (anti-pattern #70 discipline): this method has
+        NO production caller at HEAD — only tests invoke it. Prefer
+        ``stop()``/``start()`` (or ``cancel_speech_chain``) for real
+        recovery; if this is ever wired into an error-recovery path,
+        note the stream-drainer cancel below is fire-and-forget (the
+        method is sync, so the cancelled task unwinds on the next
+        event-loop tick rather than being awaited here).
+
+        2026-07-02 (PIPELINE-10) — completed the turn-state recovery.
+        The pre-fix body predated the VTI session-ownership contract
+        (anti-pattern #69) and left ``_speech_session_active`` True,
+        the utterance id set, the stream drainer running, and the
+        self-feedback duck engaged — stranding the mic ducked and
+        re-arming ``_handle_speaking``'s IDLE fallback with a stale
+        open session on the next SPEAKING entry.
+        """
         self._state = VoicePipelineState.IDLE
         self._utterance_frames.clear()
         self._silence_counter = 0
@@ -2048,3 +2147,15 @@ class VoicePipeline(
         self._text_buffer = ""
         self._cancel_filler()
         self._output.clear()
+        # PIPELINE-10 — session/turn-owned state (see docstring).
+        self._speech_session_active = False
+        self._barge_in.reset()
+        drainer = self._stream_drain_task
+        self._stream_drain_task = None
+        if drainer is not None and not drainer.done():
+            drainer.cancel()
+        self._clear_utterance_id()
+        if self._self_feedback_gate is not None:
+            # Canonical duck release — same call stop() / chain step 4
+            # use; idempotent when no TTS was in flight.
+            self._self_feedback_gate.on_tts_end()
