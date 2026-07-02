@@ -73,6 +73,8 @@ const VOICE_MODELS = {
     vad: "silero-v5",
   },
   available_tiers: {
+    // PI5 carries NO `available` map — models the pre-ENGINES-2 daemon;
+    // the matrix must treat absent flags as available (backward compat).
     PI5: {
       stt_primary: "moonshine-tiny",
       stt_streaming: "moonshine-tiny",
@@ -81,6 +83,8 @@ const VOICE_MODELS = {
       wake: "openwakeword",
       vad: "silero-v5",
     },
+    // N100 carries the ENGINES-2 availability flags — moonshine-base is
+    // roadmap-only (no runtime backing) and must render as such.
     N100: {
       stt_primary: "moonshine-base",
       stt_streaming: "moonshine-base",
@@ -88,6 +92,14 @@ const VOICE_MODELS = {
       tts_quality: "kokoro-82m",
       wake: "openwakeword",
       vad: "silero-v5",
+      available: {
+        stt_primary: false,
+        stt_streaming: false,
+        tts_primary: true,
+        tts_quality: true,
+        wake: true,
+        vad: true,
+      },
     },
   },
 };
@@ -320,6 +332,28 @@ describe("VoicePage", () => {
     expect(screen.getAllByText("kokoro-82m").length).toBeGreaterThanOrEqual(1);
     // silero-v5 appears in both PI5 and N100 tiers
     expect(screen.getAllByText("silero-v5").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders roadmap-only matrix entries muted with a roadmap tag (ENGINES-2)", async () => {
+    setupMockSuccess();
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByText("Model Matrix")).toBeInTheDocument();
+    });
+    // N100's stt_primary/stt_streaming are flagged unavailable → both
+    // cells render inside the roadmap wrapper with the i18n tag.
+    expect(screen.getByTestId("roadmap-model-N100-stt_primary")).toBeInTheDocument();
+    expect(screen.getByTestId("roadmap-model-N100-stt_streaming")).toBeInTheDocument();
+    expect(screen.getAllByText("roadmap").length).toBe(2);
+    // The model name still renders inside the muted wrapper.
+    expect(screen.getByTestId("roadmap-model-N100-stt_primary")).toHaveTextContent(
+      "moonshine-base",
+    );
+    // Flagged-available and legacy (no available map) cells render plain:
+    // no roadmap wrapper exists for PI5 (absent map → assume available)
+    // nor for N100's tts_primary (flagged true).
+    expect(screen.queryByTestId("roadmap-model-PI5-stt_primary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("roadmap-model-N100-tts_primary")).not.toBeInTheDocument();
   });
 
   it("shows not-configured banner when pipeline state is not_configured", async () => {

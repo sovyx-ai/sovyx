@@ -514,6 +514,12 @@ class VoiceModelSelectionPayload(BaseModel):
     Production helper always populates every field; defaults to ``""``
     so partial test mocks + downstream-omitted fields validate cleanly
     (same tolerance pattern as :class:`VoiceStatusResponse`).
+
+    ``available`` (ENGINES-2, additive/optional for backward compat)
+    flags per role whether the named model has runtime backing at HEAD
+    — the auto-select matrix is partly roadmap fiction (AP #48) and the
+    dashboard renders unbacked entries as roadmap. Absent map (older
+    daemon) means the client must assume available (legacy behaviour).
     """
 
     stt_primary: str = ""
@@ -522,6 +528,7 @@ class VoiceModelSelectionPayload(BaseModel):
     tts_quality: str = ""
     wake: str = ""
     vad: str = ""
+    available: dict[str, bool] = Field(default_factory=dict)
 
 
 class VoiceModelsResponse(BaseModel):

@@ -1324,6 +1324,50 @@ describe("VoiceModelsResponseSchema (F2-H02)", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  // ENGINES-2 (AP #48) — the additive per-role `available` map must
+  // round-trip (present) and stay optional (absent = older daemon).
+  it("safeParse accepts the ENGINES-2 available flags on a selection", () => {
+    const result = VoiceModelsResponseSchema.safeParse({
+      ...SAMPLE_VOICE_MODELS,
+      available_tiers: {
+        N100: {
+          stt_primary: "parakeet-tdt-0.6b-v3-int8",
+          stt_streaming: "moonshine-base",
+          tts_primary: "kokoro-onnx-q8",
+          tts_quality: "kokoro-onnx-fp32",
+          wake: "openwakeword",
+          vad: "silero-vad-v5",
+          available: {
+            stt_primary: false,
+            stt_streaming: false,
+            tts_primary: true,
+            tts_quality: false,
+            wake: true,
+            vad: true,
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.available_tiers?.N100?.available?.stt_primary).toBe(false);
+      expect(result.data.available_tiers?.N100?.available?.wake).toBe(true);
+    }
+  });
+
+  it("safeParse rejects a non-boolean available flag", () => {
+    const result = VoiceModelsResponseSchema.safeParse({
+      ...SAMPLE_VOICE_MODELS,
+      available_tiers: {
+        PI5: {
+          ...SAMPLE_VOICE_MODELS.available_tiers.PI5,
+          available: { stt_primary: "yes" },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 // Mission C3 §T2.9 — failover-history zod twin tests.

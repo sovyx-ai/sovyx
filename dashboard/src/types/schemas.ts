@@ -2270,6 +2270,11 @@ const VoiceModelSelectionPayloadSchema = z.object({
   tts_quality: z.string(),
   wake: z.string(),
   vad: z.string(),
+  // ENGINES-2 (AP #48) — per-role runtime-backing flag; the auto-select
+  // matrix is partly roadmap fiction and unbacked entries render as
+  // "roadmap". Optional: pre-ENGINES-2 daemons never emit it (assume
+  // available for backward compat).
+  available: z.record(z.string(), z.boolean()).optional(),
 });
 
 export const VoiceModelsResponseSchema = z

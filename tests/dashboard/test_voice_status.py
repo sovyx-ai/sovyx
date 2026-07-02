@@ -733,6 +733,59 @@ class TestGetVoiceModels:
         assert models["active"]["stt_primary"] == "moonshine-tiny"
         assert models["active"]["tts_primary"] == "piper"
 
+    @pytest.mark.asyncio()
+    async def test_tier_entries_carry_availability_flags(self, mock_registry: MagicMock) -> None:
+        """ENGINES-2 (AP #48) — every tier entry carries an ``available``
+        map flagging, per surfaced role, whether the named model has real
+        runtime backing (the matrix is partly roadmap fiction)."""
+        models = await get_voice_models(mock_registry)
+
+        for _tier_name, tier_data in models["available_tiers"].items():
+            available = tier_data["available"]
+            assert set(available) == {
+                "stt_primary",
+                "stt_streaming",
+                "tts_primary",
+                "tts_quality",
+                "wake",
+                "vad",
+            }
+            assert all(isinstance(v, bool) for v in available.values())
+
+    @pytest.mark.asyncio()
+    async def test_phantom_matrix_entries_flagged_unavailable(
+        self, mock_registry: MagicMock
+    ) -> None:
+        """N100's parakeet STT has no engine/download at HEAD → False;
+        PI5's moonshine-tiny is fully shipped → True."""
+        models = await get_voice_models(mock_registry)
+
+        pi5 = models["available_tiers"]["PI5"]
+        assert pi5["stt_primary"] == "moonshine-tiny"
+        assert pi5["available"]["stt_primary"] is True
+
+        n100 = models["available_tiers"]["N100"]
+        assert n100["stt_primary"] == "parakeet-tdt-0.6b-v3-int8"
+        assert n100["available"]["stt_primary"] is False
+        assert n100["available"]["tts_quality"] is False  # kokoro-onnx-fp32
+
+    @pytest.mark.asyncio()
+    async def test_availability_survives_route_boundary_model(
+        self, mock_registry: MagicMock
+    ) -> None:
+        """AP #40/#53 — the pydantic route twin must NOT silently strip
+        the additive ``available`` field (default pydantic extra-ignore
+        would have dropped an undeclared key)."""
+        from sovyx.dashboard.routes.voice import VoiceModelsResponse
+
+        models = await get_voice_models(mock_registry)
+        validated = VoiceModelsResponse.model_validate(models)
+
+        n100 = validated.available_tiers["N100"]
+        assert n100.available["stt_primary"] is False
+        pi5 = validated.available_tiers["PI5"]
+        assert pi5.available["stt_primary"] is True
+
 
 # ── _selection_to_dict tests ──
 

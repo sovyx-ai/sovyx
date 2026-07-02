@@ -133,6 +133,11 @@ interface ModelSelection {
   tts_quality: string;
   wake: string;
   vad: string;
+  // ENGINES-2 (AP #48) — per-role runtime-backing flag. Entries flagged
+  // false are roadmap-only (no engine / no download at HEAD) and render
+  // muted with a "roadmap" tag. Optional: older daemons never emit it
+  // (treated as available for backward compat).
+  available?: Record<string, boolean>;
 }
 
 interface VoiceModels {
@@ -441,7 +446,7 @@ function ModelMatrix({
   const tiers = Object.keys(models.available_tiers);
   if (tiers.length === 0) return null;
 
-  const fields: { key: keyof ModelSelection; label: string }[] = [
+  const fields: { key: Exclude<keyof ModelSelection, "available">; label: string }[] = [
     { key: "stt_primary", label: t("models.sttPrimary") },
     { key: "stt_streaming", label: t("models.sttStreaming") },
     { key: "tts_primary", label: t("models.ttsPrimary") },
@@ -482,11 +487,32 @@ function ModelMatrix({
             {fields.map(({ key, label }) => (
               <tr key={key} className="border-b border-[var(--svx-color-border)] last:border-0">
                 <td className="py-1.5 pr-4 text-[var(--svx-color-text-secondary)]">{label}</td>
-                {tiers.map((tier) => (
-                  <td key={tier} className="py-1.5 pr-4 font-mono text-xs">
-                    {models.available_tiers[tier]?.[key] ?? "—"}
-                  </td>
-                ))}
+                {tiers.map((tier) => {
+                  const selection = models.available_tiers[tier];
+                  const name = selection?.[key] ?? "—";
+                  // ENGINES-2 (AP #48) — entries without runtime backing
+                  // render muted + tagged "roadmap" so the matrix never
+                  // claims a model the daemon cannot actually build.
+                  // Absent map (older daemon) → assume available.
+                  const isAvailable = selection?.available?.[key] ?? true;
+                  return (
+                    <td key={tier} className="py-1.5 pr-4 font-mono text-xs">
+                      {isAvailable ? (
+                        name
+                      ) : (
+                        <span
+                          className="text-[var(--svx-color-text-tertiary)]"
+                          data-testid={`roadmap-model-${tier}-${key}`}
+                        >
+                          {name}
+                          <span className="ml-1 rounded bg-[var(--svx-color-surface-secondary)] px-1 py-0.5 text-[10px] uppercase tracking-wider">
+                            {t("models.roadmap")}
+                          </span>
+                        </span>
+                      )}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>

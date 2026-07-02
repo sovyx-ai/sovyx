@@ -267,7 +267,8 @@
   "models": {
     "title": "Matriz de Modelos",
     "subtitle": "Modelos disponibles por capa de hardware.",
-    "legend": "✦ marca tu capa detectada. Las demás columnas muestran la selección de referencia que usaría cada capa — no son modelos instalados en tu equipo.",
+    "legend": "✦ marca tu capa detectada. Las demás columnas muestran la selección de referencia que usaría cada capa — no son modelos instalados en tu equipo. Las entradas atenuadas marcadas como \"planificado\" son modelos previstos sin soporte de runtime todavía.",
+    "roadmap": "planificado",
     "activeTier": "Capa Activa",
     "sttPrimary": "STT Primario",
     "sttStreaming": "STT Streaming",

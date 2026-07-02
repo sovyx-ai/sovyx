@@ -646,3 +646,65 @@ class TestEdgeCases:
                 model = get_fallback(role, model)
                 assert model not in seen or model is None, f"Cycle in {role} chain"
                 seen.add(model)
+
+
+# ---------------------------------------------------------------------------
+# ENGINES-2 — runtime-availability honest labeling (AP #48)
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeAvailability:
+    """The matrix is a roadmap document; only shipped engines are available."""
+
+    def test_shipped_models_are_available(self) -> None:
+        from sovyx.voice.auto_select import is_model_runtime_available
+
+        for model in (
+            "moonshine-tiny",
+            "kokoro-onnx-q8",
+            "piper",
+            "openwakeword",
+            "silero-vad-v5",
+        ):
+            assert is_model_runtime_available(model), model
+
+    def test_phantom_models_are_not_available(self) -> None:
+        from sovyx.voice.auto_select import is_model_runtime_available
+
+        for model in (
+            "parakeet-tdt-0.6b-v3-int8",
+            "parakeet-tdt-0.6b-v3",
+            "parakeet-ctc-0.6b",
+            "moonshine-base",
+            "qwen3-tts-0.6b",
+            "qwen3-tts-1.7b",
+            "qwen3-tts-clone",
+            "ecapa-tdnn-onnx",
+            "kokoclone",
+            "piper-finetune",
+            # fp32 Kokoro loads in the engine but the download layer
+            # never ships the 300 MB file — not deliverable at HEAD.
+            "kokoro-onnx-fp32",
+        ):
+            assert not is_model_runtime_available(model), model
+
+    def test_none_is_not_available(self) -> None:
+        from sovyx.voice.auto_select import is_model_runtime_available
+
+        assert not is_model_runtime_available(None)
+
+    def test_available_set_entries_all_appear_in_matrix_or_chains(self) -> None:
+        """Guard against a stale availability set naming models the
+        matrix no longer references (lock-step contract)."""
+        from sovyx.voice.auto_select import (
+            _FALLBACK_CHAINS,
+            _MODEL_MATRIX,
+            RUNTIME_AVAILABLE_MODELS,
+        )
+
+        referenced: set[str] = set()
+        for selection in _MODEL_MATRIX.values():
+            referenced.update(str(v) for v in selection.values() if v is not None)
+        for chain in _FALLBACK_CHAINS.values():
+            referenced.update(str(v) for v in chain if v is not None)
+        assert referenced >= RUNTIME_AVAILABLE_MODELS

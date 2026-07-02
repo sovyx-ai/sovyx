@@ -267,7 +267,8 @@
   "models": {
     "title": "Matriz de Modelos",
     "subtitle": "Modelos disponíveis por camada de hardware.",
-    "legend": "✦ marca a sua camada detectada. As outras colunas mostram a seleção de referência que cada camada usaria — não são modelos instalados na sua máquina.",
+    "legend": "✦ marca a sua camada detectada. As outras colunas mostram a seleção de referência que cada camada usaria — não são modelos instalados na sua máquina. Entradas esmaecidas marcadas como \"planejado\" são modelos previstos sem suporte de runtime ainda.",
+    "roadmap": "planejado",
     "activeTier": "Camada Ativa",
     "sttPrimary": "STT Primário",
     "sttStreaming": "STT Streaming",

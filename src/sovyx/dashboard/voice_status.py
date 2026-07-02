@@ -485,13 +485,28 @@ async def get_voice_models(registry: ServiceRegistry) -> dict[str, Any]:
     return result
 
 
-def _selection_to_dict(sel: ModelSelection) -> dict[str, str]:
-    """Convert ModelSelection to a JSON-friendly dict."""
-    return {
+def _selection_to_dict(sel: ModelSelection) -> dict[str, Any]:
+    """Convert ModelSelection to a JSON-friendly dict.
+
+    ENGINES-2 (AP #48 — honest labeling): the additive ``available``
+    map flags, per surfaced role, whether the named model has real
+    runtime backing at HEAD (:data:`sovyx.voice.auto_select.
+    RUNTIME_AVAILABLE_MODELS`). The auto-select matrix is a roadmap
+    document — entries like ``parakeet-tdt-*`` / ``qwen3-tts-*`` have
+    no engine, no download entry, and must render as roadmap in the
+    dashboard, never as available selections.
+    """
+    from sovyx.voice.auto_select import is_model_runtime_available
+
+    roles: dict[str, str] = {
         "stt_primary": sel.stt_primary,
         "stt_streaming": sel.stt_streaming,
         "tts_primary": sel.tts_primary,
         "tts_quality": sel.tts_quality,
         "wake": sel.wake,
         "vad": sel.vad,
+    }
+    return {
+        **roles,
+        "available": {role: is_model_runtime_available(model) for role, model in roles.items()},
     }

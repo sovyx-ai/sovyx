@@ -165,6 +165,37 @@ _FALLBACK_CHAINS: dict[str, list[str | None]] = {
     "voice_clone": ["qwen3-tts-clone", "kokoclone", "piper-finetune", None],
 }
 
+# ENGINES-2 (AP #48 — honest labeling): the matrix above is a ROADMAP
+# document. Only a subset of its entries has runtime backing at HEAD —
+# an engine the factory can actually build (MoonshineSTT, KokoroTTS,
+# PiperTTS, SileroVAD, WakeWordDetector/OpenWakeWord) AND, where a model
+# download is required, an entry in ``model_registry.VOICE_MODELS``.
+# Everything else (parakeet-tdt-*, moonshine-base, qwen3-tts-*,
+# ecapa-tdnn-onnx, kokoclone, piper-finetune, kokoro-onnx-fp32 — the
+# fp32 Kokoro model is loadable by the engine but never shipped by the
+# download layer) is a phantom the dashboard must render as roadmap,
+# not as an available selection. Keep this set in lock-step with the
+# factory + ``model_registry.VOICE_MODELS`` when an engine ships.
+RUNTIME_AVAILABLE_MODELS: frozenset[str] = frozenset(
+    {
+        "moonshine-tiny",
+        "kokoro-onnx-q8",
+        "piper",
+        "openwakeword",
+        "silero-vad-v5",
+    },
+)
+
+
+def is_model_runtime_available(model: str | None) -> bool:
+    """True when ``model`` has real runtime backing at HEAD.
+
+    ``None`` (an absent optional slot such as ``voice_clone``) is not a
+    capability claim, so it returns ``False`` — callers surface it as
+    absent, not as roadmap fiction.
+    """
+    return model in RUNTIME_AVAILABLE_MODELS
+
 
 # ---------------------------------------------------------------------------
 # Hardware detection
@@ -440,7 +471,15 @@ class VoiceModelAutoSelector:
         return self.select_models()
 
     def doctor_report(self) -> dict[str, Any]:
-        """Generate a diagnostic report for ``sovyx doctor --voice``.
+        """Generate a hardware + model-selection diagnostic report.
+
+        Observability-only at HEAD: NOTHING calls this method — it is
+        NOT wired into ``sovyx doctor`` (grep confirms zero callers;
+        AP #70 — a docstring previously claimed the doctor consumed
+        it). Note the ``models`` block mirrors the roadmap
+        ``_MODEL_MATRIX``, including entries with no runtime backing —
+        check :func:`is_model_runtime_available` before presenting any
+        of them as installable.
 
         Returns:
             Dict with hardware profile and selected models.
