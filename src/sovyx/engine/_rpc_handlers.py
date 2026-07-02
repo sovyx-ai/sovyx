@@ -14,6 +14,7 @@ for the CLI surface.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
@@ -73,6 +74,22 @@ CLI_CHANNEL_USER_ID = "cli-user"
 # short and identifying so the assistant knows it is talking to the
 # operator at the terminal, not a Telegram contact.
 CLI_USER_NAME = "CLI"
+
+# Per-check budget for the daemon-side ``doctor`` RPC sweep. Checks run
+# concurrently (``HealthRegistry.run_all`` gathers them), so happy-path
+# wall time is ~max(single check), not the sum. A check exceeding this
+# budget yields its own RED "Check timed out" row while its siblings
+# still report — partial results, never a hung CLI.
+_DOCTOR_CHECK_TIMEOUT_S = 5.0
+
+# Outer safety bound on the whole ``doctor`` sweep (belt-and-braces over
+# the per-check bound — covers a pathological gather stall). On expiry
+# the handler returns a single synthetic RED row + ``note="timed_out"``
+# instead of hanging. The CLI-side call budget
+# (``sovyx.cli.commands.doctor._ONLINE_CHECKS_RPC_TIMEOUT_S``) must stay
+# ABOVE this value so a slow sweep surfaces as check rows, not as a
+# client-side transport error.
+_DOCTOR_TOTAL_TIMEOUT_S = 8.0
 
 
 def register_cli_handlers(
@@ -567,6 +584,85 @@ def register_cli_handlers(
             "name": path.name,
         }
 
+    async def _doctor() -> dict[str, Any]:
+        """Run the daemon-side online health checks for ``sovyx doctor``.
+
+        DOCTOR-1 closure — the CLI called this method since the doctor
+        command shipped, but no daemon ever registered it (AP #53 /
+        AP #70 class), so a healthy running daemon always rendered a
+        RED 'Daemon RPC' row. This is the producer half of the
+        contract; the consumer is
+        ``sovyx.cli.commands.doctor._online_checks_from_rpc``, which
+        parses ``{"checks": {name: {status, message, metadata}}}``
+        into table rows.
+
+        Wiring: reuses the bootstrap-registered
+        :class:`~sovyx.observability.health.HealthRegistry` singleton
+        (the online checks wired to the live engine — Database, Brain
+        Index, LLM Providers, Channels, Consolidation, Cost Budget);
+        falls back to
+        :func:`~sovyx.observability.health.create_engine_health_registry`
+        over the live :class:`ServiceRegistry` when the singleton is
+        absent (harnesses that wire RPC without full bootstrap). A
+        check whose dependency is unavailable reports its own
+        YELLOW/RED row via the ``HealthRegistry._safe_run`` boundary —
+        it never crashes the handler.
+
+        Timeout discipline: each check is bounded by
+        ``_DOCTOR_CHECK_TIMEOUT_S`` (a slow check becomes a RED
+        "Check timed out" row while siblings still report — partial
+        results by construction); the whole sweep is additionally
+        bounded by ``_DOCTOR_TOTAL_TIMEOUT_S``, on which the handler
+        returns a synthetic RED row + ``note="timed_out"`` instead of
+        hanging the CLI.
+        """
+        from sovyx.observability.health import (  # noqa: PLC0415
+            HealthRegistry,
+            create_engine_health_registry,
+        )
+
+        if registry.is_registered(HealthRegistry):
+            health = await registry.resolve(HealthRegistry)
+        else:
+            health = await create_engine_health_registry(registry)
+
+        try:
+            results = await asyncio.wait_for(
+                health.run_all(timeout=_DOCTOR_CHECK_TIMEOUT_S),
+                timeout=_DOCTOR_TOTAL_TIMEOUT_S,
+            )
+        except TimeoutError:
+            logger.warning(
+                "doctor_rpc_sweep_timed_out",
+                timeout_s=_DOCTOR_TOTAL_TIMEOUT_S,
+            )
+            return {
+                "overall": "red",
+                "check_count": 0,
+                "note": "timed_out",
+                "checks": {
+                    "Online Checks": {
+                        "status": "red",
+                        "message": (
+                            f"online health checks timed out after {_DOCTOR_TOTAL_TIMEOUT_S:g}s"
+                        ),
+                    },
+                },
+            }
+
+        return {
+            "overall": health.summary(results).value,
+            "check_count": len(results),
+            "checks": {
+                r.name: {
+                    "status": r.status.value,
+                    "message": r.message,
+                    "metadata": r.metadata,
+                }
+                for r in results
+            },
+        }
+
     rpc.register_method("chat", _chat)
     rpc.register_method("mind.list", _mind_list)
     rpc.register_method("mind.forget", _mind_forget)
@@ -579,4 +675,5 @@ def register_cli_handlers(
         "engine.resources.tracemalloc_snapshot",
         _engine_resources_tracemalloc_snapshot,
     )
-    logger.debug("cli_rpc_handlers_registered", count=9)
+    rpc.register_method("doctor", _doctor)
+    logger.debug("cli_rpc_handlers_registered", count=10)

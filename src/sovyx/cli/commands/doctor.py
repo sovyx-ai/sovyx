@@ -119,6 +119,18 @@ running ``sovyx voice setup`` or by passing ``--input-device 'NAME'``
 inline. Shell wrappers can branch on this code to surface a
 configuration-prompt UI instead of treating it as a platform error."""
 
+_ONLINE_CHECKS_RPC_TIMEOUT_S = 10.0
+"""Client-side budget for the daemon-side ``doctor`` RPC.
+
+Must exceed the daemon's own outer sweep bound
+(``sovyx.engine._rpc_handlers._DOCTOR_TOTAL_TIMEOUT_S``) so a slow but
+successful sweep surfaces as per-check "Check timed out" rows (partial
+results produced daemon-side) instead of a client transport error.
+"""
+
+_RPC_METHOD_NOT_FOUND_CODE = -32601
+"""JSON-RPC 2.0 'Method not found' error code (spec §5.1)."""
+
 console = Console()
 logger = get_logger(__name__)
 doctor_app = typer.Typer(
@@ -136,13 +148,68 @@ def doctor(
 ) -> None:
     """Run health checks on the Sovyx installation.
 
-    Offline checks (always available): disk, RAM, CPU, model files, config.
-    Online checks (daemon required): database, brain, LLM, channels,
-    consolidation, cost budget.
+    Offline checks (always run, no daemon needed): disk, RAM, CPU,
+    model files, config. Online checks (fetched from a running daemon
+    via the ``doctor`` RPC): database, brain index, LLM providers,
+    channels, consolidation, cost budget. A daemon that predates the
+    ``doctor`` RPC (pre-v0.49.60) yields a YELLOW informational row
+    instead of the online results — restart the daemon after
+    upgrading.
     """
     if ctx.invoked_subcommand is not None:
         return
     _run_general_doctor(output_json=output_json)
+
+
+def _is_rpc_method_not_found(exc: Exception) -> bool:
+    """Return True when *exc* carries the JSON-RPC 'Method not found' code.
+
+    ``DaemonClient.call`` folds server-side JSON-RPC errors into
+    ``ChannelConnectionError`` text (``"RPC error (-32601): Method not
+    found: doctor"``) without carrying the code structurally, so the
+    match is on the code literal in the message. Used to distinguish
+    "daemon predates this CLI's ``doctor`` RPC" (informational YELLOW)
+    from a genuine transport failure (RED).
+    """
+    return f"({_RPC_METHOD_NOT_FOUND_CODE})" in str(exc)
+
+
+def _online_checks_from_rpc(rpc_result: object) -> list[CheckResult]:
+    """Translate the daemon's ``doctor`` RPC payload into check rows.
+
+    Consumer half of the doctor online-check contract; the producer is
+    the ``doctor`` handler in ``sovyx.engine._rpc_handlers``, which
+    returns ``{"checks": {name: {"status", "message", "metadata"}}}``.
+    Kept as a named helper (not inlined in ``_run_general_doctor``) so
+    the producer round-trip test can parse with the REAL consumer —
+    one shared symbol, never two independent reimplementations
+    (AP #40/#53).
+    """
+    results: list[CheckResult] = []
+    if not isinstance(rpc_result, dict):
+        return results
+    for name, check_data in rpc_result.get("checks", {}).items():
+        if isinstance(check_data, dict):
+            status_str = check_data.get("status", "green")
+            status = CheckStatus(status_str)
+            results.append(
+                CheckResult(
+                    name=name,
+                    status=status,
+                    message=check_data.get("message", ""),
+                    metadata=check_data.get("metadata") or {},
+                )
+            )
+        else:
+            ok = bool(check_data)
+            results.append(
+                CheckResult(
+                    name=name,
+                    status=CheckStatus.GREEN if ok else CheckStatus.RED,
+                    message="ok" if ok else "failed",
+                )
+            )
+    return results
 
 
 def _run_general_doctor(*, output_json: bool) -> None:
@@ -177,37 +244,34 @@ def _run_general_doctor(*, output_json: bool) -> None:
 
     if daemon_running:
         try:
-            rpc_result = asyncio.run(client.call("doctor"))
-            if isinstance(rpc_result, dict):
-                for name, check_data in rpc_result.get("checks", {}).items():
-                    if isinstance(check_data, dict):
-                        status_str = check_data.get("status", "green")
-                        status = CheckStatus(status_str)
-                        results.append(
-                            CheckResult(
-                                name=name,
-                                status=status,
-                                message=check_data.get("message", ""),
-                                metadata=check_data.get("metadata") or {},
-                            )
-                        )
-                    else:
-                        ok = bool(check_data)
-                        results.append(
-                            CheckResult(
-                                name=name,
-                                status=CheckStatus.GREEN if ok else CheckStatus.RED,
-                                message="ok" if ok else "failed",
-                            )
-                        )
-        except Exception as exc:  # noqa: BLE001 — CLI boundary — renders RPC failure to doctor table; pragma: no cover
-            results.append(
-                CheckResult(
-                    name="Daemon RPC",
-                    status=CheckStatus.RED,
-                    message=f"RPC call failed: {exc}",
-                )
+            rpc_result = asyncio.run(
+                client.call("doctor", timeout=_ONLINE_CHECKS_RPC_TIMEOUT_S),
             )
+            results.extend(_online_checks_from_rpc(rpc_result))
+        except Exception as exc:  # noqa: BLE001 — CLI boundary — renders RPC failure to doctor table
+            if _is_rpc_method_not_found(exc):
+                # Daemon older than this CLI (the ``doctor`` RPC shipped
+                # v0.49.60) — informational, not a failure: the daemon
+                # is healthy, it just cannot serve online checks yet.
+                results.append(
+                    CheckResult(
+                        name="Daemon RPC",
+                        status=CheckStatus.YELLOW,
+                        message=(
+                            "daemon does not support online checks "
+                            "(pre-v0.49.60 daemon) — restart the daemon "
+                            "after upgrading"
+                        ),
+                    )
+                )
+            else:
+                results.append(
+                    CheckResult(
+                        name="Daemon RPC",
+                        status=CheckStatus.RED,
+                        message=f"RPC call failed: {exc}",
+                    )
+                )
 
     if output_json:
         json_out = [dataclasses.asdict(r) for r in results]

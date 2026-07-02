@@ -230,8 +230,10 @@ sovyx doctor
 ```
 
 `doctor` runs a tiered health check: disk, RAM, CPU, model files, and
-configuration (offline), plus database, brain, LLM connectivity, channels, and
-cost budget (online, requires the daemon). Use `sovyx doctor --json` for
+configuration (offline), plus database, brain index, LLM connectivity,
+channels, consolidation, and cost budget (online, fetched from a running
+daemon — the daemon must be v0.49.60 or newer; older daemons show an
+informational row instead). Use `sovyx doctor --json` for
 machine-readable output.
 
 ### Voice not working? Auto-fix it (Linux)
