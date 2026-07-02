@@ -25,7 +25,7 @@ network.
 ## Design Principles
 
 The architectural decisions below derive from the **North Star** in
-[`CLAUDE.md`](../CLAUDE.md):
+[`CLAUDE.md`](https://github.com/sovyx-ai/sovyx/blob/main/CLAUDE.md):
 
 - **Enterprise-grade — no band-aids AND no over-engineering.** Every layer
   fixes a real failure mode and stops where marginal value < marginal risk.
@@ -40,7 +40,7 @@ The architectural decisions below derive from the **North Star** in
   is the only step allowed to leave the host. When a check errors rather than
   explicitly allowing, it denies.
 - **Anti-patterns catalog is canonical.** Every architectural pattern below
-  has a counterpart in the [`CLAUDE.md`](../CLAUDE.md) **Anti-Patterns**
+  has a counterpart in the [`CLAUDE.md`](https://github.com/sovyx-ai/sovyx/blob/main/CLAUDE.md) **Anti-Patterns**
   section explaining what NOT to do and why.
 
 ## High-Level Data Flow

@@ -32,13 +32,14 @@ The default config + data path is `~/.sovyx/`. Override with
 | [`token`](#sovyx-token) | Show / copy the dashboard authentication token. |
 | [`chat`](#sovyx-chat) | Interactive REPL with the active mind. |
 | [`logs`](#sovyx-logs) | Query / filter the structured log file. |
-| [`brain`](#sovyx-brain) | Brain memory commands (analyze / search / export). |
-| [`mind`](#sovyx-mind) | Mind management (list / create / set-default). |
+| [`brain`](#sovyx-brain) | Brain memory commands (search / stats / analyze scores). |
+| [`mind`](#sovyx-mind) | Mind management (list / status / forget / retention). |
 | [`dashboard`](#sovyx-dashboard) | Dashboard management — show access info; bundle integrity doctor. |
 | [`doctor`](#sovyx-doctor) | Cross-subsystem health checks + auto-fix tools. |
+| [`llm`](#sovyx-llm) | LLM provider health doctor + interactive setup wizard. |
 | [`plugin`](#sovyx-plugin) | Plugin management (list / install / disable). |
-| [`voice`](#sovyx-voice) | Voice-data lifecycle (forget / export). |
-| [`audit`](#sovyx-audit) | Tamper-evident audit log inspection. |
+| [`voice`](#sovyx-voice) | Voice setup + voice-data lifecycle (setup / forget / history / train-wake-word / generate-signing-key). |
+| [`audit`](#sovyx-audit) | Tamper-evident audit log inspection (verify-chain). |
 | [`kb`](#sovyx-kb) | Mixer-profile knowledge base inspector. |
 
 ---
@@ -97,7 +98,7 @@ start, stored at `~/.sovyx/token` with `0o600`).
 
 ```bash
 sovyx token              # print to stdout
-sovyx token --clipboard  # also copy to clipboard (where available)
+sovyx token --copy       # also copy to clipboard (where available); short form -c
 ```
 
 NEVER paste this token into chat logs / screenshots. It grants full
@@ -113,33 +114,37 @@ selected by the current `MindConfig` (see
 
 | Command | Effect |
 |---|---|
-| `/help` | List commands. |
-| `/clear` | Clear the local REPL history (server-side conversation intact). |
-| `/exit` | Quit the REPL. |
-| `/model <name>` | Override the model for the next turn. |
-| `/save` | Persist the conversation to disk under `~/.sovyx/exports/`. |
+| `/help` | List commands (`/?` also works). |
+| `/status` | Daemon health, uptime, today's LLM cost. |
+| `/minds` | List active minds (which one is the default). |
+| `/config` | Show the active mind's config (read-only). |
+| `/new` | Start a fresh conversation (rotates the conversation id). |
+| `/clear` | Clear the screen (and reset the conversation id). |
+| `/exit` | Quit the REPL (`/quit` and Ctrl+D also work). |
 
 ---
 
 ## `sovyx logs`
 
 Query and filter the structured log file. Supports time-range filters,
-JSON-Pointer field selectors, and Bash-friendly piping.
+`key=value` field filters, and Bash-friendly piping.
 
 ```bash
 sovyx logs --since 30m
-sovyx logs --level WARN --since 1h
-sovyx logs --grep "voice.failover"
+sovyx logs --level warning --since 1h
+sovyx logs -f module=brain
 sovyx logs --json | jq 'select(.event | startswith("voice.frame"))'
 ```
 
 | Option | Description |
 |---|---|
-| `--since <duration>` | Tail since the given duration (e.g. `30m`, `2h`, `1d`). |
-| `--level <LEVEL>` | One of DEBUG / INFO / WARN / ERROR. |
-| `--grep <pattern>` | Substring match against the rendered event field. |
+| `--since <duration>`, `-s` | Tail since the given duration (e.g. `30s`, `5m`, `1h`, `2d`). |
+| `--level <level>`, `-l` | Minimum level: `debug` / `info` / `warning` / `error`. |
+| `--filter <key=value>`, `-f` | Filter by structured field (repeatable). |
+| `--limit <N>`, `-n` | Max lines to show (default 50). |
 | `--json` | Emit the raw JSON-per-line stream. |
-| `--follow`, `-f` | Stream new entries as they arrive. |
+| `--follow`, `-F` | Stream new entries as they arrive (`tail -f` mode). |
+| `--file <path>` | Read a specific log file (default `~/.sovyx/logs/sovyx.log`). |
 
 ---
 
@@ -149,9 +154,12 @@ Brain memory inspection. Subcommands:
 
 | Subcommand | Description |
 |---|---|
-| `sovyx brain analyze` | Run the brain analyzer (per-mind concept + relation report). |
-| `sovyx brain search "<query>"` | Hybrid lexical + vector search. |
-| `sovyx brain export` | Export the per-mind brain graph to JSON / GraphML. |
+| `sovyx brain search "<query>" [--mind <id>] [--limit N]` | Search concepts in the brain. |
+| `sovyx brain stats [--mind <id>]` | Show brain statistics (concept / episode / relation counts). |
+| `sovyx brain analyze scores` | Importance + confidence score distribution report. |
+
+All brain subcommands require a running daemon. To bootstrap a new
+mind, use `sovyx init <name>` (there is no `mind create` subcommand).
 
 ---
 
@@ -161,9 +169,11 @@ Mind management:
 
 | Subcommand | Description |
 |---|---|
-| `sovyx mind list` | List configured minds (id + display name + language + provider). |
-| `sovyx mind create <id>` | Bootstrap a new mind directory under the active `data_dir`. |
-| `sovyx mind set-default <id>` | Set the default mind for CLI + bridge channels. |
+| `sovyx mind list` | List active minds. |
+| `sovyx mind status <name>` | Show mind status. |
+| `sovyx mind forget <id> [--dry-run] [--yes]` | Right-to-erasure (GDPR Art. 17 / LGPD Art. 18 VI) — wipes every per-mind data row (brain + conversations + system stats + voice consent ledger); the mind's configuration is preserved. |
+| `sovyx mind retention prune <id> [--dry-run] [--yes]` | Apply the time-based retention policy now (GDPR Art. 5(1)(e) / LGPD Art. 16) — prunes only records older than the configured horizons. |
+| `sovyx mind retention status <id>` | Read-only preview of retention horizons + prune-eligible counts. |
 
 ---
 
@@ -175,7 +185,7 @@ current dashboard URL + token-reveal flag.
 ```bash
 sovyx dashboard                # prints URL + "Token: use --token to reveal"
 sovyx dashboard --token        # also prints the token
-sovyx dashboard --token -t     # short form
+sovyx dashboard -t             # short form
 ```
 
 ### `sovyx dashboard doctor`
@@ -249,12 +259,15 @@ sovyx doctor --json           # machine-readable output
 
 | Subcommand | Description |
 |---|---|
-| `sovyx doctor voice` | Voice subsystem health checks (PortAudio + Linux mixer sanity + APO bypass + capture-integrity probe). |
+| `sovyx doctor voice` | Voice subsystem health checks (PortAudio + Linux mixer sanity + APO bypass + capture-integrity probe). `--full-diag` runs the platform-native forensic diagnostic (Linux bash toolkit; native WASAPI/APO/consent probes on Windows; unsupported on macOS). `--fix` and `--calibrate` remain Linux-only. |
 | `sovyx doctor cascade` | Run the startup self-diagnosis cascade. |
 | `sovyx doctor linux_session_manager_grab` | Detect whether another audio client holds the capture hardware. |
 | `sovyx doctor voice_capture_apo` | Scan Windows capture-APO chain for Voice Clarity (Mission F2-M07). |
+| `sovyx doctor voice_capture_integrity` | Alias of `voice_capture_apo` (platform-neutral name, Mission H2). |
 | `sovyx doctor piper_locale_match` | Check whether a locale has a curated Piper voice (F2-M03↑). |
 | `sovyx doctor platform` | Cross-OS platform-diagnostics report. |
+| `sovyx doctor resources [--json] [--cohort <name>] [--explain <field>] [--watch] [--tracemalloc-snapshot]` | Render the engine resource-cohort snapshot (Mission H4) — live daemon RPC when reachable, in-process registry otherwise. |
+| `sovyx doctor gates [--json]` | Print the Quality Gates registry — STRICT/LENIENT state + sunset target per gate. |
 
 ### Composite surfaces rendered by `sovyx doctor` (no args)
 
@@ -343,38 +356,40 @@ Plugin management:
 
 ## `sovyx voice`
 
-Voice-data lifecycle commands. GDPR / LGPD compliance surface — see
-[`compliance.md`](compliance.md).
+Voice setup + voice-data lifecycle commands. The lifecycle surface is
+GDPR / LGPD compliance — see [`compliance.md`](compliance.md).
 
 | Subcommand | Description |
 |---|---|
-| `sovyx voice forget` | Erase voice-derived data for a mind (audio fragments + transcripts + per-utterance metadata). |
-| `sovyx voice export` | Export per-mind voice data as a portable archive. |
+| `sovyx voice setup [--mind-id <id>] [--input-device <substring>] [--non-interactive]` | Configure the active mind's input device (interactive picker or substring match); persists to `mind.yaml`. |
+| `sovyx voice forget --user-id <id> [--yes]` | Purge every ConsentLedger record for the given user id (GDPR Art. 17 / LGPD Art. 18 VI); a `DELETE` tombstone is appended so the audit trail survives the erasure. `--user-id` is required. |
+| `sovyx voice history --user-id <id>` | List every ConsentLedger record for the user as JSONL (GDPR Art. 15 / LGPD Art. 18 I) — pipeable to `jq`. |
+| `sovyx voice train-wake-word "<word>" [--mind-id <id>] [--language <tag>] [--target-samples N] [--negatives-dir <dir>] …` | Train a custom wake-word ONNX model; hot-reloads into the running daemon on success. |
+| `sovyx voice generate-signing-key [--mind-id <id>] [--output <path>] [--force]` | Generate an Ed25519 signing keypair for calibration profiles. |
 
 ---
 
 ## `sovyx audit`
 
-Tamper-evident audit log inspection. Subcommands:
+Tamper-evident audit log inspection:
 
 | Subcommand | Description |
 |---|---|
-| `sovyx audit show` | Render the audit log with cryptographic chain verification. |
-| `sovyx audit verify` | Run the integrity checker — non-zero exit on tamper. |
-| `sovyx audit export` | Export the audit log as a portable archive. |
+| `sovyx audit verify-chain [--since <ISO date>] [--path <file>] [--audit-dir <dir>]` | Verify the hash chain of every audit log file — exit `0` when every chain is intact, `1` otherwise. |
 
 ---
 
 ## `sovyx kb`
 
 Inspect the mixer-profile knowledge base (the corpus of audio-mixer
-configuration heuristics shipped under `voice/health/_mixer_kb/`):
+configuration heuristics shipped with the voice health subsystem):
 
 | Subcommand | Description |
 |---|---|
-| `sovyx kb list` | List installed KB profiles. |
-| `sovyx kb verify` | Verify the signing chain (Mission KB-signing — `trusted_keys/`). |
-| `sovyx kb show <id>` | Render a profile's match conditions + remediation steps. |
+| `sovyx kb list [--user-dir <dir>] [--shipped-only]` | List every profile with identity + match-scope + provenance (shipped + user pools). |
+| `sovyx kb inspect <profile_id>` | Print a single profile's fields in human-readable form. |
+| `sovyx kb validate <path>` | Validate a candidate profile YAML against the KB schema — non-zero exit on failure. |
+| `sovyx kb fixtures <profile_id\|all>` | Verify HIL fixture files exist for a profile (CI-friendly with `all`). |
 
 ---
 
@@ -411,7 +426,7 @@ All `sovyx` commands follow a single contract:
 
 Aggregate doctor flows return the number of failing subsystem checks
 when invoked without `--fix` (preserving the v0.21.2 contract — see
-[`docs-internal/missions/MISSION-voice-final-skype-grade-2026.md`](../docs-internal/missions/) §Phase 1 for the historical rationale; the file lives in the
+`docs-internal/missions/MISSION-voice-final-skype-grade-2026.md` §Phase 1 for the historical rationale; the file is an internal doc, not shipped — it lives in the
 internal mission archive in the operator's checkout).
 
 ---

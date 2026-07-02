@@ -374,6 +374,13 @@ tuning:
     detector_proc_timeout_s: 1.5         # /proc scan wall-clock cap
     detector_proc_max_scan: 5000         # /proc scan PID count cap
     detector_evidence_max_chars: 2048    # report payload truncation cap
+    # voice-turn recovery deadlines:
+    pipeline_dwell_watchdog_seconds: 120.0  # force-recover a transient pipeline
+                                            # state (wake/recording/transcribing/
+                                            # thinking) stuck past this budget;
+                                            # 0 disables the watchdog
+    tts_synthesis_timeout_seconds: 60.0     # per-synthesis deadline for one
+                                            # Piper/Kokoro inference; 0 disables
     # … see voice-device-test module for the full device-test family
 
   dashboard:                              # Mission C5 §T2.5
@@ -395,6 +402,14 @@ export SOVYX_TUNING__BRAIN__MODEL_SHA256=<sha256>
 
 # Lower device-test frame rate on slow displays.
 export SOVYX_TUNING__VOICE__DEVICE_TEST_FRAME_RATE_HZ=15
+
+# Give a slow local LLM more headroom before the stuck-turn watchdog
+# force-recovers the voice pipeline to IDLE (default 120 s; 0 disables).
+export SOVYX_TUNING__VOICE__PIPELINE_DWELL_WATCHDOG_SECONDS=300
+
+# Tighten the per-synthesis TTS deadline on fast hardware
+# (default 60 s; 0 disables).
+export SOVYX_TUNING__VOICE__TTS_SYNTHESIS_TIMEOUT_SECONDS=30
 
 # Mission C5: tighten the dashboard-bundle reactive rescan debounce
 # under active triage (default 60 s; floor 10 s).

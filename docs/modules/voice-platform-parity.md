@@ -9,7 +9,7 @@ USB audio interfaces, virtual audio drivers) introduces edge cases
 that no matrix can fully enumerate. The "✅ shipped" cells mean the
 code path runs on that platform; production validation under real
 hardware is operator-side per
-[`OPERATOR-VALIDATION-BACKLOG-2026.md`](../../docs-internal/OPERATOR-VALIDATION-BACKLOG-2026.md).
+`docs-internal/OPERATOR-VALIDATION-BACKLOG-2026.md` (internal doc, not shipped).
 
 ---
 
@@ -30,11 +30,11 @@ those that don't reach below that layer.
 | **Multi-language wake variants (T7.11-T7.16)** | ✅ | ✅ | ✅ | `compose_wake_variants_for_locale` — pure Python |
 | **Diacritic + accent variants (T8.16)** | ✅ | ✅ | ✅ | `_wake_word_variants.expand_wake_word_variants` |
 | **VAD** — Silero v5 | ✅ | ✅ | ✅ | `voice/vad_silero.py` (ONNX Runtime) |
-| **STT (local)** — Moonshine v2 | ✅ | ✅ | ✅ | `voice/stt_moonshine.py` via `moonshine-voice` |
+| **STT (local)** — Moonshine v2 | ✅ | ✅ | ✅ | `voice/stt.py` (`MoonshineSTT`) via `moonshine-voice` |
 | **STT (cloud)** — OpenAI Whisper API | ✅ | ✅ | ✅ | `voice/stt_cloud.py` (BYOK) |
 | **TTS — Piper** | ✅ | ✅ | ✅ | `voice/tts_piper.py` |
 | **TTS — Kokoro** | ✅ | ✅ | ✅ | `voice/tts_kokoro.py` (`kokoro-onnx`) |
-| **Wyoming server** | ✅ | ✅ | ✅ | `voice/_wyoming_server.py` (TCP) |
+| **Wyoming server** | ✅ | ✅ | ✅ | `voice/wyoming.py` (TCP) |
 | **VoicePipeline state machine** | ✅ | ✅ | ✅ | `voice/pipeline/_orchestrator.py` |
 | **Barge-in detection** | ✅ | ✅ | ✅ | `voice/pipeline/_barge_in.py` |
 | **AEC (Acoustic Echo Cancellation)** | ✅ | ✅ | ✅ | `voice/_aec_pyaec.py` (`pyaec` extras) |
@@ -134,7 +134,7 @@ single mature API). Hardening targets:
 
 This subsection is the **truth-as-of-2026-05-01**. Hardware-blocked
 items are tracked in
-[`OPERATOR-DEBT-MASTER-2026-05-02.md`](../../docs-internal/OPERATOR-DEBT-MASTER-2026-05-02.md).
+`docs-internal/OPERATOR-DEBT-MASTER-2026-05-02.md` (internal doc, not shipped).
 
 | Platform | Daily-driver pilot | Soak status | Notes |
 |---|---|---|---|

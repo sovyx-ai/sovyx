@@ -147,7 +147,7 @@ Expected count over a 24h soak with mind configured: **0**. Any
 non-zero count is a per-event triage trail (each line carries
 `voice.mind_id_resolved` so the offending caller is identifiable).
 
-### Known events {#known-events}
+### Known events
 
 `sovyx.observability.schema.KNOWN_EVENTS` maps each event name to the
 typed pydantic class. Use it from tests and tooling:

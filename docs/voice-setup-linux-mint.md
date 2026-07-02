@@ -6,19 +6,19 @@ Procedimento completo para uma instalação do zero do Sovyx no Linux Mint 22 co
 
 ## Sumário
 
-1. [Pré-requisitos do sistema](#1-pré-requisitos-do-sistema)
+1. [Pré-requisitos do sistema](#1-pre-requisitos-do-sistema)
 2. [Instalar Sovyx (primeira vez)](#2-instalar-sovyx-primeira-vez)
-3. [Preparar o áudio do sistema](#3-preparar-o-áudio-do-sistema)
+3. [Preparar o áudio do sistema](#3-preparar-o-audio-do-sistema)
 4. [Inicializar a mente](#4-inicializar-a-mente)
 5. [Iniciar o daemon](#5-iniciar-o-daemon)
 6. [Abrir o dashboard](#6-abrir-o-dashboard)
 7. [Completar o onboarding](#7-completar-o-onboarding)
-8. [Decisão sobre palavra de ativação](#8-decisão-sobre-palavra-de-ativação)
+8. [Decisão sobre palavra de ativação](#8-decisao-sobre-palavra-de-ativacao)
 9. [Validar voz end-to-end](#9-validar-voz-end-to-end)
 10. [Checklist final](#10-checklist-final)
 11. [Troubleshooting](#11-troubleshooting)
 12. [Como falar com a IA](#12-como-falar-com-a-ia)
-13. [Referência rápida](#13-referência-rápida)
+13. [Referência rápida](#13-referencia-rapida)
 
 ---
 

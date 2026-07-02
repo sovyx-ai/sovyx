@@ -149,7 +149,7 @@ mode is the Bluetooth HFP/SCO switch — see the HFP guard below.
 ## Mixer sanity (L2.5)
 
 A Linux-only healing layer spec'd in
-[`ADR-voice-mixer-sanity-l2.5-bidirectional.md`](../../docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md).
+`docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md` (internal doc, not shipped).
 Fixes the **bidirectional** ALSA mixer-failure class that makes voice
 capture unusable on some laptops out-of-the-box:
 
@@ -266,7 +266,7 @@ The daemon itself NEVER writes to `/sys` at runtime (invariant
 I7). Operator escape hatch: kernel command line
 `sovyx.audio.no_pm_override` disables the systemd unit globally.
 
-See [`packaging/README.md`](../../packaging/README.md) for
+See [`packaging/README.md`](https://github.com/sovyx-ai/sovyx/blob/main/packaging/README.md) for
 distro-packaging install paths.
 
 ### Opt-in from the cascade caller

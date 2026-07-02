@@ -220,6 +220,52 @@ voice:
     voice: en_US-amy-medium
 ```
 
+## STT language support
+
+Local speech recognition runs Moonshine v2, which only ships models
+for a fixed language set (`MOONSHINE_SUPPORTED_LANGUAGES` in
+`src/sovyx/voice/stt.py`):
+
+| Language | Code | Local STT (Moonshine) |
+|---|---|---|
+| Arabic | `ar` | ✅ |
+| English | `en` | ✅ |
+| Spanish | `es` | ✅ |
+| Japanese | `ja` | ✅ |
+| Korean | `ko` | ✅ |
+| Ukrainian | `uk` | ✅ |
+| Vietnamese | `vi` | ✅ |
+| Chinese | `zh` | ✅ |
+| Everything else (incl. `pt` / `pt-BR`, `de`, `fr`, `it`, …) | — | ❌ coerced to English |
+
+Region subtags are stripped before the lookup (`en-US` → `en`), but
+region stripping does not rescue an absent base language: `pt-BR`
+normalises to `pt`, which is still not a Moonshine model. When a
+mind's configured language is outside the set, the voice factory
+(`voice/factory/_validate.py`) coerces STT to English rather than
+crashing the pipeline — it logs
+`voice.factory.stt_language_unsupported` and records an
+`stt_language_coerced` entry in the composite degraded store, so the
+dashboard shows a truthful "STT language coerced" banner instead of
+silently transcribing the wrong language.
+
+Paths to speech recognition in other languages:
+
+* **Cloud Whisper STT (BYOK)** — `CloudSTT` (`voice/stt_cloud.py`)
+  transcribes via the OpenAI Whisper API, which covers far more
+  languages. It is a stand-alone engine: import it from
+  `sovyx.voice.stt_cloud`, provide your own API key, and pass it to
+  the factory's STT slot explicitly — it is NOT auto-engaged when
+  Moonshine returns low confidence.
+* **Wyoming external STT** — point a Wyoming-protocol STT service of
+  your choice at the pipeline (see the Wyoming protocol section
+  above).
+
+TTS is unaffected by this matrix — Piper and Kokoro voice catalogs
+have their own per-language coverage (see `sovyx doctor
+piper_locale_match`), and wake-word detection is acoustic (ONNX), so
+a Portuguese wake word still fires correctly.
+
 ## Capture-chain integrity terminology (Mission H2 v0.49.6..v0.49.9)
 
 Sovyx's capture-chain bypass coordinator runs on **every** supported

@@ -190,7 +190,7 @@ respectively. Document the dependency in your profile's
 
 ## Reference
 
-- [SN6180 first-party profile](../../src/sovyx/voice/health/_mixer_kb/profiles/conexant_sn6180_vaio_vjfe69.yaml)
-- [KB profile schema (pydantic v2)](../../src/sovyx/voice/health/_mixer_kb/schema.py)
-- [Loader + signature verifier](../../src/sovyx/voice/health/_mixer_kb/loader.py)
-- [Mission MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.12](../../docs-internal/diagnostics/MISSION-voice-mixer-enterprise-refactor-2026-04-25.md)
+- [SN6180 first-party profile](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/health/_mixer_kb/profiles/conexant_sn6180_vaio_vjfe69.yaml)
+- [KB profile schema (pydantic v2)](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/health/_mixer_kb/schema.py)
+- [Loader + signature verifier](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/health/_mixer_kb/loader.py)
+- Mission MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.12 — `docs-internal/diagnostics/MISSION-voice-mixer-enterprise-refactor-2026-04-25.md` (internal doc, not shipped)

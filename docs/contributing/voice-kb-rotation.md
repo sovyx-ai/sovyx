@@ -143,10 +143,10 @@ v2 HSM rotation.
 
 ## Reference
 
-- [Step 7 mission entry](../../docs-internal/diagnostics/MISSION-voice-100pct-autonomous-2026-04-25.md)
-- [Signing infrastructure source](../../src/sovyx/voice/health/_mixer_kb/_signing.py)
-- [Generation utility](../../scripts/dev/generate_kb_signing_key.py)
-- [Profile signing utility](../../scripts/dev/sign_kb_profile.py)
+- Step 7 mission entry — `docs-internal/diagnostics/MISSION-voice-100pct-autonomous-2026-04-25.md` (internal doc, not shipped)
+- [Signing infrastructure source](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/health/_mixer_kb/_signing.py)
+- [Generation utility](https://github.com/sovyx-ai/sovyx/blob/main/scripts/dev/generate_kb_signing_key.py)
+- [Profile signing utility](https://github.com/sovyx-ai/sovyx/blob/main/scripts/dev/sign_kb_profile.py)
 - [Apple Developer ID rotation](https://developer.apple.com/documentation/security)
 - [Mozilla signing service](https://github.com/mozilla-services/autograph)
 - [Sigstore Cosign](https://github.com/sigstore/cosign)

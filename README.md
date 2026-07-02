@@ -257,7 +257,7 @@ flowchart TB
 | `observability/` | medium | structlog + OTel (78 instruments) + ringbuffer + 5 SLOs + 10 health checks |
 | `persistence/` | small | SQLite pool manager + WAL + per-mind isolation |
 | `upgrade/` | small | Doctor + importer + blue-green + backup |
-| `cli/` | small | Typer CLI - 31 commands across 9 sub-apps |
+| `cli/` | small | Typer CLI - root lifecycle commands + 10 sub-apps |
 
 Total: **432 source files**, `mypy --strict` clean, zero `bandit` issues across all severities.
 
@@ -574,6 +574,8 @@ sovyx voice train-wake-word "Lúcia" \
     --variants "Lucia,hey Lucia"    # default: [wake_word, "hey "+wake_word]
 ```
 
+> **Language caveat:** `--language` drives the training-sample synthesis (Kokoro G2P), and the wake-word detector itself is acoustic — a `pt-BR` wake word fires fine. But local STT (Moonshine v2) has **no Portuguese model**: after the wake word, a `pt`/`pt-BR` mind's speech is transcribed as English, with a degraded-store banner explaining the coercion. Supported local STT languages: ar, en, es, ja, ko, uk, vi, zh — see [docs/modules/voice.md §STT language support](docs/modules/voice.md#stt-language-support).
+
 **Defined at:** `cli/commands/voice.py:277`. Exit codes:
 
 | Code | Meaning |
@@ -661,6 +663,8 @@ retention:
   daily_stats_days: 90
   consent_ledger_days: 0     # 0 = unlimited
 ```
+
+> **Note:** `language: pt` affects TTS voice + wake-word variants, but local STT (Moonshine v2) ships no Portuguese model — speech recognition for this mind is coerced to English with a degraded-store banner (supported: ar, en, es, ja, ko, uk, vi, zh; see [docs/modules/voice.md §STT language support](docs/modules/voice.md#stt-language-support)).
 
 ### Per-mind isolation guarantees
 
@@ -865,7 +869,7 @@ tuning:
 
 ## 15. CLI Reference
 
-**31 commands** across **9 sub-apps**. All commands run against the local daemon via JSON-RPC over UDS (Linux/macOS) or TCP loopback (Windows).
+Root lifecycle commands plus **10 sub-apps** (`brain`, `mind`, `logs`, `dashboard`, `doctor`, `plugin`, `audit`, `kb`, `llm`, `voice`). All commands run against the local daemon via JSON-RPC over UDS (Linux/macOS) or TCP loopback (Windows). The tables below are a selection — run `sovyx --help` for the full surface.
 
 ### Lifecycle
 
@@ -915,7 +919,7 @@ tuning:
 | Command | What it does |
 |---------|--------------|
 | `sovyx doctor` | General installation health |
-| `sovyx doctor voice [--device <id>] [--fix] [--yes]` | Voice subsystem deep probe (6 exit codes: 0/1/2/3/4/5) |
+| `sovyx doctor voice [--fix] [--yes] [--full-diag]` | Voice subsystem deep probe (semantic exit codes 0–6) |
 | `sovyx doctor cascade` | Startup self-diagnosis cascade |
 | `sovyx doctor linux_session_manager_grab` | Detect another audio client holding capture hardware |
 | `sovyx doctor platform` | Cross-OS platform-diagnostics report |

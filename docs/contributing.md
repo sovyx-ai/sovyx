@@ -6,7 +6,7 @@ request you agree your contribution is offered under the same license.
 
 This guide covers local setup, the development workflow, commits, the dashboard
 flow, the release pipeline, and points at the anti-patterns catalog in
-[`CLAUDE.md`](../CLAUDE.md) (categorized index by topic; cross-referenced from
+[`CLAUDE.md`](https://github.com/sovyx-ai/sovyx/blob/main/CLAUDE.md) (categorized index by topic; cross-referenced from
 commits and code).
 
 ## Quick start
@@ -203,7 +203,7 @@ that requires a migration is at least `MINOR`.
 
 ## Anti-patterns
 
-Bugs we already paid for live in [`CLAUDE.md`](../CLAUDE.md) under
+Bugs we already paid for live in [`CLAUDE.md`](https://github.com/sovyx-ai/sovyx/blob/main/CLAUDE.md) under
 **Anti-Patterns**, with a category index (Logging & Config, Imports & Test
 Patches, Concurrency & Async, Cross-Platform, Voice Subsystem, Tests,
 Architecture & Design). The catalog is the canonical source — duplicating it

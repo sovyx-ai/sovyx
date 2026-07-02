@@ -2,14 +2,14 @@
 
 ## What it does
 
-`sovyx.cli` is the Typer-based command-line interface. It manages the daemon lifecycle (`start` / `stop` / `status`), exposes brain queries, controls plugins, and provides an interactive REPL (`sovyx chat`) over the existing JSON-RPC Unix socket.
+`sovyx.cli` is the Typer-based command-line interface. It manages the daemon lifecycle (`start` / `stop` / `status`), exposes brain queries, controls plugins, and provides an interactive REPL (`sovyx chat`) over the daemon's JSON-RPC endpoint (Unix domain socket on POSIX; TCP loopback on Windows).
 
 ## Key classes
 
 | Name | Responsibility |
 |---|---|
-| `app` | Typer root with nested sub-apps (brain, mind, plugin, dashboard, logs). |
-| `DaemonClient` | JSON-RPC 2.0 client over Unix socket (`~/.sovyx/sovyx.sock`). |
+| `app` | Typer root with nested sub-apps (brain, mind, logs, dashboard, doctor, plugin, audit, kb, llm, voice). |
+| `DaemonClient` | JSON-RPC 2.0 client over the daemon RPC endpoint (UDS on POSIX, TCP loopback on Windows). |
 | `chat` | Interactive REPL with prompt_toolkit (history, slash commands). |
 
 ## Commands
@@ -24,7 +24,7 @@ Typer; auto-completion is available via
 | Command | What it does |
 |---|---|
 | `sovyx init <name>` | Create `~/.sovyx/<name>/` with `mind.yaml`. Since v0.39.0 the command invokes `sovyx voice setup` inline after mind creation so the operator can configure the input device interactively; pass `--skip-voice-setup` to preserve the pre-v0.39.0 non-interactive flow (useful for CI / scripted installs). |
-| `sovyx start [--foreground]` | Launch the daemon + dashboard (`:7777`). Resolves the active mind via the shared resolver (`--mind-id` flag / config / sentinel-fallback). |
+| `sovyx start [--mind-id <id>]` | Launch the daemon + dashboard (`:7777`). Resolves the active mind via the shared resolver (`--mind-id` flag / auto-detect when exactly one mind exists). Runs in the foreground; use the OS service manager for backgrounded execution (the old `--foreground` flag was removed 2026-05-02). |
 | `sovyx stop` | Stop the daemon. |
 | `sovyx status` | Daemon health summary. |
 | `sovyx token [--copy]` | Print or copy the dashboard bearer token. |
@@ -39,18 +39,26 @@ Typer; auto-completion is available via
 | `sovyx doctor cascade` | Probe the Linux device cascade planner against the operator's audio stack. |
 | `sovyx doctor linux_session_manager_grab` | Verify PipeWire / PulseAudio session-manager grab semantics. |
 | `sovyx doctor voice_capture_apo` | Detect Windows capture-side APOs (Voice Clarity etc.) per anti-pattern #21. |
+| `sovyx doctor voice_capture_integrity` | Platform-neutral alias of `voice_capture_apo` (Mission H2). |
 | `sovyx doctor piper_locale_match` | Flag drift between the operator's spoken language and the auto-selected Piper voice (F2-M03). |
 | `sovyx doctor platform` | Cross-platform parity summary (Linux / Windows / macOS detection + delta to baseline). |
+| `sovyx doctor resources [--json] [--cohort <name>] [--explain <field>] [--watch]` | Engine resource-cohort snapshot (Mission H4) — live daemon RPC when reachable. |
+| `sovyx doctor gates [--json]` | Quality Gates registry: STRICT/LENIENT state + sunset target per gate. |
+
+Note on `--full-diag`: the forensic diagnostic is cross-platform —
+Linux runs the bundled bash toolkit; Windows dispatches to a native
+WASAPI/APO/mic-consent producer (W3.2); macOS is not yet supported.
+`--fix` and `--calibrate` remain Linux-only.
 
 ### `sovyx voice` — voice data lifecycle (sub-app)
 
 | Command | What it does |
 |---|---|
 | `sovyx voice setup [--mind-id <id>] [--input-device <substring>] [--non-interactive]` | Configure the active mind's input device. Renders an interactive picker over the PortAudio device list (or applies `--input-device` substring match). Persists the choice to `mind.yaml` under `voice_input_device_name`. Shipped v0.39.0 as part of MISSION-voice-config-calibrate-enterprise Phase 2. |
-| `sovyx voice forget [--mind-id <id>] [--scope conversations\|episodes\|all]` | Erase voice-derived data per the GDPR / LGPD lifecycle. |
-| `sovyx voice history [--mind-id <id>]` | List voice-data records currently retained. |
-| `sovyx voice train-wake-word [--mind-id <id>] [--unattached] [--word <word>]` | Train a sub-second ONNX wake-word model for the resolved mind. `--unattached` skips mind resolution (used for test hermeticity per anti-pattern #23). |
-| `sovyx voice generate-signing-key [--mind-id <id>] [--out <path>]` | Generate an Ed25519 signing key for the calibration / KB profile signing flow (per anti-pattern #26). |
+| `sovyx voice forget --user-id <id> [--yes]` | Purge every ConsentLedger record for the given user id (GDPR Art. 17 / LGPD Art. 18 VI). A `DELETE` tombstone is appended so the audit trail survives the erasure. |
+| `sovyx voice history --user-id <id>` | List every ConsentLedger record for the user as JSONL (GDPR Art. 15 / LGPD Art. 18 I). |
+| `sovyx voice train-wake-word <wake_word> [--mind-id <id>] [--unattached] [--language <tag>] [--target-samples N] [--negatives-dir <dir>] [--output <path>] [--voices <ids>] [--variants <phrases>]` | Train a sub-second ONNX wake-word model. The wake word is a positional argument; `--unattached` trains globally (no per-mind hot-reload; mutually exclusive with `--mind-id`); `--negatives-dir` is required. |
+| `sovyx voice generate-signing-key [--mind-id <id>] [--output <path>] [--force]` | Generate an Ed25519 signing keypair for the calibration / KB profile signing flow (per anti-pattern #26). |
 
 ### `sovyx brain` — brain memory queries (sub-app)
 
@@ -99,12 +107,20 @@ Used for the voice mixer KB profile signing flow (anti-pattern #26).
 |---|---|
 | `sovyx audit verify-chain [--mind-id <id>]` | Walk the audit chain and verify hashes from genesis to head. Non-zero exit if any entry tampered. |
 
+### `sovyx llm` — LLM provider health + setup (sub-app)
+
+| Command | What it does |
+|---|---|
+| `sovyx llm doctor [--json]` | Live provider discovery scan + per-provider liveness matrix; exit 0 on healthy verdicts, 1 otherwise (Mission C6 §T3.1). |
+| `sovyx llm health` | Alias for `sovyx llm doctor`. |
+| `sovyx llm setup [--provider <name>] [--api-key <key>] [--non-interactive] [--data-dir <path>]` | Interactive wizard for provider onboarding — validates the key against the provider API + persists to `<data_dir>/secrets.env` (`0o600`). |
+
 ### `sovyx logs` + `sovyx dashboard`
 
 | Command | What it does |
 |---|---|
 | `sovyx logs [--level] [--follow]` | Tail / filter daemon logs. |
-| `sovyx dashboard [--open]` | Print or open the dashboard URL. |
+| `sovyx dashboard [--token]` | Print the dashboard URL; `--token` (`-t`) also reveals the auth token. |
 
 ## Interactive REPL
 
@@ -114,17 +130,17 @@ Features:
 - Persistent history at `~/.sovyx/history` (chmod 0600).
 - Word-completer over the slash-command vocabulary.
 - History search (Ctrl+R).
-- Seven slash commands: `/help`, `/exit`, `/quit`, `/new`, `/clear`, `/status`, `/minds`, `/config`.
+- Seven slash commands: `/help`, `/status`, `/minds`, `/config`, `/new`, `/clear`, `/exit` — plus the aliases `/quit` (for `/exit`) and `/?` (for `/help`).
 
 ## RPC protocol
 
-The daemon listens on a Unix socket (`~/.sovyx/sovyx.sock`). `DaemonClient` sends JSON-RPC 2.0 requests and reads responses. Stale socket detection via probe (connect + immediate close).
+The daemon listens on a Unix domain socket (`~/.sovyx/sovyx.sock`) on POSIX platforms; on Windows it binds TCP `127.0.0.1` on an ephemeral port persisted to a `.port` file. `DaemonClient` sends JSON-RPC 2.0 requests and reads responses. Stale socket detection via probe (connect + immediate close).
 
-5 methods currently wired: `status`, `shutdown`, `chat`, `mind.list`, `config.get`. Brain and plugin subcommands fall back to dashboard HTTP endpoints when the RPC method is not registered.
+Methods currently wired: `status` and `shutdown` (registered in `main.py`), plus the `register_cli_handlers` set in `engine/_rpc_handlers.py` — `chat`, `mind.list`, `mind.forget`, `mind.retention.prune`, `config.get`, `wake_word.register_mind`, `wake_word.unregister_mind`, `engine.resources.snapshot`, `engine.resources.tracemalloc_snapshot`.
 
 ## Configuration
 
-No dedicated CLI config — reads `EngineConfig` from `system.yaml` and env vars. Socket path from `EngineConfig.socket.socket_path`.
+No dedicated CLI config — reads `EngineConfig` from `system.yaml` and env vars. The RPC endpoint defaults to `~/.sovyx/sovyx.sock` (`DEFAULT_SOCKET_PATH` in `engine/rpc_server.py`); on Windows the sibling `sovyx.port` file carries the TCP loopback port.
 
 ## Roadmap
 

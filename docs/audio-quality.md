@@ -14,7 +14,7 @@ operators can verify the claims independently.
 ## Resampler quality (44.1 → 16 kHz path)
 
 The capture-side
-[`FrameNormalizer`](../src/sovyx/voice/_frame_normalizer.py)
+[`FrameNormalizer`](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/_frame_normalizer.py)
 resamples PortAudio's negotiated capture rate to the pipeline's
 16 kHz invariant via `scipy.signal.resample_poly` (default
 Kaiser β=5.0 window). The 44.1 → 16 kHz path is the most common
@@ -30,7 +30,7 @@ its measurements are the worst-case data point published below.
 | Chirp spectrum SNR   | +60 dB   | ≥ +40 dB  | 20 dB    |
 
 The CI gate
-([`tests/unit/voice/test_resampler_quality.py`](../tests/unit/voice/test_resampler_quality.py))
+([`tests/unit/voice/test_resampler_quality.py`](https://github.com/sovyx-ai/sovyx/blob/main/tests/unit/voice/test_resampler_quality.py))
 runs on every commit. A scipy version drift that regresses any
 metric below its gate fails CI before reaching production. The
 measured numbers are well above broadcast-grade thresholds —
@@ -139,7 +139,7 @@ voice-quality panel (Phase 4 / T4.37) plots them per session.
 ## SNR ranges per use case (Phase 4 / T4.40)
 
 The pipeline measures per-window signal-to-noise ratio via
-[`SnrEstimator`](../src/sovyx/voice/_snr_estimator.py) and emits
+[`SnrEstimator`](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/_snr_estimator.py) and emits
 the result as `sovyx.voice.audio.snr_db` (histogram) +
 `snr_p50_db` / `snr_p95_db` on every `voice_pipeline_heartbeat`.
 Per-session SNR p50 falls into the following ranges; the Phase 4
@@ -275,7 +275,7 @@ True`:
 
 The Phase 4 / T4.18 detector + `voice_use_os_dsp_when_available`
 flag together implement the trade-off; the call site in
-[`voice/factory/__init__.py`](../src/sovyx/voice/factory/__init__.py)
+[`voice/factory/__init__.py`](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/factory/__init__.py)
 already short-circuits in-process NS construction when both
 conditions are met, so the runtime cost of the wrong choice is
 "slightly different DSP behaviour", not "broken pipeline".
@@ -283,15 +283,15 @@ conditions are met, so the runtime cost of the wrong choice is
 ## Cross-references
 
 * Master mission §Phase 4 promotion gates —
-  [`docs-internal/missions/MISSION-voice-final-skype-grade-2026.md`](https://github.com/sovyx-ai/sovyx)
-  (internal).
+  `docs-internal/missions/MISSION-voice-final-skype-grade-2026.md`
+  (internal doc, not shipped).
 * CI gate source —
-  [`tests/unit/voice/test_resampler_quality.py`](../tests/unit/voice/test_resampler_quality.py).
+  [`tests/unit/voice/test_resampler_quality.py`](https://github.com/sovyx-ai/sovyx/blob/main/tests/unit/voice/test_resampler_quality.py).
 * DSP helpers —
-  [`src/sovyx/voice/_resampler_quality.py`](../src/sovyx/voice/_resampler_quality.py).
+  [`src/sovyx/voice/_resampler_quality.py`](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/_resampler_quality.py).
 * Observability metrics catalogue —
   [`docs/observability.md`](observability.md).
 * SNR estimator implementation —
-  [`src/sovyx/voice/_snr_estimator.py`](../src/sovyx/voice/_snr_estimator.py).
+  [`src/sovyx/voice/_snr_estimator.py`](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/_snr_estimator.py).
 * Noise suppression engine —
-  [`src/sovyx/voice/_noise_suppression.py`](../src/sovyx/voice/_noise_suppression.py).
+  [`src/sovyx/voice/_noise_suppression.py`](https://github.com/sovyx-ai/sovyx/blob/main/src/sovyx/voice/_noise_suppression.py).

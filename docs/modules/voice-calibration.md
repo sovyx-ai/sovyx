@@ -33,7 +33,7 @@ sovyx doctor voice --calibrate --mind-id <id>        # Calibrate a specific mind
 sovyx doctor voice --calibrate --non-interactive     # Skip the interactive speech-prompt windows
 ```
 
-The `--calibrate` flow runs `--full-diag` internally, so it is Linux-only and requires `bash >= 4`. Use `sovyx doctor voice --full-diag` first to audit the forensic verdict, then `--calibrate` once you trust the input.
+The `--calibrate` flow runs the Linux bash diag toolkit internally, so it is Linux-only and requires `bash >= 4`. (`--full-diag` on its own is cross-platform since W3.2: Linux runs the bash toolkit; Windows dispatches to a native WASAPI/APO/mic-consent producer; macOS is not yet supported.) Use `sovyx doctor voice --full-diag` first to audit the forensic verdict, then `--calibrate` once you trust the input.
 
 ## Mind resolution (Phase 1 of MISSION-voice-config-calibrate-enterprise-2026-05-13)
 

@@ -7,7 +7,7 @@ scanner internals, official plugin catalogue) see
 **how to write one**.
 
 > **Upgrading from v0.40.x?** Jump to
-> [Upgrade — v0.41.0 BrainAccess `mind_id` keyword-only](#upgrade--v0410-brainaccess-mind_id-keyword-only)
+> [Upgrade — v0.41.0 BrainAccess `mind_id` keyword-only](#upgrade-v0410-brainaccess-mind_id-keyword-only)
 > first — that release tightened the BrainAccess constructor to
 > require an explicit `mind_id` keyword argument. Any custom
 > `PluginContext` factory or test fixture that builds a
@@ -206,7 +206,7 @@ access = BrainAccess(
 configured a non-default mind, plugin writes still landed in
 `default` — a privacy and correctness violation. v0.41.0 closes this
 by making the binding explicit. See
-[CLAUDE.md anti-pattern #35](../CLAUDE.md#anti-patterns) for the
+[CLAUDE.md anti-pattern #35](https://github.com/sovyx-ai/sovyx/blob/main/CLAUDE.md#anti-patterns-bugs-that-already-happened) for the
 broader sentinel-default class this addresses.
 
 **Who is affected:**
@@ -341,7 +341,7 @@ async def test_setup_subscribes(context: PluginContext) -> None:
 ```
 
 Patterns to follow (also documented in
-[CLAUDE.md §Testing Patterns](../CLAUDE.md#testing-patterns)):
+[CLAUDE.md §Testing Patterns](https://github.com/sovyx-ai/sovyx/blob/main/CLAUDE.md#testing-patterns)):
 
 - Patch `SandboxedHttpClient` at the **`.request`** call site,
   not `.get` — the client funnels every verb through `.request`

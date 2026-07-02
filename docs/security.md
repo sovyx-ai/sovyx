@@ -184,7 +184,7 @@ isolation contract is enforced both at storage layer (database-per-mind) and at
 runtime — every request that touches per-mind state MUST resolve the active
 `mind_id` at the route boundary, never accept a sentinel default.
 
-Anti-pattern #35 in [`CLAUDE.md`](../CLAUDE.md) documents the failure mode: a
+Anti-pattern #35 in [`CLAUDE.md`](https://github.com/sovyx-ai/sovyx/blob/main/CLAUDE.md) documents the failure mode: a
 low-level config field with `mind_id: str = "default"` propagating as a
 sentinel through layers that fail to overwrite it, causing voice / brain /
 calibration state to land under a phantom `"default"` mind even when the
