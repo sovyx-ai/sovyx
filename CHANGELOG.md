@@ -6,7 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.49.61] — 2026-07-03
+
+**Supersedes v0.49.60, whose publish FAILED on both Linux hard gates
+(the tag never reached PyPI — same supersede pattern as v0.49.55 →
+v0.49.56). All v0.49.60 content ships here, plus the 2026-07-03
+documentation-hygiene sweep.**
+
+### Fixed
+
+- **v0.49.60 publish blocker:** two WINDOWS-15 PROPVARIANT-lifetime
+  tests exercised `_read_pnp_id_from_property_store`, whose lazy
+  `from comtypes import GUID` fails on Linux — the function returned
+  early and the tests were green on Windows only. The test file now
+  installs a cross-platform GUID seam (`sys.modules` fake, the
+  documented lazy-import seam), so the PROPVARIANT ladder — and the
+  previously vacuous branch tests around it — are genuinely exercised
+  on every CI platform. An unjustified non-win32 skip on the LPWSTR
+  round-trip test was removed (semantics verified on real Linux).
+- **Docs-site root 404:** a clean `mkdocs build` produced no
+  `site/index.html` (nav had no `index.md`); smoke tests asserted
+  fossil pages in the gitignored local `site/`. Real landing page
+  added; smoke tests now build fresh before asserting.
+
+### Changed
+
+- `moonshine-voice` lock moved 0.0.56 → 0.0.65 (forced: upstream
+  deleted 0.0.56 from PyPI, so the old lock no longer installs; the
+  `voice` extra constraint stays `>=0.0.50`). Affects fresh
+  `sovyx[voice]` installs only — validate live STT alongside the
+  V-AEA batch.
+- Repo-wide documentation accuracy sweep (~346 verified fixes):
+  public docs re-synced to code (API routes, config fields, metric
+  names, CLI flags), CHANGELOG backfilled v0.49.38..v0.49.60, README
+  counts re-derived, docstring/comment truth pass across `src/`
+  (only behavior changes: dead `needs_cloud_fallback` removed from
+  `sovyx.voice.__all__`; dead CI coverage-upload step deleted;
+  `install.sh` no longer pins `sovyx==0.1.0`).
+
 ## [0.49.60] — 2026-07-02
+
+**PUBLISH FAILED — this tag never reached PyPI (two Windows-only-green
+tests failed the Linux hard gates; root cause fixed in v0.49.61,
+which carries all of this content).**
 
 **Audio-engine cross-platform audit + full remediation (Mission AEA — 138 findings). New anti-patterns #72-74.**
 

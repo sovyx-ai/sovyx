@@ -1723,7 +1723,7 @@ wheels = [
 
 [[package]]
 name = "moonshine-voice"
-version = "0.0.56"
+version = "0.0.65"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -1734,11 +1734,11 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/05/f4978be2d9f9a7faa9da4b3e1ad62416660c4c0053c2c857e7db8fd8456e/moonshine_voice-0.0.56-py3-none-macosx_15_0_universal2.whl", hash = "sha256:9d14fe9eef5bc54f325b90cad15d9bd0e710a2254e83002fe9439e67af638aaa", size = 80145730, upload-time = "2026-04-14T01:11:52.238Z" },
-    { url = "https://files.pythonhosted.org/packages/82/e9/fe60bc36d88cc907aac43def4716dc4ebc12a51466c399f0b542d13c9712/moonshine_voice-0.0.56-py3-none-manylinux_2_31_aarch64.manylinux_2_34_aarch64.whl", hash = "sha256:16230e1af4f898d5229771be1517158118d1b5b5c27f568ebd2c079d4ebc912b", size = 59621283, upload-time = "2026-04-14T03:40:10.012Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/3e/4620b8e387ed26b642aa545f971945e804b2047784106a6d2e17e6ce5263/moonshine_voice-0.0.56-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:1fb7fea9058f8ca5f3809810d95b8ac6df463fe90f56532c4dabce3ef94a1ae8", size = 87244635, upload-time = "2026-04-14T01:22:11.175Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/88/140c3a4b6f27bcdcd223814acc87640cb0990edffbe0e198449fbce41ac8/moonshine_voice-0.0.56-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:4e208542d0e50432f7720ce39ecb19636b12b6bce75e2e9bcf33109c66377626", size = 88403272, upload-time = "2026-04-14T01:18:40.685Z" },
-    { url = "https://files.pythonhosted.org/packages/92/cd/e0126734a87f310d0a3f4b225b3e9eadbb96f95abe0da5c1b967c7bc5155/moonshine_voice-0.0.56-py3-none-win_amd64.whl", hash = "sha256:8b3f799a0f73637da68c4a410fa0d74a07533a0b5f78ccf7fada2d6ec4a42251", size = 56464222, upload-time = "2026-04-14T04:24:18.664Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/49/93c28833572682c434c60cea8bcf338b74b8f6b2dbe816186c6bb5242c16/moonshine_voice-0.0.65-py3-none-macosx_15_0_arm64.whl", hash = "sha256:3e92fa8497bf4fc40b6241e4dc29fd4ac77832f7f3d8addc4fd467a6bf1cf605", size = 85190272, upload-time = "2026-07-03T00:45:09.383Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/b8/a16d8649ff2f16f3c87b084978968fc63bca95d9242b5fcfb51d37f6aea5/moonshine_voice-0.0.65-py3-none-manylinux_2_31_aarch64.manylinux_2_39_aarch64.whl", hash = "sha256:e7e9542b49bfc39850ccee15351f788be7fa0c7086385cf22f0c62f90f07ef06", size = 62720537, upload-time = "2026-07-03T03:20:43.864Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/b7/fe75106ffb8001ef43da1c4b75968c82f0322d9880dd3efccca1f315b556/moonshine_voice-0.0.65-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:e6200c95950f6385a346b220ad046e586221d9a38db30152fa0cd12a809e9e86", size = 92276836, upload-time = "2026-07-03T01:20:53.317Z" },
+    { url = "https://files.pythonhosted.org/packages/de/b9/f45749837ecb75a7de2ffed261c0ec12333f66e2e7696b15655717a0e28f/moonshine_voice-0.0.65-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:946e0a056dd3a13ee8cc28dec84c0f01676743a841bae5e6c52a87483b10241b", size = 93447222, upload-time = "2026-07-03T01:17:37.908Z" },
+    { url = "https://files.pythonhosted.org/packages/54/8f/3740020aba0316e2d7bc60ce30e4f80f14210d1287ee6038428aa454fe6d/moonshine_voice-0.0.65-py3-none-win_amd64.whl", hash = "sha256:657e16825ca8f4298fea2a9d9a28bb685d9cf6ad247e104656ed5b02b9ff886b", size = 59566026, upload-time = "2026-07-03T04:16:08.929Z" },
 ]
 
 [[package]]
@@ -3613,7 +3613,7 @@ wheels = [
 
 [[package]]
 name = "sovyx"
-version = "0.49.60"
+version = "0.49.61"
 source = { editable = "." }
 dependencies = [
     { name = "aiogram" },
