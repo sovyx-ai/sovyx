@@ -29,7 +29,7 @@ We aim to acknowledge reports within **72 hours** and to ship a fix within **30 
 We follow **coordinated disclosure**:
 
 - We work with the reporter to understand, reproduce, and fix the issue.
-- A fix lands on `main` and a patched version is published to PyPI + Docker Hub.
+- A fix lands on `main` and a patched version is published to PyPI + GHCR (`ghcr.io/sovyx-ai/sovyx`).
 - A CVE is requested where applicable.
 - After the patched version is public and users have had at least 14 days to upgrade, a security advisory is published on the GitHub Security tab with credit to the reporter (unless anonymity is requested).
 
@@ -74,7 +74,7 @@ Plugin sandbox v2 (seccomp-BPF, namespace isolation, macOS Seatbelt) is on the r
 The following properties are enforced by CI on every commit:
 
 - `bandit` scan of `src/sovyx/` with zero HIGH findings.
-- `mypy --strict` clean on every file under `src/` (222 files).
+- `mypy --strict` clean on every file under `src/` (589 files).
 - Token endpoints use timing-safe comparison.
 - Dashboard responses carry `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy` headers.
 - WebSocket URLs derive their scheme from the page (`https:` → `wss:`), not a hardcoded `ws://`.

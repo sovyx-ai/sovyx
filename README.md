@@ -16,7 +16,7 @@
   <a href="https://pypi.org/project/sovyx/"><img alt="PyPI" src="https://img.shields.io/pypi/v/sovyx.svg"></a>
   <a href="https://pypi.org/project/sovyx/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/sovyx.svg"></a>
   <a href="https://github.com/sovyx-ai/sovyx/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-14%2C500%2B-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-19%2C000%2B-brightgreen">
   <img alt="Type-checked" src="https://img.shields.io/badge/mypy-strict-blue">
   <img alt="Security" src="https://img.shields.io/badge/bandit-clean-success">
 </p>
@@ -152,7 +152,7 @@ Now both `"Sovyx"` and `"Lúcia"` work concurrently. The `WakeWordRouter` runs b
 ### Python + CI
 
 - `requires-python = ">=3.11"` (`pyproject.toml:11`)
-- CI matrix: Linux `{3.11, 3.12}`, Windows `3.12`, macOS `3.12` (asymmetric per `.github/workflows/ci.yml:92-104`)
+- CI matrix: Linux `{3.11, 3.12}`, Windows `3.12`, macOS `3.12` (asymmetric per `.github/workflows/ci.yml:121-135`)
 - Trove classifiers: `Python :: 3.11`, `Python :: 3.12` only
 
 ### Recommended install paths
@@ -175,7 +175,7 @@ uv tool install sovyx --with "sovyx[voice]"
 pipx install "sovyx[voice]"
 
 # Docker (CORE ONLY - the official image does NOT bundle voice extras)
-docker pull sovyxai/sovyx:latest
+docker pull ghcr.io/sovyx-ai/sovyx:latest
 # Operators wanting voice must extend the image.
 ```
 
@@ -228,7 +228,7 @@ flowchart TB
         RET[RetentionScheduler default-OFF]
     end
     EB(((Event Bus)))
-    DASH[FastAPI Dashboard<br/>91 routes / 30 routers]
+    DASH[FastAPI Dashboard<br/>131 routes / 33 routers]
     TG & SG & WEB & CLI --> BR
     VX & WY --> VCB
     BR & VCB --> GATE --> CogLoop
@@ -252,14 +252,14 @@ flowchart TB
 | `llm/` | small | Router + 10 providers + circuit breaker + cost cap |
 | `bridge/` | small | BridgeManager + Telegram/Signal/Wyoming/dashboard chat adapters |
 | `plugins/` | medium | SDK + 5-layer sandbox + 7 official plugins + hot-reload |
-| `dashboard/` | medium | FastAPI server + 30 router modules + 91 endpoints |
+| `dashboard/` | medium | FastAPI server + 33 router modules + 131 endpoints |
 | `mind/` | small | MindConfig + per-mind retention + per-mind forget |
-| `observability/` | medium | structlog + OTel (78 instruments) + ringbuffer + 5 SLOs + 10 health checks |
+| `observability/` | medium | structlog + OTel (96 instruments) + ringbuffer + 5 SLOs + 10 health checks |
 | `persistence/` | small | SQLite pool manager + WAL + per-mind isolation |
 | `upgrade/` | small | Doctor + importer + blue-green + backup |
 | `cli/` | small | Typer CLI - root lifecycle commands + 10 sub-apps |
 
-Total: **432 source files**, `mypy --strict` clean, zero `bandit` issues across all severities.
+Total: **589 source files**, `mypy --strict` clean, zero `bandit` issues across all severities.
 
 ---
 
@@ -309,7 +309,7 @@ Pattern catalogs split per language (`safety/patterns_en.py`, `patterns_pt.py`, 
 
 ### Per-phase observability
 
-Only `sovyx.cognitive.latency` (full-loop) and `sovyx.safety.filter.latency` (direction-tagged) histograms exist (`observability/metrics.py:346, 356`). Per-phase Perceive/Think/Act/Reflect are **untimed at HEAD** despite having tracing spans. Operator-tunable budgets live in `EngineConfig.tuning`.
+Three latency histograms cover the loop: `sovyx.cognitive.latency` (full-loop), `sovyx.cognitive.phase_latency{phase}` (per-phase, 5 closed-set values), and `sovyx.safety.filter.latency` (direction-tagged) — all created in `observability/metrics.py`. Per-phase tracing spans co-exist with the histograms. Operator-tunable budgets live in `EngineConfig.tuning`.
 
 ---
 
@@ -497,7 +497,7 @@ IDLE → WAKE_DETECTED → RECORDING → TRANSCRIBING → THINKING → SPEAKING 
 
 ### Voice docs
 
-7 voice-specific public docs at `docs/modules/voice*.md`: architecture overview, capture-health, device-test, OTel semconv, platform-parity, privacy, troubleshooting-windows.
+11 voice-specific public docs at `docs/modules/voice*.md`: architecture overview, calibration, capture-health, device-test, OTel semconv, platform-parity, privacy, setup, and per-OS troubleshooting (Linux / macOS / Windows).
 
 ---
 
@@ -675,7 +675,7 @@ retention:
 | Property-test contract | `forall (mind_a, mind_b, action) ⇒ no leak` | `tests/property/test_cross_mind_isolation_t820.py` |
 | Cooldown | Independent per mind (router holds N detector instances) | `voice/_wake_word_router.py:121` |
 | False-fire counter | `voice.wake_word.false_fire_count{mind_id}` | `voice/health/_metrics.py:682` |
-| Dispatch latency | ≤ 50 ms target (T8.10) | logged at `_orchestrator.py:1454-1463` (note: histogram is documented but not implemented as OTel; only structured log) |
+| Dispatch latency | ≤ 50 ms target (T8.10) | structured log at `_orchestrator.py:1454-1463` + `sovyx.voice.wake_word.router.dispatch_latency` histogram (`observability/metrics.py`) |
 
 ### Diacritic + accent variant matching (T8.16)
 
@@ -736,16 +736,16 @@ Inbound message
 
 ## 13. Plugins
 
-7 official plugins ship in `src/sovyx/plugins/official/`:
+7 official plugins live in `src/sovyx/plugins/official/` — 5 are registered under the `sovyx.plugins` entry-point group and load automatically; `calculator` and `weather` are **example plugins** (SDK references) with NO entry-point registration (`pyproject.toml [project.entry-points."sovyx.plugins"]` registers `financial-math`, `web-intelligence`, `knowledge`, `home-assistant`, `caldav` only), so a stock install does not load them:
 
 | Plugin | Tools | Permissions | What it does |
 |--------|-------|-------------|--------------|
-| `calculator` | 1 | none | Wrapper around financial-math arithmetic |
+| `calculator` (example — not entry-point registered) | 1 | none | Wrapper around financial-math arithmetic |
 | `caldav` | 6 | NETWORK_INTERNET | Read calendars from Nextcloud / iCloud / Fastmail / Radicale |
 | `financial_math` | 8 | none (sandbox-via-isolation) | Loan / NPV / IRR / amortization computations |
 | `home_assistant` | 8 | NETWORK_LOCAL | 4 HA domains: light, switch, cover, climate |
 | `knowledge` | 5 | BRAIN_READ + BRAIN_WRITE | Operator-editable knowledge base |
-| `weather` | 3 | none (sandbox-via-allowlist) | Open-Meteo current conditions + forecast |
+| `weather` (example — not entry-point registered) | 3 | none (sandbox-via-allowlist) | Open-Meteo current conditions + forecast |
 | `web_intelligence` | 6 | NETWORK_INTERNET + BRAIN_READ + BRAIN_WRITE | Search + fetch + extract |
 
 ### 5-layer sandbox (verified at `src/sovyx/plugins/`)
@@ -798,7 +798,7 @@ sovyx plugin create my-plugin      # scaffold from template
 
 Hot reload via `watchdog` (1 s debounce, max 3 attempts) at `plugins/hot_reload.py`. 4 lifecycle event emitters at `_event_emitter.py`: `tool_executed`, `loaded`, `unloaded`, `auto_disabled`.
 
-Discovery sources: builtins + `entry_points(group="sovyx.plugins")` + `~/.sovyx/plugins/` (`plugins/manager.py:124-128, 359-373`).
+Discovery sources: programmatic registration (`register_class`) + `entry_points(group="sovyx.plugins")` + `~/.sovyx/plugins/` (`plugins/manager.py:275-277, 478-503`).
 
 ---
 
@@ -1005,7 +1005,7 @@ Full schema in [`docs/configuration.md`](docs/configuration.md).
 
 ## 17. Dashboard Tour
 
-The dashboard is a React 19 + TypeScript + Zustand SPA served by the same FastAPI daemon. **30 router modules** expose **91 routes** (89 HTTP + 2 WebSocket).
+The dashboard is a React 19 + TypeScript + Zustand SPA served by the same FastAPI daemon. **33 router modules** expose **131 routes** (126 HTTP + 5 WebSocket).
 
 ### Pages and what they do
 
@@ -1016,7 +1016,7 @@ The dashboard is a React 19 + TypeScript + Zustand SPA served by the same FastAP
 | **Brain** | `/api/brain/concepts`, `/api/brain/episodes`, `/api/brain/relations` | Force-graph-2d visualization |
 | **Conversations** | `/api/conversations`, `/api/conversation_import` | History + ChatGPT/Claude import |
 | **Plugins** | `/api/plugins/*` | List, install, enable/disable, info |
-| **Voice** | `/api/voice/*` (19 endpoints in `voice.py`) | Status, models, capture diagnostics, frame history, restart history, bypass tier status, quality snapshot |
+| **Voice** | `/api/voice/*` (20 endpoints in `voice.py`) | Status, models, capture diagnostics, frame history, restart history, bypass tier status, quality snapshot |
 | **Voice Health** | `/api/voice/health/*` (`voice_health.py`) | Cascade diagnostics, combo store inspection, KB profile lookup |
 | **Voice Wizard** | `/api/voice/wizard/*` (`voice_wizard.py`) | First-run device setup (4 endpoints) |
 | **Voice Platform Diagnostics** | `/api/voice/platform-diagnostics` | Cross-OS platform feature matrix |
@@ -1032,7 +1032,7 @@ The dashboard is a React 19 + TypeScript + Zustand SPA served by the same FastAP
 
 3 patterns coexist:
 
-1. **Router-level dependency** - `dependencies=[Depends(verify_token)]` at `APIRouter(...)` (24 of 30 routers). Default.
+1. **Router-level dependency** - `dependencies=[Depends(verify_token)]` at `APIRouter(...)` (most routers). Default.
 2. **Per-endpoint inline** - `status.py` (5 endpoints), `observability.py` (1), `voice_test.py` (3 HTTP).
 3. **Query-param token + `secrets.compare_digest`** - both WebSocket endpoints (`/ws` and `/api/voice/test/input`). Browsers can't set `Authorization` on WS upgrades.
 
@@ -1040,7 +1040,7 @@ The dashboard is a React 19 + TypeScript + Zustand SPA served by the same FastAP
 
 ### Frontend types
 
-`dashboard/src/types/api.ts` (compile-time TypeScript) + `dashboard/src/types/schemas.ts` (1372 LOC, 130+ Zod schemas for runtime validation). Pass `{ schema }` to `api.get/post/put/patch/delete` to validate the response (safeParse - logs mismatch, returns payload).
+`dashboard/src/types/api.ts` (compile-time TypeScript) + `dashboard/src/types/schemas.ts` (Zod schemas for runtime validation). Pass `{ schema }` to `api.get/post/put/patch/delete` to validate the response (safeParse - logs mismatch, returns payload).
 
 ---
 
@@ -1063,7 +1063,7 @@ Async logging via `AsyncQueueHandler` + `BackgroundLogWriter` (`observability/as
 
 ### Metrics (OpenTelemetry)
 
-**78 instruments** registered on `MetricsRegistry` at `observability/metrics.py:289-1057`. Distribution:
+**96 instruments** (67 counters + 29 histograms) registered on `MetricsRegistry` at `observability/metrics.py`. Distribution:
 
 | Domain | Count | Examples |
 |--------|-------|----------|
@@ -1109,14 +1109,14 @@ Operator queries via `sovyx doctor` or `GET /api/observability/health`.
 | Gate | Posture |
 |------|---------|
 | `ruff check` + `ruff format --check` | Clean across 994+ files |
-| `mypy --strict` | 0 issues across 432 source files |
+| `mypy --strict` | 0 issues across 589 source files |
 | `bandit -r src/sovyx/` | 0 issues across all severities |
-| Backend tests | 13 690+ pytest cases (unit, integration, dashboard, plugin, property/Hypothesis, security, stress) |
-| Frontend tests | 1 009+ vitest cases + Zod schema runtime validation |
+| Backend tests | 17 450+ pytest cases (unit, integration, dashboard, plugin, property/Hypothesis, security, stress) |
+| Frontend tests | 1 560+ vitest cases + Zod schema runtime validation |
 | TypeScript compile | `tsc -b` clean |
 | CI matrix | Linux `{3.11, 3.12}`, Windows + macOS `3.12` only |
 
-### 34 numbered anti-patterns
+### 60+ numbered anti-patterns (numbered through #74)
 
 Each carries the bug history that produced it. Highlights:
 
@@ -1215,10 +1215,10 @@ Documented in §2 trust model + §17 dashboard auth.
 
 ### Current state
 
-- **Phase 1-7** ✅ shipped (single-mind GA path)
-- **Phase 8** ✅ 21/22 - only the v0.31.0 release tag (T8.22) remains
+- **Single-mind GA** ✅ shipped at v0.30.0 (Phases 1-7)
+- **Multi-mind (Phase 8)** ✅ shipped through the v0.31.0-rc line (v0.31.0 itself was never cut as a plain tag; the rc.16 feature set carried forward into subsequent releases)
 - **Voice Windows Paranoid Mission** ✅ Phase 1+2 shipped except T27 (Tier 1 RAW deferred per ADR pending operator decision)
-- **Runtime Listener Mission** ✅ Phase 1a + 1b shipped
+- **Current release line: v0.49.x** — runtime-truth and observability hardening: composite degraded-mode surfacing, resource-cohort hygiene, dashboard/CLI truthfulness audits, voice turn-integrity repair, and the cross-platform audio-engine audit
 
 ### What I (Claude) can ship next vs what depends on operator decisions
 
@@ -1257,14 +1257,14 @@ uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run mypy src/                      # strict
 uv run bandit -r src/sovyx/ --configfile pyproject.toml
-uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~13,690 tests
+uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~17,450 tests
 
 cd dashboard
 npx tsc -b tsconfig.app.json          # zero errors
-npx vitest run                        # ~1,009 tests
+npx vitest run                        # ~1,560 tests
 ```
 
-Read [CLAUDE.md](CLAUDE.md) before your first PR - it covers stack, conventions, the 34 numbered anti-patterns, and the quality gates CI enforces.
+Read [CLAUDE.md](CLAUDE.md) before your first PR - it covers stack, conventions, the numbered anti-pattern catalog (60+ entries), and the quality gates CI enforces.
 
 Per-area contribution guides:
 
@@ -1309,7 +1309,7 @@ Details at [sovyx.ai](https://sovyx.ai).
 - [Voice KB key rotation](docs/contributing/voice-kb-rotation.md)
 - [Mixer band-aid removal migration](docs/migration/voice-mixer-band-aid-removal.md)
 
-**Module-level docs** at [`docs/modules/`](docs/modules/) - one per top-level package: `brain`, `bridge`, `cognitive`, `context`, `dashboard`, `engine`, `licensing`, `llm`, `mind`, `observability`, `persistence`, `plugins`, `upgrade`, `voice` (+ 6 voice-specific deep-dives: `voice-capture-health`, `voice-device-test`, `voice-otel-semconv`, `voice-platform-parity`, `voice-privacy`, `voice-troubleshooting-windows`).
+**Module-level docs** at [`docs/modules/`](docs/modules/) - one per top-level package: `benchmarks`, `brain`, `bridge`, `cli`, `cognitive`, `context`, `dashboard`, `engine`, `licensing`, `llm`, `mind`, `observability`, `persistence`, `plugins`, `upgrade`, `voice` (+ 10 voice-specific deep-dives: `voice-calibration`, `voice-capture-health`, `voice-device-test`, `voice-otel-semconv`, `voice-platform-parity`, `voice-privacy`, `voice-setup`, `voice-troubleshooting-linux`, `voice-troubleshooting-macos`, `voice-troubleshooting-windows`; plus `dashboard-distribution-integrity` and `llm-provider-integrity` companion docs).
 
 ---
 

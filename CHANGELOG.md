@@ -6,6 +6,202 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.49.60] — 2026-07-02
+
+**Audio-engine cross-platform audit + full remediation (Mission AEA — 138 findings). New anti-patterns #72-74.**
+
+### Fixed
+
+- **Locale-neutral OS-tool parsing (anti-pattern #72):** `sc.exe` state parsing, the ETW probe, the Group-Policy classifier, and the Kernel-Power-41 watchdog match (now VID:PID-keyed) parsed localized human text and were structurally dead on non-English Windows — the Audiosrv monitor never fired on a pt-BR machine. All now use locale-neutral formats (`/f:XML`, numeric codes, `LC_ALL=C`), with real-tool-captured fixtures (anti-pattern #73).
+- **Linux monitoring truth:** audio-service monitor mocks encoded wrong systemctl semantics; `alsaucm` parsers matched formats the binary never emits; plus an anti-pattern #14 `asyncio.to_thread` sweep (LINUX-1..20).
+- **macOS truth:** per-client TCC mic-consent detection, Bluetooth twin + JSON parser, R40 disclosure (MACOS-1,2,3,5,8,9).
+- **Doctor truth (anti-pattern #74):** registered the `doctor` RPC handler (healthy daemons no longer render a spurious RED RPC row); `doctor voice` surfaces are now RPC-first against the live daemon with a disclosed CLI-local fallback; wired the previously-dead `brain.search` / `brain.stats` / `mind.status` RPC handlers; new registration-parity test pins every `DaemonClient.call` literal.
+- **Voice pipeline turn residuals:** cancel discrimination, real barge-in sustain, stop quiescence (PIPELINE-1..10); quarantine-banner clear-edge + cascade reason wiring; device-test liveness + diag deadline knob.
+
+### Changed
+
+- Dashboard model matrix now labels runtime-available vs roadmap engines (ENGINES-2).
+- `macos-latest` CI leg demoted to advisory (nondeterministic native segfault on hosted runners).
+
+## [0.49.59] — 2026-07-01
+
+**Mission VOICE-TURN-INTEGRITY: the default streaming voice conversation turn was structurally broken in 9 coupled ways while all unit tests were green (every seam was mocked). New anti-patterns #69-71.**
+
+### Fixed
+
+- **Live conversation turn repaired:** explicit speech-session state ownership (no more per-frame SPEAKING↔IDLE flapping from the `output.is_playing` proxy), incremental playback drain, dwell-watchdog recovery for THINKING zombies, streaming safety guards.
+- **Ollama model sentinel:** empty/`"default"` `default_model` now resolves to an installed model — key-less installs previously got a 404 on EVERY turn while `llm doctor` reported FULLY_AVAILABLE.
+- Cognitive bridge now wired BEFORE capture start (pre-bridge transcript drops WARN); per-call TTS synthesis deadline for Piper + Kokoro ONNX inference; streaming STT listener events routed through `call_soon_threadsafe`; Wyoming payload cap + idle timeout + accumulation bound; queue-eviction counting + stale-frame honesty in signal classification.
+- Think phase attributes degraded-turn root cause instead of one generic sentinel; INCONCLUSIVE bypass-exhaustion no longer aborts quarantine+failover.
+
+### Changed
+
+- Public docs re-synced with the real CLI surface (every `mkdocs --strict` warning closed); module docstrings re-synced with the repaired turn semantics.
+
+## [0.49.58] — 2026-06-02
+
+### Fixed
+
+- Docs-only patch: corrected three stale "`--full-diag` is Linux-only" sites in `sovyx doctor voice` help + docstrings — the flag is platform-accurate since W3.2 (Linux bash toolkit / Windows native WASAPI-APO-consent producer / macOS unsupported). `--fix` / `--calibrate` remain genuinely Linux-only.
+
+## [0.49.57] — 2026-06-02
+
+### Added
+
+- Warn-only mechanical guard for the capture ring lock-free invariant (G-P2-9 re-entrancy detector).
+
+### Changed
+
+- Codified the gitignored-state gate-self-test failure class as Debugging Rule #12 (follow-up to the v0.49.55 publish failure).
+
+## [0.49.56] — 2026-06-02
+
+**Gate 19 CI-applicability fix + 22 previously-unreleased commits (voice deep-investigation W0/W1/W2/W3).**
+
+### Fixed
+
+- **Gate 19 (`name_lock_integrity`) now SKIPs when `docs-internal/` is gitignored-absent** — the v0.49.55 publish failed on CI with 76 false violations because the checker resolved gitignored paths that exist only on dev boxes. STRICT-when-applicable, same contract as Gate 11.
+- Self-heal a corrupt cached Kokoro model at load time (SHA re-download); trust operator-generated per-mind calibration signing keys; typed STT/TTS error handling on the Wyoming HA path; unreachable calibration rules marked honestly + disclosed in preview; LLM/think failures surfaced honestly on every channel + the voice bus.
+
+### Added
+
+- Windows-native `doctor voice --full-diag` forensic diagnostic producer (W3.1/W3.2) + per-toolkit diagnostic schema SSoT (W3.0).
+- Opt-in BYOK STT failover engine — recovers sustained STT failure instead of just telemetering it (W2.1).
+- Honest dead-mic-vs-warming capture signal-state classifier + dashboard rendering (W1.1).
+
+### Changed
+
+- Gate 11 (dashboard bundle integrity) flipped to STRICT-when-applicable (W0.1); 8× `FrameNormalizer` construction collapsed into one pinned seam (G-P2-5).
+
+## [0.49.55] — 2026-06-01
+
+**Mission Ω-3 docs architecture + name-lock integrity gate. NOTE: the publish for this tag FAILED on CI (Gate 19 false violations, see 0.49.56) — this version never reached PyPI; superseded by 0.49.56.**
+
+### Added
+
+- Quality Gate 19 `name_lock_integrity` (LENIENT; STRICT v0.52.0): every `docs-internal/*` path link in `src/sovyx` docstrings must resolve.
+
+### Fixed
+
+- Repaired 34 dead `docs-internal` docstring links across `src/sovyx` (redirect-stub convention).
+
+## [0.49.54] — 2026-05-31
+
+**Mission Σ/Σ-B doc+cognition leveling + 6 code-finding fixes + Windows-CI flake hardening.**
+
+### Fixed
+
+- **Plugin sandbox response-size cap enforced on streaming reads** — decoded-byte cap via `aiter_bytes()` catches gzip bombs; redirect bodies closed without download (C-Σ-003/003b, security).
+- **Config precedence:** environment variables now override `system.yaml` (overrides > env > yaml > defaults) as documented (C-Σ-005).
+- Brain emits correct `old_content` in `ConceptContradicted` events (C-Σ-001); cognitive degraded-path channel derived from perception, not nonexistent attributes (C-Σ-002); plugin `teardown()` called when `setup()` raises during load (C-Σ-004).
+
+### Changed
+
+- `windows-latest` CI leg demoted to advisory (`continue-on-error`) after two release-blocking flakes (asyncio teardown, tight wall-clock bound); both flake classes also test-hardened. Codified as Debugging Rule #12.
+- Docs + cognition docstring fidelity pass across public docs, CLAUDE.md, and the cognition packages (Mission Σ Phases 1-4).
+
+## [0.49.53] — 2026-05-25
+
+### Fixed
+
+- Truthful Wyoming status: the dashboard hides the Wyoming surface unless it is actually configured (Mission LIVE-2 P1-10).
+
+## [0.49.52] — 2026-05-25
+
+### Fixed
+
+- Truthful DNSMOS quality mode + live wire-up: the quality snapshot discloses live-vs-static mode instead of presenting static estimates as live (Mission LIVE-2).
+
+## [0.49.51] — 2026-05-25
+
+### Fixed
+
+- Honest Voice status freshness affordance: stale snapshots are disclosed as stale instead of rendering as current (Mission LIVE-2 P1-7/P1-8).
+
+## [0.49.50] — 2026-05-25
+
+### Fixed
+
+- Real pipeline latency + AGC2 state surfaced on the voice dashboard (previously placeholder values) (Mission LIVE-2 Phase 2).
+
+## [0.49.49] — 2026-05-24
+
+### Fixed
+
+- Real subsystem health on the voice dashboard — health now reflects probe results, not mere component presence (Mission LIVE-2 Phase 3).
+
+## [0.49.48] — 2026-05-24
+
+### Fixed
+
+- Truthful STT language support + disclosure: languages without a Moonshine model are coerced to English WITH an operator-visible degraded banner instead of silently (Mission LIVE-2 Phase 4).
+
+## [0.49.47] — 2026-05-24
+
+### Fixed
+
+- Producer-side voice dashboard truth corrections — status fields now reflect runtime state instead of config echoes (Mission LIVE-2 Phase 1).
+
+## [0.49.46] — 2026-05-24
+
+### Fixed
+
+- Resolved dead degraded-banner navigate chip targets — chips now route to pages that exist (Mission LIVE-1 Bug B).
+
+## [0.49.45] — 2026-05-24
+
+### Fixed
+
+- Stale LLM degraded axis now clears when a provider hot-registers — fresh installs no longer show a permanent `no_provider_configured` banner after adding a key (Mission LIVE-1 Bug A).
+
+## [0.49.44] — 2026-05-23
+
+### Added
+
+- Reason-keyed causal join helper + flag-gated `axis.cleared` emission for degraded-store forensics (Mission OX-1.B).
+
+## [0.49.43] — 2026-05-23
+
+### Added
+
+- `engine_session_id` boot surface + startup readiness console (both flags default OFF) (Mission OX-1.A).
+
+## [0.49.42] — 2026-05-22
+
+### Fixed
+
+- Anomaly-detector hardening: operator-tunable error-rate floor + dual-window deque (Mission B.3.P1 — closes B-P1-01/02/13).
+
+## [0.49.41] — 2026-05-22
+
+### Added
+
+- LENIENT sunset assertion harness: regression tests that FAIL at v0.51.0/v0.55.0 if any of the 11 LENIENT dual-emit shims outlives its sunset version (Mission C.10).
+
+### Fixed
+
+- Perf-test stabilization under Windows host contention.
+
+## [0.49.40] — 2026-05-22
+
+### Added
+
+- `QuarantineReason` zod twin + Gate 17 zod-registry pairing; `QuarantineEntryModel.reason` TRANSPORT narrowing (LENIENT) (Mission C.1).
+
+## [0.49.39] — 2026-05-22
+
+**Mission C.6 CLOSED-PARTIAL closure tag.**
+
+### Changed
+
+- Quality Gate 8 (boundary round-trip) STRICT flip, Variant A — the harness now scans ALL dashboard routes, not just `routes/voice.py`.
+
+### Added
+
+- Paired round-trip boundary tests for `KBProfileModel` + `ResourceCohortMetrics`; zod-twin pinning for `VoiceStatusDegraded` + `EngineResourcesResponse`; Hypothesis property tests for both models.
+
+## [0.49.38] — 2026-05-22
+
 **Mission D.1 closure of D-P0-1 from the 2026-05-21 Mission D
 forensic audit at `docs-internal/MISSION-D-FORENSIC-AUDIT-2026-05-21.md` /
 `MISSION-D-FINDINGS-REGISTER-2026-05-21.md` /
@@ -126,8 +322,6 @@ composite-severity computation site for the entire process.
   produces the same outcome (the Hybrid rule changes the composite
   ONLY for single-axis severity-≥-error cases, which the existing
   test fixtures did not encode).
-
-## [0.49.37] — 2026-05-21
 
 ## [0.49.37] — 2026-05-21
 
@@ -294,6 +488,16 @@ parity) proposed for CLAUDE.md.
 - **#55** — Mission closure that references V-* operator-validation
   gates MUST land the corresponding rows in
   `OPERATOR-VALIDATION-BACKLOG-2026.md` in the SAME tag.
+
+## [Pre-v0.49.37 changelog gap]
+
+CHANGELOG entries for v0.47.0..v0.47.2 (Mission C5 dashboard
+distribution integrity) and v0.49.0..v0.49.36 (Missions H2/H3/H4,
+forensic-audit closure Phase 1.A, Missions A.1/A.2 — 39 tags; there
+is no v0.48.x line and v0.49.12 was never cut) are NOT documented
+here. Pre-existing gap noted during the 2026-07-03 documentation
+hygiene pass; release detail lives in the git tag history and
+`docs-internal/` mission reports.
 
 ## [0.46.6] — 2026-05-17
 

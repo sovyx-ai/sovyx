@@ -25,11 +25,13 @@ RUN uv sync --no-dev --frozen
 
 FROM python:3.12-slim AS runtime
 
+# NOTE: no hardcoded org.opencontainers.image.version here — the release
+# workflow (.github/workflows/docker.yml) injects the correct version label
+# from the git tag at build time via `docker/build-push-action` `labels:`.
 LABEL org.opencontainers.image.title="Sovyx" \
       org.opencontainers.image.description="Sovereign Minds Engine" \
       org.opencontainers.image.source="https://github.com/sovyx-ai/sovyx" \
-      org.opencontainers.image.licenses="AGPL-3.0" \
-      org.opencontainers.image.version="0.5.0"
+      org.opencontainers.image.licenses="AGPL-3.0"
 
 # Create non-root user
 RUN groupadd --system sovyx && \

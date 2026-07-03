@@ -29,6 +29,16 @@ npx tsc -b tsconfig.app.json                     # type check
 
 ## Quality gates (CI-enforced)
 
+The repo enforces gates mechanically at push time via a pre-push hook:
+
+```bash
+./scripts/install_hooks.sh    # one-time per clone — installs the pre-push hook
+./scripts/verify_gates.sh     # runs the full gate suite; writes the .git/.last-gates-pass marker
+git push                      # the hook REJECTS the push unless the marker is fresh (30 min) and matches HEAD
+```
+
+Gates 1-7 are the stock toolchain below (ruff check / ruff format / mypy strict / bandit / pytest / tsc / vitest). Gates 8-19 are custom AST/contract discipline checkers in `scripts/dev/check_*.py` (boundary round-trips, failover-ladder iteration, degraded-signal surfacing, dashboard bundle integrity, platform-neutral event names, quarantine-reason discipline, resource hygiene, zod-twin completeness, name-lock integrity, and more) — `verify_gates.sh` runs all of them and prints a per-gate verdict. Some are LENIENT (warn-only) during a staged-adoption window and flip STRICT at a documented version.
+
 The same commands CI runs. If one fails locally, it fails in the pull request.
 
 ```bash
