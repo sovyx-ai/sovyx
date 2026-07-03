@@ -27,7 +27,10 @@ Coverage:
 
 from __future__ import annotations
 
+import ctypes
 import sys
+import types
+from collections.abc import Generator
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -39,6 +42,39 @@ from sovyx.voice.health._endpoint_fingerprint_win import (
     _resolve_endpoint_to_pnp_id,
     resolve_endpoint_to_usb_fingerprint,
 )
+
+
+class _FakeGUID(ctypes.Structure):
+    """Stand-in for ``comtypes.GUID`` usable as a ctypes struct field.
+
+    ``_read_pnp_id_from_property_store`` builds a ``PROPERTYKEY``
+    struct whose ``fmtid`` field is typed ``GUID``, so the fake must
+    be a real :class:`ctypes.Structure` (a MagicMock raises TypeError
+    at class-creation time). It accepts and ignores the GUID string.
+    """
+
+    _fields_ = (("data", ctypes.c_ubyte * 16),)
+
+    def __init__(self, guid_str: str = "") -> None:
+        super().__init__()
+
+
+@pytest.fixture()
+def _comtypes_guid_seam() -> Generator[None, None, None]:
+    """Make ``from comtypes import GUID`` succeed on every platform.
+
+    ``_read_pnp_id_from_property_store`` imports GUID lazily at call
+    time; on non-Windows CI comtypes is absent, so without this seam
+    the function returns None before reaching the PROPVARIANT ladder
+    and every assertion against that ladder is exercised only on
+    Windows (v0.49.60 publish failure: 2 tests green on the Windows
+    dev box, red on both Linux hard legs). sys.modules is the only
+    patch seam for a call-time import (anti-patterns #2/#38).
+    """
+    fake = types.ModuleType("comtypes")
+    fake.GUID = _FakeGUID  # type: ignore[attr-defined]
+    with patch.dict(sys.modules, {"comtypes": fake}):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -347,8 +383,14 @@ class TestResolveEndpointToPnpIdComCallChain:
 # ── PROPVARIANT extraction: _read_pnp_id_from_property_store ────────
 
 
+@pytest.mark.usefixtures("_comtypes_guid_seam")
 class TestReadPnpIdFromPropertyStore:
-    """Branch coverage for the PROPVARIANT inspection path."""
+    """Branch coverage for the PROPVARIANT inspection path.
+
+    Uses the GUID seam so the ladder is genuinely exercised on
+    non-Windows too — without it, every test here passed vacuously on
+    Linux via the comtypes-ImportError early return.
+    """
 
     def test_get_value_raises_returns_none(self) -> None:
         mock_propstore = MagicMock(name="propstore")
@@ -409,16 +451,13 @@ class TestReadPnpIdFromPropertyStore:
         result = _read_pnp_id_from_property_store(mock_propstore)
         assert result is None
 
-    @pytest.mark.skipif(
-        sys.platform != "win32",
-        reason="ctypes.cast(c_void_p → c_wchar_p) round-trip needs Windows ABI",
-    )
     def test_real_lpwstr_round_trip(self) -> None:
         """Pin the happy-path LPWSTR extraction with a real ctypes
-        wide-string buffer. Skipped on non-Windows because the
-        comtypes-marshalled layout is platform-specific; the test's
-        purpose is to verify our cast logic when the propvariant
-        carries a genuine wide-string pointer.
+        wide-string buffer. Runs on every platform: the buffer and the
+        cast both use the native ``wchar_t``, so the round-trip is
+        self-consistent (verified on Linux; the former non-win32 skip
+        cited a "Windows ABI" dependency that does not exist for a
+        same-process ctypes round-trip).
         """
         import ctypes
 
@@ -479,12 +518,16 @@ class TestComtypesWarningLatchAcrossCalls:
 # ── PROPVARIANT lifetime: _clear_propvariant (WINDOWS-15) ────────────
 
 
+@pytest.mark.usefixtures("_comtypes_guid_seam")
 class TestClearPropvariant:
     """WINDOWS-15 regression: the ``IPropertyStore::GetValue``
     PROPVARIANT is caller-owned per the COM contract — the VT_LPWSTR
     payload is a CoTaskMemAlloc'd wide string that leaked on every
     endpoint-fingerprint resolution until ``PropVariantClear`` was
-    wired into a ``finally``."""
+    wired into a ``finally``.
+
+    Uses the GUID seam so the finally-clear contract is enforced on
+    every CI platform, not only where comtypes is installed."""
 
     def test_read_pnp_id_clears_propvariant_in_finally(self) -> None:
         mock_propvariant = MagicMock(name="propvariant")
