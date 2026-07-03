@@ -18,6 +18,10 @@ Detection types
   ``rss_snapshot.*`` entry has grown by more than
   ``anomaly_memory_growth_pct`` over the
   ``anomaly_memory_growth_window_s`` window.
+* ``anomaly.http_error_rate_spike`` — HTTP 5xx responses for a
+  single ``net.path`` within the window exceed an absolute-count
+  threshold (path-keyed, disjoint from the global error-rate
+  bucket; Mission C2 §T2.5).
 
 The detector itself never raises. Per-event-name cooldowns prevent the
 same anomaly from spamming the stream when a real incident is in
@@ -242,7 +246,9 @@ class AnomalyDetector:
         if latency is not None and latency >= 0:
             self._observe_latency(event_name, float(latency), now)
 
-        # 3. Error-rate spike — every WARNING+ entry counts.
+        # 3. Error-rate spike — only error/critical entries count
+        #    (WARNING is excluded; path-keyed 5xx WARNs are handled
+        #    by step 5 instead).
         level = event_dict.get("level")
         if isinstance(level, str) and level.lower() in ("error", "critical"):
             self._observe_error(now)
@@ -257,7 +263,7 @@ class AnomalyDetector:
         #    the producer at ``observability/resources.py:149`` emitted
         #    ``process.rss_bytes`` — the detector had been silently dead
         #    since landing. v0.43.1 forensic anchor §H4: +1.1 GB RSS over
-        #    60 s never fired ``anomaly.memory_growth_spike`` because of
+        #    60 s never fired ``anomaly.memory_growth`` because of
         #    this exact drift.
         rss = event_dict.get("process.rss_bytes")
         if rss is None:
@@ -300,8 +306,9 @@ class AnomalyDetector:
                 self._latency_per_event[event_name] = tracker
         tracker.observe(latency_ms)
 
-        # Compare AFTER recording — the new sample influences the next
-        # tick's baseline, but the spike test is against the prior window.
+        # Compare AFTER recording — the baseline P99 therefore includes
+        # the just-recorded sample; with ``_min_samples``+ entries in the
+        # window a single sample's influence on the P99 is negligible.
         if tracker.count() < self._min_samples:
             return
         baseline_p99 = tracker.percentile(0.99)

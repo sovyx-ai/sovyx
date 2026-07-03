@@ -163,7 +163,6 @@ __all__ = [
     "WakeWordState",
     "split_at_boundaries",
     "synthesize_beep",
-    "needs_cloud_fallback",
     "validate_jarvis_config",
     "STTResult",
     "SovyxWyomingServer",

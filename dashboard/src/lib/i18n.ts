@@ -13,7 +13,7 @@
  *   logs          — log viewer: filters, levels, table
  *   settings      — settings tabs, forms, about
  *   voice         — voice pipeline page (largest namespace)
- *   plugins, chat, about — page-specific
+ *   plugins, chat, about, onboarding — page-specific
  *
  * Persistence: ``localStorage["sovyx_locale"]`` holds the operator's
  * choice (NOT auth-token-grade — locale is not a credential). The

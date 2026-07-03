@@ -35,8 +35,8 @@ Exits non-zero on any violation in STRICT mode (``--strict`` flag or
 ``SOVYX_H4_GATE_STRICT=1``); LENIENT mode (default) prints the report
 but exits 0 — used by ``scripts/verify_gates.sh`` during
 v0.49.14..v0.53.x staged adoption. ``.github/workflows/publish.yml``
-runs ``--strict`` post-build. Phase 3 v0.54.0 promotes the local gate
-to STRICT.
+runs the checker post-build in REPORT-only (LENIENT) mode; Phase 3
+v0.54.0 swaps both sites to ``--strict``.
 
 Mirrors the H3 Gate 14 / H2 Gate 13 / C6 Gate 12 / C5 Gate 11 / C4
 Gate 10 shape exactly — consistent operator UX across the cohort.

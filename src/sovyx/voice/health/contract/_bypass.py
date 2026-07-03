@@ -167,7 +167,7 @@ class PowerEvent:
     """Platform-agnostic view of one OS power-management notification.
 
     ADR §4.4.4. Emitted by :class:`~sovyx.voice.health._power.PowerEventListener`
-    and consumed by :meth:`~sovyx.voice.health.watchdog.VoiceCaptureWatchdog.on_power_event`.
+    and consumed by :meth:`~sovyx.voice.health.watchdog.VoiceCaptureWatchdog._on_power_event`.
     """
 
     kind: PowerEventKind
@@ -179,7 +179,7 @@ class AudioServiceEvent:
 
     ADR §4.4.5. Emitted by
     :class:`~sovyx.voice.health._audio_service.AudioServiceMonitor` and
-    consumed by :meth:`~sovyx.voice.health.watchdog.VoiceCaptureWatchdog.on_audio_service_event`.
+    consumed by :meth:`~sovyx.voice.health.watchdog.VoiceCaptureWatchdog._on_audio_service_event`.
     """
 
     kind: AudioServiceEventKind

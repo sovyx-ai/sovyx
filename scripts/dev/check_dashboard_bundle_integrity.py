@@ -26,7 +26,9 @@ Usage:
     uv run python scripts/dev/check_dashboard_bundle_integrity.py --json
 
 Invoked from ``scripts/verify_gates.sh`` as Gate 11 (LENIENT in Phase
-1.A v0.47.0; STRICT in Phase 3 v0.48.0 per ADR-D12).
+1.A v0.47.0; now STRICT-when-applicable — verify_gates.sh enforces when
+a local bundle build is present and SKIPs when absent; full STRICT runs
+in ``publish.yml`` where the bundle is always built).
 """
 
 from __future__ import annotations

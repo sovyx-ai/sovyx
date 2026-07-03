@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Sovyx — Full quality check pipeline
+# Sovyx — Quick backend-only quality pass (lint + mypy + bandit + pytest).
+# Does NOT run the dashboard gates nor gates 8-19; the pre-push source
+# of truth is scripts/verify_gates.sh.
 # Usage: ./scripts/check.sh
 set -euo pipefail
 

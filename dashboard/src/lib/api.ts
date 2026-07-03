@@ -6,7 +6,7 @@
  *   never in `localStorage`, to reduce XSS token-theft blast radius)
  * - 401 → clear token + show auth modal
  * - AbortSignal support for cancellation + default 30s timeout
- * - Retry with exponential backoff on 429/503/network errors for
+ * - Retry with exponential backoff on 408/429/502/503/504/network errors for
  *   idempotent verbs (GET/PUT/DELETE); POST/PATCH must opt in
  * - Content-Type only on requests with body
  * - Typed ApiError for non-2xx responses
@@ -133,7 +133,8 @@ export function isAbortError(err: unknown): boolean {
  * `timeout`: ms before the request is aborted. Defaults to
  *   `DEFAULT_TIMEOUT_MS` (30s). Pass `0` to disable.
  *
- * `retries`: number of retry attempts on 429/503/network errors. Idempotent
+ * `retries`: number of retry attempts on retryable statuses
+ *   (408/429/502/503/504) and network errors. Idempotent
  *   verbs (GET/PUT/DELETE) default to `DEFAULT_IDEMPOTENT_RETRIES`; POST
  *   and PATCH default to 0 — callers with idempotency-keyed endpoints can
  *   opt in explicitly.
@@ -221,7 +222,7 @@ function forwardAbort(
   return () => external.removeEventListener("abort", onAbort);
 }
 
-/** Honor `Retry-After` (seconds or HTTP-date) when present on 429/503. */
+/** Honor `Retry-After` (seconds or HTTP-date) when present on a retryable status. */
 function parseRetryAfter(header: string | null): number | null {
   if (!header) return null;
   const seconds = Number(header);

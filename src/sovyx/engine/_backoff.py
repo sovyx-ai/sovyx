@@ -1,9 +1,9 @@
 """Exponential backoff with jitter (band-aid #10 replacement).
 
-Foundation for the F1-inventory band-aid #10: capture path
-currently retries with a constant linear delay
+Replaces the F1-inventory band-aid #10: the capture path used to
+retry with a constant linear delay
 (``capture_reconnect_delay_seconds``) after a PortAudio error.
-The mission identifies this as a band-aid because:
+The mission identified this as a band-aid because:
 
 * **Constant delay is wrong under sustained outages** — a
   driver-side glitch that takes 30 s to clear gets hammered
@@ -17,9 +17,11 @@ The mission identifies this as a band-aid because:
   to escalate to operator after a meaningful time budget so the
   user sees "voice unavailable" instead of silent retry churn.
 
-This module ships the foundation; per the staged-adoption
-discipline, the per-site wire-up lands in subsequent commits
-(capture reconnect first, model download retry second, etc.).
+The capture-reconnect wire-up has shipped
+(:mod:`sovyx.voice.capture._loop_mixin` builds a
+``BackoffSchedule`` for reconnect delays); further sites (model
+download retry, plugin reconnection, channel outbound retry)
+adopt this primitive as they are touched.
 
 Why ``engine/`` not ``voice/``: backoff is a cross-cutting
 defensive primitive — voice capture reconnect uses it, but so

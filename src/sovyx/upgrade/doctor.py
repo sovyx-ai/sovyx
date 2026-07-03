@@ -963,13 +963,13 @@ def _check_piper_locale_match(language: str | None = None) -> DiagnosticResult:
         the details dict.
 
     """
-    # TODO: STRICT flip pending operator telemetria
-    # Promote WARN → FAIL when the helper returns None (currently
-    # LENIENT). Also promote the matching
+    # TODO: STRICT flip pending — never executed (originally anchored
+    # to one minor cycle of v0.37.x telemetry; that window elapsed
+    # without the flip). Still LENIENT: promote WARN → FAIL when the
+    # helper returns None, and promote the matching
     # ``voice.factory.piper_locale_unsupported`` logger.warning →
-    # logger.error at src/sovyx/voice/factory/__init__.py. Gate: 1
-    # minor cycle of v0.37.x telemetria confirming the catalog covers
-    # the locales operators actually run. See §3.F flip step +
+    # logger.error at src/sovyx/voice/factory/__init__.py. Flip is
+    # tracked in docs-internal REMEDIATION-QUEUE; see
     # feedback_staged_adoption.
     check_name = "piper_locale_match"
     from sovyx.voice import voice_catalog
@@ -1147,9 +1147,10 @@ def _check_data_dir_writable(data_dir: Path) -> DiagnosticResult:
 class Doctor:
     """Comprehensive diagnostic suite for Sovyx installations.
 
-    Runs 12 checks covering database, configuration, system resources,
-    dependencies, and Windows capture-APO health. Results are aggregated
-    into a :class:`DiagnosticReport`.
+    Runs 13 checks covering database, configuration, system resources,
+    dependencies, Windows capture-APO health, and voice kernel-cache
+    invalidation. Results are aggregated into a
+    :class:`DiagnosticReport`.
 
     Args:
         data_dir: Sovyx data directory (default: ``~/.sovyx``).

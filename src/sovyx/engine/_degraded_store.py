@@ -8,10 +8,12 @@ lazy-singleton pattern: no bootstrap dependency, easy test isolation
 via :func:`reset_default_degraded_store`. Cardinality bounded by
 ``_MAX_ENTRIES`` (32) with deterministic-oldest eviction on overflow.
 
-Populated by:
+Populated by (representative, non-exhaustive — grep
+``get_default_degraded_store`` for the full producer set):
 
-* :mod:`sovyx.engine.bootstrap` on ``no_llm_provider_detected``
-  (Mission C4 §T1.2).
+* :mod:`sovyx.engine._llm_dispatch` for the LLM axis (provider
+  availability / degraded-mode records; Mission C4 §T1.2 lineage,
+  producer moved out of ``bootstrap`` during Mission C6).
 * :mod:`sovyx.voice.factory._validate` on
   ``voice.factory.stt_language_unsupported`` (§T1.3).
 * :mod:`sovyx.voice.health._runtime_failover` on
@@ -20,10 +22,15 @@ Populated by:
 * :mod:`sovyx.dashboard.server` on ``dashboard.distribution.bundle_partial``
   / ``dashboard.distribution.bundle_missing`` AND cleared on
   ``dashboard.distribution.bundle_scanned{verdict=fully_present}``
-  (Mission C5 §T2.1 / §T2.2). The fourth axis (``axis="dashboard"``)
+  (Mission C5 §T2.1 / §T2.2). The ``axis="dashboard"`` axis
   proves the C4 forward-additive contract: a new operator-actionable
   degraded class slots into the same store + endpoint + banner with
   no schema migration.
+* Later missions added further producers the same way, e.g.
+  :mod:`sovyx.observability._resource_cohort_governor`
+  (``axis="engine_resources"``, ADR-D5),
+  :mod:`sovyx.voice.pipeline._heartbeat_mixin`, and
+  :mod:`sovyx.voice.health.capture_integrity`.
 
 Consumed by:
 
@@ -278,7 +285,7 @@ def make_action_chip(
 
 
 def now_monotonic() -> float:
-    """Thin alias — keeps test patching the wall-clock source easy."""
+    """Thin alias — keeps test patching the monotonic-clock source easy."""
     return time.monotonic()
 
 

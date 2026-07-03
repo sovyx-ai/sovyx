@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # verify_gates.sh — pre-bump verification (forcing function)
 #
-# Runs every quality gate that the publish.yml CI workflow runs, AND
-# verifies each one by reading the actual summary line (not the exit
-# code). Exits non-zero if ANY gate's summary contains "failed".
+# Runs the 19 local pre-push quality gates, AND verifies each one by
+# reading the actual summary line (not the exit code). Exits non-zero
+# if ANY gate's summary contains "failed". NOTE: CI additionally runs
+# CI-only checkers (log schemas, metrics cardinality, otel semconv,
+# exception chains, log noise, test PII, constant-time token, perf
+# regression — see CLAUDE.md "Where gates live") that this script does
+# NOT run.
 #
 # Why this script exists:
 #   - The harness's `(exit code N)` summary in completion notifications
@@ -310,9 +314,9 @@ else
 fi
 
 # ── Gate 13: platform-neutral event names (Mission H2 §T1.5) ─────────
-# Mission H2 Phase 1.A LENIENT — warn-only locally; STRICT in publish.yml's
-# post-build verify (Mission H2 §T1.5). Phase 3 v0.51.0 promotes this to
-# STRICT in verify_gates.sh as well, per ADR-D13. Pre-mission baseline:
+# Mission H2 Phase 1.A LENIENT — warn-only locally; publish.yml's
+# post-build verify is also REPORT-only for now (Mission H2 §T1.5).
+# Phase 3 v0.51.0 promotes BOTH sites to STRICT, per ADR-D13. Pre-mission baseline:
 # 31 violations across `_bypass_coordinator_mixin.py` (Phase 1.B target),
 # `factory/_diagnostics.py` + `_apo_detector_linux.py` (Phase 1.D target),
 # `_apo_detector.py` + `health/watchdog.py` (deferred to future cohort).
@@ -335,9 +339,9 @@ else
 fi
 
 # ── Gate 14: quarantine reason discipline (Mission H3 §T1.4) ─────────
-# Mission H3 Phase 1.A LENIENT — warn-only locally; STRICT in publish.yml's
-# post-build verify (Mission H3 §T1.4). Phase 3 v0.53.0 promotes this to
-# STRICT in verify_gates.sh as well, per ADR-D13. Pre-mission baseline:
+# Mission H3 Phase 1.A LENIENT — warn-only locally; publish.yml's
+# post-build verify is also REPORT-only for now (Mission H3 §T1.4).
+# Phase 3 v0.53.0 promotes BOTH sites to STRICT, per ADR-D13. Pre-mission baseline:
 # 0 violations across `_quarantine.py` + `capture_integrity.py` (the only
 # call sites pass `reason=_DEFAULT_QUARANTINE_REASON` which expands to a
 # string literal; Gate 14 LENIENT reports this as a literal_terminal
@@ -362,9 +366,9 @@ else
 fi
 
 # ── Gate 15: resource hygiene discipline (Mission H4 §T1.4) ──────────
-# Mission H4 Phase 1.A LENIENT — warn-only locally; STRICT in publish.yml's
-# post-build verify (Mission H4 §T1.4). Phase 3 v0.54.0 promotes this to
-# STRICT in verify_gates.sh as well, per ADR-D12. Pre-mission baseline:
+# Mission H4 Phase 1.A LENIENT — warn-only locally; publish.yml's
+# post-build verify is also REPORT-only for now (Mission H4 §T1.4).
+# Phase 3 v0.54.0 promotes BOTH sites to STRICT, per ADR-D12. Pre-mission baseline:
 # 1 known consumer-name-drift violation at `observability/anomaly.py:224`
 # (reads `system.rss_bytes` which is a legacy alias of `process.rss_bytes`).
 # Phase 1.B v0.49.15 renames the consumer and the violation count drops

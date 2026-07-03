@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# pre-release.sh — Espelha EXATAMENTE o CI antes de tagar.
+# pre-release.sh — Aproxima o CI antes de tagar (NÃO é um espelho
+# exato: o CI evoluiu e diverge nos dois sentidos — ex.: o CI não roda
+# --cov e roda checkers CI-only que este script não roda; a fonte de
+# verdade pré-push é scripts/verify_gates.sh).
 # Nasceu da vergonha do v0.9.0 (12-abr-2026, 8 re-tags, 1h de loop).
 #
 # Uso: ./scripts/pre-release.sh [versão]
@@ -87,7 +90,8 @@ else
     fail "ddgs + trafilatura install"
 fi
 
-# ── Step 5: Tests with coverage on BOTH Pythons (EXATAMENTE como CI) ──
+# ── Step 5: Tests with coverage on BOTH Pythons (mais estrito que o
+# CI atual, que roda pytest sem --cov) ──
 for PYVER in 3.11 3.12; do
     step "Tests — Python $PYVER"
     

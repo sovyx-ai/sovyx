@@ -176,7 +176,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           install-extras: uv pip install --python ${{ matrix.python-version }} "ddgs>=9.0" "trafilatura>=2.0"
-      - name: Run tests with coverage
+      - name: Run tests
         shell: bash
         run: |
           set +e
@@ -205,15 +205,6 @@ jobs:
 
           echo "::error::pytest did not produce a summary; run likely hung before tests completed"
           exit 1
-      - name: Upload coverage
-        # Only the Ubuntu × 3.12 cell uploads. Otherwise the four cells
-        # would race to upload the same artifact name and the last writer
-        # would win non-deterministically.
-        if: matrix.os == 'sovyx-4core' && matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage.xml
 
   schema-gate:
     name: Log Schema Gate

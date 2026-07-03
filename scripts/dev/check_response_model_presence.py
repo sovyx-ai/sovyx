@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quality Gate 18 — FastAPI response_model presence on dashboard routes
+"""Quality Gate 17 — FastAPI response_model presence on dashboard routes
 (Mission C §C.0).
 
 Static AST scanner that walks every ``*.py`` under

@@ -25,8 +25,9 @@ argument's value is NOT one of the four permitted shapes:
 Exits non-zero on any violation in STRICT mode (``--strict`` flag or
 ``SOVYX_H3_GATE_STRICT=1``); LENIENT mode (default) prints the report
 but exits 0 — used by ``scripts/verify_gates.sh`` during v0.49.10..v0.52.x
-staged adoption. ``.github/workflows/publish.yml`` runs ``--strict``
-post-build. Phase 3 v0.53.0 promotes the local gate to STRICT.
+staged adoption. ``.github/workflows/publish.yml`` runs the checker
+post-build in REPORT-only (LENIENT) mode; Phase 3 v0.53.0 swaps both
+sites to ``--strict``.
 
 Anti-pattern compliance:
 

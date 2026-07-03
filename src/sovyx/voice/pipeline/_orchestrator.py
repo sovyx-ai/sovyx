@@ -1947,7 +1947,7 @@ class VoicePipeline(
             "latency_ms": latency_ms,
         }
 
-    # -- TTS / speaking interface (called by CogLoop) -----------------------
+    # -- TTS / speaking interface (called by VoiceCognitiveBridge) ----------
 
     # SPEECH STREAMING extracted to _speech_streaming_mixin.py
     # _emit_llm_full_response_end_frame + speak + stream_text +

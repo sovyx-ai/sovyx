@@ -169,8 +169,10 @@ def guard_active_capture_endpoint() -> HfpGuardReport:
        connected device via :func:`_classify_device`.
     3. Collapses the matches into :class:`HfpGuardReport`.
 
-    The returned report is consumed by the orchestrator *before*
-    opening the capture stream — the guard never modifies any OS state.
+    The report is designed to be consumed *before* opening the capture
+    stream; the guard never modifies any OS state. Production wiring is
+    not yet implemented — the function is currently exercised by tests
+    only (AP #70); orchestrator wire-up is tracked.
     """
     if sys.platform != "darwin":
         return HfpGuardReport(tool_available=True)

@@ -1,8 +1,9 @@
 /**
  * Global dashboard store — zustand v5 slices pattern
  *
- * FE-00c: Refactored from monolithic to 6 slices:
- *   connection, status, conversations, brain, logs, settings
+ * FE-00c: Refactored from monolithic to slices (see the imports below
+ * for the current set — one per domain: connection, status, brain,
+ * logs, voice health, wake word, mind management, …).
  *
  * Each slice is in stores/slices/ for separation of concerns.
  * Combined into one bounded store with devtools middleware.

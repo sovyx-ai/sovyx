@@ -7,7 +7,7 @@ Windows / Linux / macOS:
   every other layer speaks (``Diagnosis``, ``ProbeMode``, ``Combo``,
   ``ProbeResult``, ``RemediationHint``, ``ComboEntry``, ``OverrideEntry``).
 * L1 :mod:`~sovyx.voice.health.combo_store` — persistent JSON memoization
-  of (endpoint × winning_combo) tuples with 13 invalidation rules and
+  of (endpoint × winning_combo) tuples with 14 invalidation rules and
   atomic + locked writes.
 * L1 :mod:`~sovyx.voice.health.capture_overrides` — sibling file for
   user-pinned combos that survive ``--reset``.

@@ -302,7 +302,7 @@ class ResourceCohortGovernor:
         """Build a governor from operator-tunable knobs.
 
         Mission H4 §8 T4.7 ADR-D12 — bootstrap calls this with the live
-        :class:`ObservabilityTuningConfig` so the 12 ``cohort_*`` env
+        :class:`ObservabilityTuningConfig` so the ``cohort_*`` env
         overrides take effect. Tests using the bare ``ResourceCohortGovernor()``
         constructor get the v0.49.17 hardcoded defaults — backward-compat.
 

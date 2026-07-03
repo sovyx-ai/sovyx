@@ -3,9 +3,15 @@
 # Usage: curl -fsSL https://get.sovyx.dev | sh
 set -euo pipefail
 
-SOVYX_VERSION="${SOVYX_VERSION:-0.1.0}"
+# Empty default = install the latest release from PyPI. Set
+# SOVYX_VERSION=X.Y.Z to pin a specific version.
+SOVYX_VERSION="${SOVYX_VERSION:-}"
 
-echo "🔮 Installing Sovyx v${SOVYX_VERSION}..."
+if [ -n "$SOVYX_VERSION" ]; then
+    echo "🔮 Installing Sovyx v${SOVYX_VERSION}..."
+else
+    echo "🔮 Installing Sovyx (latest)..."
+fi
 
 # Detect OS
 OS="$(uname -s)"
@@ -31,7 +37,11 @@ fi
 
 # Install sovyx
 echo "  📦 Installing sovyx..."
-uv tool install "sovyx==${SOVYX_VERSION}"
+if [ -n "$SOVYX_VERSION" ]; then
+    uv tool install "sovyx==${SOVYX_VERSION}"
+else
+    uv tool install sovyx
+fi
 
 # Initialize
 echo ""

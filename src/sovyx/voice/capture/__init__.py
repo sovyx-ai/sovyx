@@ -1,13 +1,17 @@
 """Capture-task subpackage — extracted from the monolithic
 ``voice/_capture_task.py`` per master mission Phase 1 / T1.4.
 
-Target final structure (per spec):
+Structure (split completed):
 
   * ``_restart.py`` — restart-verdict types + dataclasses + metric
-    emitters (this module — landed first as the lowest-risk extraction).
-  * ``_loop.py`` — consumer-loop logic (future commit).
-  * ``_ring.py`` — ring-buffer state + access helpers (future commit).
-  * ``_epoch.py`` — ring-buffer epoch packing (future commit).
+    emitters (landed first as the lowest-risk extraction).
+  * ``_loop_mixin.py`` — consumer-loop logic (the spec's ``_loop.py``,
+    landed as a mixin).
+  * ``_ring.py`` — ring-buffer state + access helpers.
+  * ``_epoch.py`` — ring-buffer epoch packing.
+  * Plus ``_constants.py``, ``_contention.py``, ``_exceptions.py``,
+    ``_helpers.py``, ``_lifecycle_mixin.py``, ``_restart_mixin.py``,
+    ``_signal_state.py`` — supporting internals extracted alongside.
 
 The legacy stub at ``voice/_capture_task.py`` re-exports every public
 name from this subpackage so existing imports + the 13 timing-

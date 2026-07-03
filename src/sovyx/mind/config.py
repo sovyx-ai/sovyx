@@ -532,8 +532,9 @@ class MindConfig(BaseModel):
     onboarding_complete: bool = False
 
     # ── Phase 8 / T8.1-T8.5 — per-mind voice identity ──────────────────
-    # These five fields together define the mind's voice surface area
-    # (wake word + variants + voice ID + locale + cadence). Defaults
+    # These six fields together define the mind's voice surface area
+    # (wake word + variants + language + wake gating + accent + cadence).
+    # Defaults
     # preserve v0.30.0 behaviour: an empty ``wake_word`` falls back to
     # the legacy global ``"Sovyx"`` via :prop:`effective_wake_word` so
     # existing single-mind deployments continue to work without any

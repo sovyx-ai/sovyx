@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quality Gate 20 — boundary helper must be a real producer callable,
+"""Quality Gate 18 — boundary helper must be a real producer callable,
 not an inline lambda (Mission C §C.0).
 
 Static AST scanner that walks every ``tests/**/test_*boundary*.py``

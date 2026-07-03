@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
 
 class BundleVerdict(StrEnum):
-    """Four-state classifier for bundle integrity.
+    """Five-state classifier for bundle integrity.
 
     Replaces the two-state ``STATIC_DIR.exists() and (STATIC_DIR /
     "index.html").exists()`` gate at ``dashboard/server.py:585`` with

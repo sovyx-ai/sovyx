@@ -82,8 +82,9 @@ class LLMProviderKey(StrEnum):
         """Backwards-compat replacement for the legacy ``_ENV_VAR_MAP`` dict.
 
         Returns a mapping ``{provider_value: env_var}`` for cloud providers
-        ONLY (Ollama excluded). Used by ``dashboard/routes/onboarding.py``
-        post-Phase 1.A cleanup.
+        ONLY (Ollama excluded). Currently unused in production —
+        ``dashboard/routes/onboarding.py`` keeps a local ``_ENV_VAR_MAP``
+        copy; unification is tracked debt.
         """
         return {key.value: key.env_var for key in cls if key.is_cloud}
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Sovyx — Enterprise Integrity Audit
-# Verifies ALL quality dimensions in one pass.
+# One-pass quality sweep (lint, types, security, tests, dashboard).
+# NOT exhaustive — gates 8-19 + CI-only checkers live in
+# scripts/verify_gates.sh and the CI workflows.
 # Exit 0 = market-ready. Any failure = exit 1.
 # Usage: ./scripts/audit.sh
 set -uo pipefail
@@ -161,6 +163,8 @@ else
 fi
 
 # ─── 9. Backend security (bandit) ───
+# Scope note: scans src/ (a superset of CI's src/sovyx target) — a
+# finding here that CI misses means it lives outside src/sovyx.
 section "9/10 Backend — Security scan"
 
 if uv run bandit -r src/ -c pyproject.toml -q > /dev/null 2>&1; then
@@ -188,7 +192,7 @@ fi
 # ─── Summary ───
 echo ""
 echo "╔══════════════════════════════════════╗"
-echo "║     SOVYX ENTERPRISE AUDIT v0.5      ║"
+echo "║        SOVYX ENTERPRISE AUDIT        ║"
 echo "╠══════════════════════════════════════╣"
 printf "║  Checks: %2d passed / %2d total        ║\n" "$PASS" "$TOTAL"
 if [ "$FAIL" -eq 0 ]; then

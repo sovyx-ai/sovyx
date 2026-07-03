@@ -384,9 +384,12 @@ def _macos_cascade() -> tuple[Combo, ...]:
       Scarlett 1st-gen, older Presonus) lock to 44.1 kHz; stream opener
       falls through to this rate before giving up.
     * Attempt 3: 16 kHz int16 — last-resort narrow-band that matches
-      Bluetooth SCO/HFP's native rate. Only used when the HFP guard
+      Bluetooth SCO/HFP's native rate. Documented requirement: this
+      attempt should only run once the HFP guard
       (:mod:`sovyx.voice._hfp_guard`) has cleared the endpoint — we
-      never *intentionally* open HFP because the compression kills VAD.
+      never want to *intentionally* open HFP because the compression
+      kills VAD. The guard exists but is test-only today; production
+      wiring is not yet implemented (AP #70) and is tracked.
 
     macOS has no APO-chain to bypass (voice-processing is opt-in via
     ``kAUVoiceIOProperty_BypassVoiceProcessing``; PortAudio never opts
@@ -448,9 +451,12 @@ so the ``exclusive`` flag is always ``False``. ``auto_convert`` is set
 only on the 44.1 kHz entry because that rate requires a sample-rate
 converter to reach the 16 kHz VAD pipeline downstream.
 
-The 16 kHz attempt exists for HFP/SCO interop; the stream opener must
-pair it with the :mod:`sovyx.voice._hfp_guard` check to avoid
-silently accepting the 8 kHz Bluetooth SCO compression on headset mics.
+The 16 kHz attempt exists for HFP/SCO interop; the intended contract
+is that the stream opener pairs it with the
+:mod:`sovyx.voice._hfp_guard` check to avoid silently accepting the
+8 kHz Bluetooth SCO compression on headset mics. That pairing is not
+yet implemented — the guard is test-only today (AP #70); wiring is
+tracked.
 """
 
 

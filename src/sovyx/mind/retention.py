@@ -18,8 +18,11 @@ architecture. They differ in:
 * **Filter axis** — forget by identity (mind_id), retention by
   timestamp (age).
 * **Trigger** — forget is operator-driven (CLI / dashboard /
-  daemon-side RPC); retention is scheduled (DreamScheduler hook,
-  next commit) + on-demand (CLI / dashboard, future commits).
+  daemon-side RPC); retention is scheduled
+  (:class:`RetentionScheduler`, this module) + on-demand
+  (CLI ``sovyx mind retention prune``, dashboard
+  ``POST /api/mind/{mind_id}/retention/prune``, RPC
+  ``mind.retention.prune``).
 * **Tombstone** — DELETE vs. RETENTION_PURGE.
 
 Per-surface horizons resolve in priority order:
@@ -144,11 +147,13 @@ class MindRetentionService:
 
     Invoked by:
 
-    * The DreamScheduler hook (next commit) — once-per-day at
-      ``mind.dream_time`` in the mind's timezone.
-    * The CLI ``sovyx mind retention prune`` (next commit).
+    * :class:`RetentionScheduler` (this module, wired in
+      ``engine/bootstrap.py``) — once-per-day at
+      ``MindConfig.retention.prune_time`` in the mind's timezone.
+    * The CLI ``sovyx mind retention prune`` (via the
+      ``mind.retention.prune`` RPC).
     * The dashboard ``POST /api/mind/{mind_id}/retention/prune``
-      endpoint (next commit).
+      endpoint.
 
     Args:
         engine_config: Source of global retention defaults

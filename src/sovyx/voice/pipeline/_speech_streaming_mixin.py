@@ -273,7 +273,7 @@ class SpeechStreamingMixin:
         )
 
     async def speak(self, text: str) -> None:
-        """Synthesize and play text (called by CogLoop.act).
+        """Synthesize and play text (called by VoiceCognitiveBridge post-Act).
 
         PIPELINE-5 (2026-07-02): refuses to run on a stopped pipeline
         — a bridge task surviving ``stop()`` must not re-open a speech

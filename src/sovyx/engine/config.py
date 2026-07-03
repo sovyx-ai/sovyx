@@ -2692,7 +2692,7 @@ class VoiceTuningConfig(BaseSettings):
     @model_validator(mode="after")
     def _enforce_customization_thresholds_ordered(self) -> VoiceTuningConfig:
         """Paranoid-QA HIGH #9 — L2.5 customization thresholds must be
-        ordered ``apply <= skip``.
+        strictly ordered ``apply < skip``.
 
         The orchestrator branches on ``score`` using two knobs:
 

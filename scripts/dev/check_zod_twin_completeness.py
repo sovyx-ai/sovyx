@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quality Gate 17 — pydantic↔zod twin field-set completeness (Mission C §C.0).
+"""Quality Gate 16 — pydantic↔zod twin field-set completeness (Mission C §C.0).
 
 Read-only audit gate that verifies, for each registered (pydantic model,
 zod schema) pair, that every WIRE-shape field the pydantic peer emits
