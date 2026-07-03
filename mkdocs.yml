@@ -35,7 +35,8 @@ theme:
     code: JetBrains Mono
 
 nav:
-  - Home: getting-started.md
+  - Home: index.md
+  - Getting started: getting-started.md
   - Architecture: architecture.md
   - Configuration: configuration.md
   - API Reference: api-reference.md

@@ -1,6 +1,13 @@
 """Docs site smoke tests — V05-P09.
 
 Verifies that MkDocs builds successfully and key pages exist.
+
+The build-output assertions run a fresh ``mkdocs build`` via a
+class-scoped fixture instead of trusting whatever ``site/`` happens to
+be on disk: ``site/`` is gitignored, so a stale local build can keep
+fossil pages alive for months and make assertions pass against a layout
+the current nav no longer produces (this happened — the suite asserted
+``site/quickstart`` et al. long after those pages were removed).
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ class TestDocsStructure:
     @pytest.mark.parametrize(
         "page",
         [
+            "index.md",
             "getting-started.md",
             "architecture.md",
             "api-reference.md",
@@ -50,30 +58,31 @@ except FileNotFoundError:
 
 @pytest.mark.skipif(not _has_mkdocs, reason="mkdocs not installed")
 class TestMkDocsBuild:
-    """Verify MkDocs builds without errors."""
+    """Verify MkDocs builds without errors and produces the real layout."""
 
-    def test_mkdocs_build_succeeds(self) -> None:
-        """MkDocs must build with --strict (zero warnings)."""
-        result = subprocess.run(
-            ["mkdocs", "build", "--strict"],
+    @pytest.fixture(scope="class", autouse=True)
+    def _fresh_build(self) -> None:
+        """Build the site once for this class so assertions never read a stale ``site/``."""
+        result = subprocess.run(  # noqa: S603
+            ["mkdocs", "build", "--strict"],  # noqa: S607
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
         )
         assert result.returncode == 0, (
             f"mkdocs build failed:\nstdout: {result.stdout[-500:]}\nstderr: {result.stderr[-500:]}"
         )
 
     def test_site_index_generated(self) -> None:
-        """Build must produce site/index.html."""
+        """Build must produce site/index.html — without it the docs-site root 404s."""
         assert (SITE_DIR / "index.html").exists(), "site/index.html not generated"
 
     @pytest.mark.parametrize(
         "page",
-        ["quickstart", "api", "voice", "plugins"],
+        ["getting-started", "api-reference", "modules/voice", "modules/plugins"],
     )
     def test_key_pages_generated(self, page: str) -> None:
-        """Each key page must produce a site HTML output."""
+        """Each key nav page must produce a site HTML output."""
         page_path = SITE_DIR / page / "index.html"
         assert page_path.exists(), f"site/{page}/index.html not generated"
