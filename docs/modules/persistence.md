@@ -35,7 +35,7 @@ async with pool.read() as conn:
 
 ## Pragmas
 
-Nine non-negotiable pragmas set at connection open:
+Seven non-negotiable pragmas set at connection open, plus two caller-injected ones (`cache_size`, `mmap_size`) merged in via the pool's `pragmas` argument:
 
 | Pragma | Value | Why |
 |---|---|---|
@@ -46,8 +46,8 @@ Nine non-negotiable pragmas set at connection open:
 | `busy_timeout` | `5000` | 5 s before SQLITE_BUSY |
 | `wal_autocheckpoint` | `1000` | Periodic WAL → main DB transfer |
 | `auto_vacuum` | `INCREMENTAL` | Reclaim space without full VACUUM |
-| `cache_size` | configurable | Pages in memory |
-| `mmap_size` | configurable | Memory-mapped reads |
+| `cache_size` | caller-injected | Pages in memory |
+| `mmap_size` | caller-injected | Memory-mapped reads |
 
 ## Schemas
 

@@ -21,16 +21,16 @@ record-keeping.
 
 | Requirement | Article | Sovyx feature | Status |
 |---|---|---|---|
-| **Right of access** — the data subject can obtain a copy of their data | LGPD Art. 18 I; GDPR Art. 15 | `GET /api/conversations/export?mind_id=X` (existing) plus `GET /api/logs/saga?user_id=X` (planned, post-release) | **Partial** — saga endpoint scheduled |
+| **Right of access** — the data subject can obtain a copy of their data | LGPD Art. 18 I; GDPR Art. 15 | `GET /api/export` — `.sovyx-mind` ZIP archive of the active mind (existing) plus `GET /api/logs/saga?user_id=X` (planned, post-release) | **Partial** — saga endpoint scheduled |
 | **Right to erasure** — the data subject can demand deletion | LGPD Art. 18 VI; GDPR Art. 17 | `sovyx mind forget <mind_id>` CLI + `POST /api/mind/{mind_id}/forget` dashboard endpoint (Phase 8 / T8.21); `var/log/` redact-by-mind_id is scheduled | **Implemented** — log-side erasure scheduled |
-| **Data minimisation** — only collect what is necessary | LGPD Art. 6 III | `PIIRedactor` processor + sampling + four verbosity modes (`raw`, `redacted`, `hashed`, `dropped`) | **Implemented** |
+| **Data minimisation** — only collect what is necessary | LGPD Art. 6 III | `PIIRedactor` processor + sampling + four per-field verbosity modes (`minimal`, `redacted`, `hashed`, `full`) | **Implemented** |
 | **Anonymisation** — break the link between record and subject | LGPD Art. 12 | `hashed` mode keeps the record forensically useful (same hash for the same input within a rotation key) without storing the value itself | **Implemented** |
 | **Audit trail of access / config changes** | LGPD Art. 37 | Dedicated `audit/` log (audit.jsonl) with config mutations, license events, plugin permission changes; tamper-evident chain when `tamper_chain` is on; boot + rotation + on-demand chain verification. Voice surface: `ConsentLedger` (per-user + per-mind, append-only JSONL) for `WAKE/LISTEN/TRANSCRIBE/STORE/SHARE/DELETE/RETENTION_PURGE` events. | **Implemented** |
 | **Incident notification (72 h)** | GDPR Art. 33 | `AlertManager` emits `security.incident.detected` to a configurable webhook sink so the operator pipeline can dispatch the formal notification | **Partial** — sink configuration UI scheduled |
 | **Tamper evidence (integrity)** | LGPD Art. 6 VI; GDPR Art. 32 | `HashChainHandler` over both the main log and audit.jsonl; `verify_chain` runs at boot, before each rotation, and on demand via `sovyx audit verify-chain` | **Implemented** |
-| **Portability** — common, machine-readable export format | LGPD Art. 18 V; GDPR Art. 20 | JSONL is the wire format end-to-end; the export endpoints preserve the same schema operators see in `var/log/` | **Implemented** |
+| **Portability** — common, machine-readable export format | LGPD Art. 18 V; GDPR Art. 20 | `GET /api/export` produces a `.sovyx-mind` ZIP archive (Sovyx Mind Format) that `POST /api/import` restores losslessly; logs remain JSONL | **Implemented** |
 | **Encryption in transit** | LGPD Art. 46; GDPR Art. 32 | OTLP exporter requires TLS 1.3+; the dashboard expects HTTPS termination at the operator's reverse proxy (TLS gate inside Sovyx is scheduled) | **Partial** — internal TLS gate scheduled |
-| **Explicit retention policy — logs** | LGPD Art. 16 | `LoggingConfig.retention_days` plus `RotatingFileHandler` size + count budget plus `LogJanitor` emergency prune on disk pressure | **Implemented** |
+| **Explicit retention policy — logs** | LGPD Art. 16 | Rotating file-handler size + backup-count budget (bounded ring on disk) plus the FTS log-search index's own age-based pruner | **Implemented** |
 | **Explicit retention policy — per-mind data** | LGPD Art. 16; GDPR Art. 5(1)(e) | `EngineConfig.tuning.retention.*` global defaults + `MindConfig.retention.*` per-mind overrides; CLI `sovyx mind retention prune\|status`; `POST /api/mind/{mind_id}/retention/prune`; auto-prune daemon scheduler (default off; opt in via `MindConfig.retention.auto_prune_enabled`); `RETENTION_PURGE` audit tombstone in ConsentLedger. Phase 8 / T8.21 step 6. | **Implemented** |
 
 ---
@@ -49,10 +49,11 @@ compliant, the operator must:
    wired into `AlertManager`. Sovyx does not enforce that the
    downstream party is contracted; the configuration UI lets the
    operator route data wherever they please.
-3. **Configure retention** to match the lawful basis.
-   `LoggingConfig.retention_days` defaults are operationally
-   reasonable, not legally minimal. A consent-based deployment will
-   want shorter retention than a contract-based one.
+3. **Configure retention** to match the lawful basis. The
+   `EngineConfig.tuning.retention.*` / `MindConfig.retention.*`
+   defaults are operationally reasonable, not legally minimal. A
+   consent-based deployment will want shorter retention than a
+   contract-based one.
 4. **Rotate secrets on schedule.** Sovyx emits
    `security.secrets.rotation_overdue` (WARNING) at boot when
    `EngineConfig.security.secrets_rotated_at` is older than
@@ -71,14 +72,15 @@ compliant, the operator must:
 ### Access (LGPD Art. 18 I; GDPR Art. 15)
 
 ```bash
-# Export every conversation belonging to a given mind.
+# Export the active mind as a .sovyx-mind ZIP archive.
 curl -H "Authorization: Bearer $TOKEN" \
-     "https://sovyx.local/api/conversations/export?mind_id=$MIND_ID" \
-     -o subject-export.jsonl
+     "https://sovyx.local/api/export" \
+     -o subject-export.sovyx-mind
 ```
 
-The export carries the same envelope shape as the live log so the
-data subject can read either format with the same tooling.
+The archive contains every concept, episode, relation, conversation,
+and configuration for the active mind in the Sovyx Mind Format, and
+can be restored elsewhere via `POST /api/import`.
 
 ### Erasure (LGPD Art. 18 VI; GDPR Art. 17)
 
@@ -120,7 +122,7 @@ Default horizons:
 
 | Surface             | Default | Rationale                                          |
 | ------------------- | ------- | -------------------------------------------------- |
-| Episodes            | 30 d    | Aligns with `LoggingConfig.retention_days` baseline |
+| Episodes            | 30 d    | Baseline 30-day operational window                  |
 | Conversations + turns | 30 d  | Same surface class as episodes                      |
 | Daily stats         | 365 d   | No PII; longer historical horizon for cost/usage    |
 | Consolidation log   | 90 d    | Quarterly diagnostic window                         |
@@ -155,10 +157,10 @@ records to the consent ledger (distinct from operator-invoked
 
 ### Portability (LGPD Art. 18 V; GDPR Art. 20)
 
-The same export endpoint above produces the portable artefact. JSONL
-is intentionally the only format — a regulator that asks for "your
-machine-readable export" gets exactly what the operator's own
-analytics tooling consumes.
+The same export endpoint above produces the portable artefact: a
+`.sovyx-mind` ZIP archive in the Sovyx Mind Format. A regulator that
+asks for "your machine-readable export" gets the same archive the
+operator uses for backup and migration; log extracts remain JSONL.
 
 ---
 
@@ -171,7 +173,7 @@ analytics tooling consumes.
   audit and incident events the matrix relies on. Operators wiring
   SIEM rules should map them against the canonical event names.
 * **`docs/configuration.md`** — concrete config keys
-  (`SOVYX_SECURITY__SECRETS_ROTATED_AT`, `LoggingConfig.retention_days`,
+  (`SOVYX_SECURITY__SECRETS_ROTATED_AT`, `SOVYX_TUNING__RETENTION__*`,
   `ObservabilityFeaturesConfig.tamper_chain`, …).
 
 ---
@@ -206,11 +208,11 @@ roll-up that an operator's compliance officer signs before deployment.
 | Article | Sovyx posture | Status |
 |---|---|---|
 | Art. 5(1)(a) — lawful, fair, transparent processing | Operator-side policy + Sovyx audit log records the boundary at every TRANSCRIBE/STORE/SHARE event. | **Operator** owns lawful-basis declaration |
-| Art. 5(1)(c) — data minimisation | `PIIRedactor` + four log verbosity modes + voice subsystem persists no raw audio by default | **Implemented** |
-| Art. 5(1)(e) — storage limitation | `LoggingConfig.retention_days` (logs) + `MindConfig.retention.*` (per-mind data) + `voice_audio_retention_days` | **Implemented** (Phase 8 T8.21 step 6) |
-| Art. 15 — Right of access | `GET /api/conversations/export?mind_id=X` + `sovyx voice history` | **Implemented** |
+| Art. 5(1)(c) — data minimisation | `PIIRedactor` + four per-field log verbosity modes + voice subsystem persists no raw audio by default | **Implemented** |
+| Art. 5(1)(e) — storage limitation | Rotating log-file budgets (logs) + `MindConfig.retention.*` (per-mind data) + `voice_audio_retention_days` | **Implemented** (Phase 8 T8.21 step 6) |
+| Art. 15 — Right of access | `GET /api/export` + `sovyx voice history` | **Implemented** |
 | Art. 17 — Right to erasure | `sovyx mind forget` CLI + `POST /api/mind/{mind_id}/forget` | **Implemented** (Phase 8 T8.21 steps 4-5) |
-| Art. 20 — Portability | JSONL export end-to-end | **Implemented** |
+| Art. 20 — Portability | `.sovyx-mind` ZIP archive export (`GET /api/export`) | **Implemented** |
 | Art. 30 — Records of processing | Audit log + ConsentLedger (per-user + per-mind) | **Implemented** |
 | Art. 32 — Security of processing | Hash-chain integrity + plugin sandbox + zero-trust posture | **Implemented** |
 | Art. 33 — Breach notification (72h) | `AlertManager` security.incident.detected webhook | **Partial** — operator wires sink |

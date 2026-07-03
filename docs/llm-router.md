@@ -92,7 +92,7 @@ def classify_complexity(signals: ComplexitySignals) -> ComplexityLevel:
 
 Ten providers ship in-box. All implement the `LLMProvider` Protocol
 (`generate`, `stream`, `supports_model`, `get_context_window`, `is_available`,
-`close`). The six OpenAI-compatible providers share a base class
+`close`). The seven OpenAI-compatible providers share a base class
 (`OpenAICompatibleProvider`) — each is ~30 LOC of configuration.
 
 | Provider | Auth | Models | Notes |
@@ -161,24 +161,24 @@ actual spend after the response comes back. Two budget scopes:
 | Per-day | `llm.budget_daily_usd` | `2.0` |
 
 If either is exhausted, the router raises `CostLimitExceededError`.
-Prometheus metric: `sovyx_llm_cost_usd_total{provider, model}`.
+Prometheus metric: `sovyx_llm_cost_usd_total{provider}`.
 
 Pricing is built in for the common models (per 1M tokens, input/output):
 
 | Model | Input | Output |
 |---|---|---|
 | `claude-sonnet-4-20250514` | 3.00 | 15.00 |
-| `claude-3-5-haiku-20241022` | 1.00 | 5.00 |
+| `claude-3-5-haiku-20241022` | 0.80 | 4.00 |
 | `claude-opus-4-20250514` | 15.00 | 75.00 |
-| `gpt-4o` | 5.00 | 15.00 |
+| `gpt-4o` | 2.50 | 10.00 |
 | `gpt-4o-mini` | 0.15 | 0.60 |
 | `o1` | 15.00 | 60.00 |
 | `gemini-2.0-flash` | 0.10 | 0.40 |
 | `gemini-2.5-pro-preview-03-25` | 1.25 | 10.00 |
 | `grok-2` | 2.00 | 10.00 |
 | `grok-3` | 3.00 | 15.00 |
-| `deepseek-chat` | 0.14 | 0.28 |
-| `deepseek-reasoner` | 0.55 | 2.19 |
+| `deepseek-chat` | 0.28 | 0.42 |
+| `deepseek-reasoner` | 0.28 | 0.42 |
 | `mistral-large-latest` | 2.00 | 6.00 |
 | `mistral-small-latest` | 0.10 | 0.30 |
 
@@ -256,7 +256,7 @@ Prometheus metrics exported by the router:
 | `sovyx_llm_calls_total` | `provider`, `model` |
 | `sovyx_llm_tokens_total` | `direction` (`in`/`out`), `provider` |
 | `sovyx_llm_cost_usd_total` | `provider` |
-| `sovyx_llm_response_latency` (histogram) | `provider` |
+| `sovyx_llm_latency_milliseconds` (histogram) | `provider` |
 
 ## Overriding the Router
 

@@ -18,7 +18,7 @@ The `sovyx.llm` package is the only place Sovyx talks to language models. It rou
 | `ComplexityLevel` | `StrEnum` (`SIMPLE`, `MODERATE`, `COMPLEX`). |
 | `ComplexitySignals` | Inputs to `classify_complexity`. |
 
-All ten providers are implemented on top of `httpx` — no vendor SDKs are required at runtime. The six OpenAI-compatible providers (OpenAI, xAI, DeepSeek, Mistral, Together AI, Groq, Fireworks) share a base class (`OpenAICompatibleProvider`) that handles `generate()` + `stream()` + retry + error handling; each provider file is ~30 LOC of configuration.
+All ten providers are implemented on top of `httpx` — no vendor SDKs are required at runtime. The seven OpenAI-compatible providers (OpenAI, xAI, DeepSeek, Mistral, Together AI, Groq, Fireworks) share a base class (`OpenAICompatibleProvider`) that handles `generate()` + `stream()` + retry + error handling; each provider file is ~30 LOC of configuration.
 
 ## Complexity tiers
 
@@ -76,19 +76,19 @@ Tier-to-model mapping is driven by `select_model_for_complexity` in `src/sovyx/l
 
 ## Cross-provider equivalence
 
-`_get_equivalent_models` in `src/sovyx/llm/router.py` maintains a symmetric equivalence map across three tiers — **flagship** (Sonnet / Opus / Pro / GPT-4o / Grok / Reasoner), **fast** (Haiku / Flash / mini / DeepSeek Chat / Mistral Small), and **reasoning** (Opus / o-series / DeepSeek Reasoner). When a requested model fails (circuit open or provider error), the router rotates through the same-tier peers in order. The map is updated each release as new models land in `pricing.py`.
+`_get_equivalent_models` in `src/sovyx/llm/router.py` maintains a symmetric equivalence map across three tiers — **flagship** (Sonnet / GPT-4o / Gemini Pro / Grok / Mistral Large), **fast** (Haiku / mini / Gemini Flash / DeepSeek Chat / Mistral Small), and **reasoning** (Opus / o1 / DeepSeek Reasoner). When a requested model fails (circuit open or provider error), the router rotates through the same-tier peers in order. The map is updated each release as new models land in `pricing.py`.
 
 ## Cost tracking
 
-`CostGuard` enforces three budgets:
+`CostGuard` enforces three budgets — the estimated cost of each call is checked against every applicable one before the call runs:
 
-- **Per-request** — estimated before the call; rejected if it would exceed the daily budget.
-- **Per-conversation** — `conversation_id` rolling budget.
-- **Daily** — engine-wide daily cap.
+- **Daily** — `budget_daily_usd`, resets each day.
+- **Per-conversation** — `budget_per_conversation_usd`, keyed by `conversation_id`.
+- **Monthly** — `budget_monthly_usd`, optional (default `null` = disabled); checked in addition to the daily cap.
 
-Prices (USD per 1M input/output tokens) for every supported model live in `src/sovyx/llm/pricing.py` — it is the single source of truth and is updated as providers publish new tiers. `CostGuard` reads from that table at runtime; the doc does not duplicate the entries.
+Prices (USD per 1M input/output tokens) for every supported model live in `src/sovyx/llm/pricing.py` — it is the single source of truth and is updated as providers publish new tiers. The **router** reads that table to compute each response's `cost_usd` and passes the result to `CostGuard.record()`; the doc does not duplicate the entries.
 
-`CostGuard.record()` updates counters in `sovyx.dashboard.status` so the dashboard sees live cost and token usage.
+After each successful call the router also updates the counters in `sovyx.dashboard.status` so the dashboard sees live cost and token usage.
 
 ## Circuit breaker
 
@@ -100,9 +100,23 @@ Prices (USD per 1M input/output tokens) for every supported model live in `src/s
 
 The router calls `can_call()` before each provider attempt and records the outcome.
 
-## BYOK per mind
+## BYOK — bring your own keys
 
-Each mind configures its own provider credentials in `mind.yaml` (for example `llm.providers.anthropic.api_key`). Providers receive these at construction time, so one mind's key never leaks into another mind's requests. The router and the cost guard are built per mind, so rate and budget limits are scoped the same way.
+Provider credentials are **environment variables with their native names**, never `mind.yaml` fields. At bootstrap the daemon first loads `<data_dir>/channel.env` and `<data_dir>/secrets.env` into the process environment (keys saved via the dashboard settings/onboarding flow land in `secrets.env`), then constructs one provider instance for each cloud key present:
+
+| Env var | Provider |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic |
+| `OPENAI_API_KEY` | OpenAI |
+| `GOOGLE_API_KEY` | Google |
+| `XGROK_API_KEY` | xAI |
+| `DEEPSEEK_API_KEY` | DeepSeek |
+| `MISTRAL_API_KEY` | Mistral |
+| `GROQ_API_KEY` | Groq |
+| `TOGETHER_API_KEY` | Together AI |
+| `FIREWORKS_API_KEY` | Fireworks AI |
+
+Ollama needs no key — it is always registered and pinged at boot; when no cloud key is present and Ollama has pulled models, it is auto-selected as the default provider. The authoritative env-var map is `LLMProviderKey` in `src/sovyx/llm/_provider_registry.py`; construction happens in `engine/bootstrap.py`. Budgets and model choices remain per-mind via `MindConfig.llm`.
 
 ## Streaming
 
@@ -123,38 +137,34 @@ The voice pipeline's `VoiceCognitiveBridge` calls `CognitiveLoop.process_request
 
 ## Observability
 
-- **Metrics** — `llm_calls`, `tokens_used` (direction in/out), `llm_cost`, `llm_response_latency` — each labelled with `provider` and `model`.
+- **Metrics** — `llm_calls` (`provider`, `model`), `tokens_used` (`direction` in/out, `provider`), `llm_cost` (`provider`), `llm_response_latency` (`provider`).
 - **Tracing** — `tracer.start_llm_span(provider, model)` with attributes `sovyx.llm.tokens_in`, `sovyx.llm.tokens_out`, `sovyx.llm.cost_usd`.
 - **Events** — `ThinkCompleted` on every successful call (`streamed` + `ttft_ms` fields for streaming). `ThinkStreamStarted` on first streaming token.
 
 ## Configuration
 
+Per-mind router settings live under `llm:` in `mind.yaml` (`MindConfig.llm`):
+
 ```yaml
 llm:
-  defaults:
-    daily_budget_usd: 5.0
-    per_conversation_budget_usd: 0.5
-    circuit:
-      failure_threshold: 3
-      recovery_timeout_s: 60
-  providers:
-    anthropic:
-      api_key: ${ANTHROPIC_API_KEY}
-      # Pick the active IDs from src/sovyx/llm/pricing.py — the table is the
-      # source of truth and moves every release.
-      models: [<flagship-sonnet>, <fast-haiku>]
-    openai:
-      api_key: ${OPENAI_API_KEY}
-      models: [<flagship-gpt>, <fast-mini>, <reasoning>]
-    google:
-      api_key: ${GEMINI_API_KEY}
-      models: [<flagship-pro>, <fast-flash>]
-    ollama:
-      base_url: http://localhost:11434
-      models: [llama3.1:8b]
+  default_provider: anthropic              # "" for auto-detect from env keys
+  default_model: claude-sonnet-4-20250514  # "" for auto-detect
+  fast_model: claude-3-5-haiku-20241022    # "" for auto-detect
+  local_model: llama3.2:1b                 # Ollama fallback
+  temperature: 0.7
+  streaming: true
+  budget_daily_usd: 2.0
+  budget_per_conversation_usd: 0.5
+  budget_monthly_usd: null                 # optional monthly cap
 ```
 
-`MindConfig.llm` overrides `LLMDefaultsConfig` fields on a per-mind basis.
+Credentials are NOT configured here — see "BYOK" above. The circuit-breaker
+thresholds are process-global tuning knobs, not YAML config:
+
+```bash
+export SOVYX_TUNING__LLM__CIRCUIT_BREAKER_FAILURES=3        # default
+export SOVYX_TUNING__LLM__CIRCUIT_BREAKER_RESET_SECONDS=60  # default
+```
 
 ## Roadmap
 

@@ -124,26 +124,40 @@ Formatting goes through `telegramify-markdown` and uses `MessageEntity` lists in
 
 ## Signal adapter
 
-`SignalChannel` talks to a local `signal-cli-rest-api` process over HTTP via `httpx`. The same `InboundMessage` / `OutboundMessage` contracts apply; inline buttons degrade to a numbered text menu because Signal does not have a native equivalent.
+`SignalChannel` talks to a local `signal-cli-rest-api` process over HTTP via `aiohttp` (polling `/v1/receive`, sending via `/v2/send`; default API URL `http://localhost:8080`). The same `InboundMessage` / `OutboundMessage` contracts apply; inline buttons degrade to a numbered text menu because Signal does not have a native equivalent.
 
 ## Configuration
 
-```yaml
-bridge:
-  conversation_lock_cache: 500   # LRU lock cap per BridgeManager
+Channel credentials are **environment variables**, not YAML values. At
+bootstrap the daemon loads `<data_dir>/channel.env` (and `secrets.env`)
+into the process environment, then registers `TelegramChannel` only when
+`SOVYX_TELEGRAM_TOKEN` is set:
 
-channels:
-  telegram:
-    enabled: true
-    token: "${TELEGRAM_BOT_TOKEN}"
-    poll_timeout_s: 30
-  signal:
-    enabled: false
-    api_url: http://127.0.0.1:8080
-    phone_number: "+1555..."
+```bash
+# Directly in the environment, or one line in ~/.sovyx/channel.env
+# (written by the dashboard channel-settings flow):
+export SOVYX_TELEGRAM_TOKEN=123456:ABC-...
 ```
 
-Credentials can come from environment variables (`SOVYX_CHANNELS__TELEGRAM__TOKEN=...`) or from the file. Nothing is stored in the repo.
+The per-mind `channels:` block in `mind.yaml` configures the env-var
+*name* to read and the allowlist — never the token itself:
+
+```yaml
+channels:
+  telegram:
+    token_env: SOVYX_TELEGRAM_TOKEN   # env var NAME, not the token value
+    allowed_users: []                 # empty = anyone
+  discord:
+    token_env: SOVYX_DISCORD_TOKEN
+```
+
+The Signal adapter is not wired by bootstrap — it is constructed
+programmatically (`SignalChannel(api_url=..., phone_number=...,
+bridge_manager=...)`) by callers embedding the library.
+
+The per-conversation lock cache is hardcoded (`LRULockDict(maxsize=500)`
+in `bridge/manager.py`), not configurable; its cardinality is observable
+at `self.health.snapshot.lock_dict.per_owner["bridge.manager.conv_locks"]`.
 
 ## Events
 

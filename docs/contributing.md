@@ -195,8 +195,8 @@ GitHub Release with generated notes. In parallel, `docker.yml` builds
 multi-arch images (`linux/amd64`, `linux/arm64`) and pushes them to
 `ghcr.io/sovyx-ai/sovyx:X.Y.Z` and `:latest`.
 
-Sovyx follows SemVer 2.0.0. Schema migrations live under
-`src/sovyx/persistence/migrations/` and must be forward-only; a schema bump
+Sovyx follows SemVer 2.0.0. Schema migrations live in
+`src/sovyx/persistence/migrations.py` and must be forward-only; a schema bump
 that requires a migration is at least `MINOR`.
 
 ---

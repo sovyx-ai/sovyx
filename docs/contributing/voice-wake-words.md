@@ -26,7 +26,7 @@ Lowest friction. No model training, no GPU, no audio collection. Latency is STT-
 
 **Steps:**
 
-1. Edit `~/.sovyx/minds/<mind_id>/mind.yaml` and set:
+1. Edit `~/.sovyx/<mind_id>/mind.yaml` (i.e. `<data_dir>/<mind_id>/mind.yaml`) and set:
 
     ```yaml
     wake_word: "Lúcia"
@@ -55,7 +55,7 @@ Sub-second detection, lowest CPU. Requires audio samples + a one-time training r
 The `sovyx voice train-wake-word` command wraps the Sovyx-internal trainer (`KokoroSampleSynthesizer` + `TrainingOrchestrator`). It generates synthetic positive samples via Kokoro TTS and trains an ONNX model end-to-end:
 
 ```bash
-sovyx voice train-wake-word --mind-id <id> --word "Lúcia"
+sovyx voice train-wake-word "Lúcia" --mind-id <id>
 ```
 
 The default output path is `<data_dir>/wake_word_models/pretrained/<job_id>.onnx`. After completion, the CLI calls the `wake_word.register_mind` RPC so the running daemon hot-loads the model with no restart. Cancel with Ctrl+C (writes a `.cancel` file; orchestrator polls and exits clean).
@@ -84,13 +84,7 @@ Training output: a single `<name>.onnx` file. Place it at:
 <data_dir>/wake_word_models/pretrained/<name>.onnx
 ```
 
-where `<data_dir>` defaults to `~/.sovyx/`. Filename stem matches the configured wake word case-insensitively + ASCII-folded — `lucia.onnx` matches `wake_word: "Lúcia"`. Then either restart the daemon or call the hot-reload RPC:
-
-```bash
-sovyx voice register-mind-wake-word --mind-id <id> --model-path <path>
-```
-
-(equivalent to the dashboard's per-mind wake-word panel).
+where `<data_dir>` defaults to `~/.sovyx/`. Filename stem matches the configured wake word case-insensitively + ASCII-folded — `lucia.onnx` matches `wake_word: "Lúcia"`. Then either restart the daemon (`sovyx stop && sovyx start`) or use the dashboard's per-mind wake-word panel, which hot-loads the model into the running daemon. (Both paths ultimately drive the internal `wake_word.register_mind` RPC — there is no dedicated CLI subcommand for it; `sovyx voice train-wake-word` invokes the RPC automatically on success.)
 
 **Why no `wake_word_model_path` field:** Sovyx resolves models by wake-word name through `PretrainedModelRegistry` rather than an explicit path field on `MindConfig`. This keeps the config surface small and lets one ONNX file (e.g. `lucia.onnx`) cover every mind that uses that wake word.
 

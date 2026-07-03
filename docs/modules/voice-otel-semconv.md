@@ -93,7 +93,7 @@ but the naming convention is the contract. Exceptions:
 
 | Instrument kind | Suffix pattern | Example |
 |---|---|---|
-| Counter (cumulative) | `<noun>` plural / `<verb>` past-participle | `sovyx.voice.opener.attempts`, `sovyx.voice.health.kernel_invalidated_events` |
+| Counter (cumulative) | `<noun>` plural / `<verb>` past-participle | `sovyx.voice.opener.attempts`, `sovyx.voice.health.kernel_invalidated.events` |
 | Histogram (latency) | `<noun>_latency` or `<noun>_ms` | `sovyx.voice.tts.synthesis_latency`, `sovyx.voice.health.bypass.probe_wait_ms` |
 | Histogram (gauge-like, e.g. dB) | `<noun>_<unit>` | `sovyx.voice.aec.erle_db`, `sovyx.voice.audio.snr_db` |
 | Histogram (depth, count) | `<noun>` (with explicit `unit="1"`) | `sovyx.voice.queue.depth` |
@@ -211,7 +211,10 @@ Probe mode discriminator: `cold`, `warm`. From
 | `sovyx.voice.health.bypass.improvement_resolution` | Counter | 1 | Bypass coordinator improvement-heuristic outcomes |
 | `sovyx.voice.health.bypass.probe_wait_ms` | Histogram | ms | Bypass probe-window wait |
 | `sovyx.voice.health.bypass.probe_window_contaminated` | Counter | 1 | Bypass probe-window contamination events (mark/tap regression guard) |
-| `sovyx.voice.health.bypass_tier` | Counter | 1 | Bypass-tier engagement |
+| `sovyx.voice.health.bypass.tier1_raw.attempted` | Counter | 1 | Tier 1 RAW + Communications bypass attempts on Windows. Labels: `host_api`, `raw_supported=true\|false` |
+| `sovyx.voice.health.bypass.tier1_raw.outcome` | Counter | 1 | Tier 1 RAW bypass outcomes on Windows. Labels: `verdict=raw_engaged\|property_rejected_by_driver\|open_failed_no_stream\|open_failed_fallback_to_plain\|not_running\|not_win32`, `host_api` |
+| `sovyx.voice.health.bypass.tier2_host_api_rotate.attempted` | Counter | 1 | Tier 2 host_api_rotate Phase A (rotate) attempts on Windows. Labels: `source_host_api`, `target_host_api` |
+| `sovyx.voice.health.bypass.tier2_host_api_rotate.outcome` | Counter | 1 | Tier 2 host_api_rotate combined outcomes on Windows. Labels: `phase_a_verdict`, `phase_b_verdict` (or `skipped` when Phase A failed), `resulting_host_api` |
 | `sovyx.voice.health.capture_integrity.verdicts` | Counter | 1 | CaptureIntegrityCoordinator post-apply verdicts. Labels: `verdict=healthy\|applied_still_dead\|inconclusive\|...` |
 | `sovyx.voice.health.combo_store.hits` | Counter | 1 | ComboStore lookup hits |
 | `sovyx.voice.health.combo_store.invalidations` | Counter | 1 | ComboStore invalidations. Labels: `reason` |

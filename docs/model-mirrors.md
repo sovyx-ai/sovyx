@@ -73,7 +73,7 @@ Current provenance:
 |---------------------------|----------------------------------------------------------------------------------------------|------------|
 | `e5-small-v2.onnx`        | huggingface.co/intfloat/e5-small-v2                                                          | MIT        |
 | `tokenizer.json`          | huggingface.co/intfloat/e5-small-v2                                                          | MIT        |
-| `silero_vad.onnx`         | github.com/snakers4/silero-vad @ master (pinned by SHA-256)                                  | MIT        |
+| `silero_vad.onnx`         | huggingface.co/istupakov/silero-vad-onnx (primary); github.com/snakers4/silero-vad @ master as mirror (pinned by SHA-256) | MIT        |
 | `kokoro-v1.0.int8.onnx`   | github.com/thewh1teagle/kokoro-onnx, release `model-files-v1.0`                              | Apache 2.0 |
 | `voices-v1.0.bin`         | github.com/thewh1teagle/kokoro-onnx, release `model-files-v1.0`                              | Apache 2.0 |
 

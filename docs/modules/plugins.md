@@ -136,8 +136,10 @@ _MAX_TOTAL_BYTES = 500 * 1024 * 1024   # 500 MB per plugin
 
 class SandboxedFsAccess:
     """Filesystem scoped to data_dir. Symlinks are resolved BEFORE the path check."""
-    async def write(self, path: str, data: str | bytes) -> None: ...
-    async def read(self, path: str) -> bytes: ...
+    async def read(self, relative: str) -> str: ...                    # text (UTF-8)
+    async def write(self, relative: str, content: str) -> None: ...   # text only
+    async def read_bytes(self, relative: str) -> bytes: ...           # binary twins
+    async def write_bytes(self, relative: str, data: bytes) -> None: ...
 ```
 
 `SandboxedHttpClient` applies a domain allowlist, a per-plugin rate limit, and a hard timeout. Local-network access requires the `network:local` permission explicitly.
@@ -164,7 +166,7 @@ class _PluginHealth:
     active_tasks: int = 0
 ```
 
-The manager runs tools with `asyncio.wait_for(tool(), timeout=...)`. Five consecutive failures flip the plugin to `disabled` and raise `PluginAutoDisabledError`. Administrators can re-enable via the `plugin enable` CLI command once the cause is fixed.
+The manager runs tools with `asyncio.wait_for(tool(), timeout=...)`. Five consecutive failures flip the plugin to `disabled` silently (a `plugin_auto_disabled` WARN plus a `PluginAutoDisabled` event — the failing call itself just returns its error); the **next** tool call then raises `PluginDisabledError`. `PluginAutoDisabledError` belongs to a different path: `PermissionEnforcer` raises it after `max_denials` (10) consecutive permission denials. Administrators can re-enable via the `plugin enable` CLI command once the cause is fixed.
 
 ## CLI
 
@@ -181,7 +183,7 @@ sovyx plugin create my-plugin         # scaffold a new plugin skeleton
 
 Hot reload happens automatically when the plugin file changes — `PluginFileWatcher` picks up edits inside `~/.sovyx/plugins/` and re-loads the plugin in place.
 
-Install performs the AST scan. Any `SecurityFinding` aborts the install unless `--allow-unsafe` is passed explicitly.
+Local-directory installs prompt for the manifest's requested permissions (`--yes` skips the prompt for CI); pip/git installs trust the source, matching the apt/pip/brew pattern. The AST security scan runs via `sovyx plugin validate` and inside the load-time sandbox layers — there is no `--allow-unsafe` escape hatch.
 
 ## Official plugins
 
@@ -189,9 +191,9 @@ Install performs the AST scan. Any `SecurityFinding` aborts the install unless `
 |---|---|---|
 | `calculator` | `calculate` | none (pure) |
 | `financial_math` | `calculate`, compound interest, NPV, IRR, amortization helpers | none (pure) |
-| `knowledge` | `remember`, `search`, `recall`, `forget` | `brain:read`, `brain:write` |
-| `weather` | `get_weather`, `get_forecast` | `network:internet` |
-| `web_intelligence` | `fetch_url`, `extract_content`, `search`, `research`, `lookup`, `learn_from_web`, `recall_web` | `network:internet` |
+| `knowledge` | `remember`, `search`, `forget`, `recall_about`, `what_do_you_know` | `brain:read`, `brain:write` |
+| `weather` | `get_weather`, `get_forecast`, `will_it_rain` | `network:internet` |
+| `web_intelligence` | `search`, `fetch`, `research`, `learn_from_web`, `recall_web`, `lookup` | `network:internet` |
 | `home_assistant` (v0.11.8) | `list_lights`, `turn_on_light`, `turn_off_light`, `turn_on_switch`, `turn_off_switch`, `read_sensor`, `list_sensors`, `set_temperature` | `network:local` |
 | `caldav` (v0.11.9) | `list_calendars`, `get_today`, `get_upcoming`, `get_event`, `find_free_slot`, `search_events` | `network:internet` |
 
@@ -322,8 +324,8 @@ crash and the credential entry can never share state.
 | `PluginError` | Base class for the plugin system. |
 | `ManifestError` | `plugin.yaml` missing or invalid. |
 | `PermissionDeniedError` | Runtime access without the matching `Permission`. |
-| `PluginDisabledError` | Tool invoked on a disabled plugin. |
-| `PluginAutoDisabledError` | Plugin hit `_MAX_CONSECUTIVE_FAILURES` (5). |
+| `PluginDisabledError` | Tool invoked on a disabled plugin (including one auto-disabled after `_MAX_CONSECUTIVE_FAILURES` = 5). |
+| `PluginAutoDisabledError` | `PermissionEnforcer` hit `max_denials` (10) consecutive permission denials. |
 | `InvalidTransitionError` | Illegal lifecycle state transition. |
 
 ## Roadmap

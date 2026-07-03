@@ -43,7 +43,9 @@ Provider credentials use their native names (not `SOVYX_`-prefixed):
 
 ## Engine Config — `system.yaml`
 
-`system.yaml` is optional. When absent, defaults are used. Full schema:
+`system.yaml` is optional. When absent, defaults are used. Operator-relevant
+sections (the exhaustive field list is `EngineConfig` in
+`src/sovyx/engine/config.py`):
 
 ```yaml
 data_dir: ~/.sovyx          # Base directory for everything
@@ -87,6 +89,32 @@ llm:
     I'm having trouble thinking clearly right now — my language
     models are unavailable. I can still remember things and listen
     to you.
+
+voice:                      # Operator-facing voice feature flags
+  calibration_wizard_enabled: true   # See "Voice calibration wizard" below
+
+observability:              # Logging pipeline, PII policy, sampling, metrics
+  # Sub-models: features, pii, sampling, tuning, otel — see
+  # docs/observability.md and "Resource hygiene tuning" below.
+  async_queue_size: 65536
+  ring_buffer_size: 2000
+
+security:
+  secrets_rotated_at: null  # ISO-8601; when older than rotation_warn_days,
+                            # boot emits security.secrets.rotation_overdue
+  rotation_warn_days: 90
+
+plugins:                    # Supply-chain gate for entry-point plugins
+  allow_third_party_plugins: false   # First-party plugins always load
+  trusted_plugin_packages: []        # Audited pip package names (opt-in list)
+
+tuning:                     # Low-level thresholds/timeouts — see
+  safety: {}                # "Tuning knobs (SOVYX_TUNING__*)" below
+  brain: {}
+  voice: {}
+  llm: {}
+  retention: {}
+  dashboard: {}
 ```
 
 ### Hardware tiers
@@ -194,6 +222,9 @@ llm:
   streaming: true
   budget_daily_usd: 2.0
   budget_per_conversation_usd: 0.5
+  budget_monthly_usd: null                 # Optional monthly cap (calendar month);
+                                           # null disables it. Checked in addition
+                                           # to the daily cap.
 ```
 
 See [LLM Router](llm-router.md) for routing behavior.
@@ -223,6 +254,16 @@ brain:
     confidence_llm: 0.30
     confidence_explicitness: 0.20
     confidence_richness: 0.15
+
+  emotional_baseline:
+    # The "resting" emotional state a mind drifts toward. Defaults are
+    # a neutral baseline with a gentle pull back to it.
+    valence: 0.0            # Pleasure/displeasure axis, -1.0 – 1.0
+    arousal: 0.0            # Activation axis, -1.0 – 1.0
+    dominance: 0.0          # Sense-of-control axis, -1.0 – 1.0 (reserved
+                            # for the PAD migration; read, not yet consumed)
+    homeostasis_rate: 0.05  # Pull toward baseline per consolidation
+                            # cycle, 0.0 (off) – 1.0 (full reset)
 ```
 
 Weight sums are validated at startup — a typo surfaces immediately.
@@ -234,8 +275,8 @@ channels:
   telegram:
     token_env: SOVYX_TELEGRAM_TOKEN      # Env var NAME, not the token itself
     allowed_users: []                    # Empty = anyone
-  signal:
-    enabled: true
+  discord:
+    token_env: SOVYX_DISCORD_TOKEN
 ```
 
 Tokens are always read from environment variables. `token_env` is the
@@ -349,17 +390,20 @@ environment variable (nesting delimiter is two underscores).
 ```yaml
 tuning:
   safety:
-    classifier_budget_per_hour: 20        # LLM classifier calls per hour
-    classifier_cache_ttl_seconds: 300     # memoization window
-    escalation_decay_minutes: 60
-    # … full list in src/sovyx/engine/config.py
+    audit_flush_interval_seconds: 10.0    # safety audit buffer flush cadence
+    audit_buffer_max: 100                 # audit entries buffered before flush
+    pii_ner_timeout_seconds: 2.0          # PII NER inference deadline
+    notification_debounce_seconds: 900.0  # safety notification debounce (15 min)
 
   brain:
-    model_url: "https://…/all-MiniLM-L6-v2.onnx"   # embedding model URL
-    model_sha256: "…"                              # pinned SHA, refuses wrong file
-    model_download_retries: 3
-    consolidation_levenshtein_threshold: 0.85
-    # …
+    star_topology_k: 15                   # star-topology relation fan-out
+    novelty_high_similarity: 0.85         # >= → novelty 0.05 (near-duplicate)
+    novelty_low_similarity: 0.30          # <= → novelty 0.95 (very novel)
+    cold_start_threshold: 10              # concepts below this = cold start
+    cold_start_novelty: 0.70              # novelty assigned during cold start
+    model_download_cooldown_seconds: 900  # embedding-model re-download cooldown
+    # The embedding model itself (e5-small-v2, int8) is NOT tunable — its
+    # URLs + SHA pin are fixed in src/sovyx/brain/_model_downloader.py.
 
   voice:
     auto_select_min_gpu_vram_mb: 4000     # GPU VRAM for auto-selecting Kokoro
@@ -392,12 +436,11 @@ tuning:
 Examples:
 
 ```bash
-# Crank the safety classifier budget for a load test.
-export SOVYX_TUNING__SAFETY__CLASSIFIER_BUDGET_PER_HOUR=200
+# Flush the safety audit buffer more aggressively for a debugging session.
+export SOVYX_TUNING__SAFETY__AUDIT_FLUSH_INTERVAL_SECONDS=2
 
-# Pin a different embedding model for an offline environment.
-export SOVYX_TUNING__BRAIN__MODEL_URL=file:///opt/models/embedding.onnx
-export SOVYX_TUNING__BRAIN__MODEL_SHA256=<sha256>
+# Widen the near-duplicate novelty band for a dense knowledge domain.
+export SOVYX_TUNING__BRAIN__NOVELTY_HIGH_SIMILARITY=0.90
 
 # Lower device-test frame rate on slow displays.
 export SOVYX_TUNING__VOICE__DEVICE_TEST_FRAME_RATE_HZ=15

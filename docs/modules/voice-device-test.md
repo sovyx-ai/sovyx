@@ -59,14 +59,28 @@ configurable window (default 1 500 ms) then decays at 20 dB/s.
 |---|---|
 | `disabled` | The device-test subsystem is disabled in config. |
 | `rate_limited` | Per-token reconnect limit exceeded (sliding window, default 10 reconnects per 60 s). |
-| `unauthorized` | Invalid / missing token. |
 | `pipeline_active` | The live voice pipeline is running — cannot run a test concurrently. |
 | `tts_unavailable` | No TTS engine configured or the model is missing. |
+| `models_not_downloaded` | TTS models not yet downloaded — run the model download first. |
 | `device_not_found` | The requested PortAudio index does not exist. |
 | `device_busy` | The device is held by another process. |
+| `device_disappeared` | The device vanished mid-session (e.g. USB mic unplugged). |
 | `permission_denied` | OS denied access (typically macOS microphone permission). |
+| `unsupported_samplerate` | The device rejected the requested sample rate. |
+| `unsupported_channels` | The device rejected the requested channel count. |
+| `unsupported_format` | The device rejected the requested sample format. |
+| `buffer_size_invalid` | The requested buffer size was rejected. |
+| `replaced_by_newer_session` | A newer connection from the same token took over this session. |
+| `job_not_found` | Unknown playback `job_id` on the output poll endpoint. |
+| `job_expired` | The playback job aged out past `device_test_output_job_ttl_seconds`. |
 | `invalid_request` | Payload rejected by Pydantic validation. |
 | `internal_error` | Anything else — surface `detail` to the user. |
+
+(This table mirrors `ErrorCode` in
+`src/sovyx/voice/device_test/_protocol.py`. Note there is no
+`unauthorized` error code — an invalid / missing token never gets an
+error frame; the server rejects the connection with WS close code
+`4001` directly.)
 
 All terminal failures on the WebSocket map to **application close codes**
 (constants in `src/sovyx/voice/device_test/_protocol.py`): `4001
@@ -146,6 +160,9 @@ All thresholds live on `EngineConfig.tuning.voice` (flat fields prefixed
 | `device_test_max_sessions_per_token` | `1` | Concurrent meter sessions per auth token (1 = singleton). |
 | `device_test_max_phrase_chars` | `200` | Cap on the TTS test phrase length. |
 | `device_test_output_job_ttl_seconds` | `60` | How long finished playback jobs remain pollable. |
+| `device_test_max_lifetime_s` | `300.0` | Absolute session lifetime cap — a frozen / minimised tab cannot hold the mic past 5 min; the session closes with reason `max_lifetime`. |
+| `device_test_peer_alive_timeout_s` | `10.0` | No-successful-send watchdog — if the peer stops receiving frames for this long, the session closes with reason `peer_dead` and releases the device. |
+| `device_test_force_close_grace_s` | `2.0` | Grace window the pre-enable `close_all()` hook waits for each test session to release its PortAudio stream before force-closing (handoff to the real voice pipeline). |
 
 ## Observability
 

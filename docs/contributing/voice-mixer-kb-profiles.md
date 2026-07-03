@@ -100,12 +100,18 @@ amixer -c 0 dump > tests/fixtures/voice/mixer/<your_profile_id>_after.txt
 
 ### 4. Capture validation audio
 
-Speak into the mic for 3 seconds while running the Sovyx capture
-diagnostic:
+Speak into the mic for 3 seconds while recording with a standard
+capture tool (the fixture format is a plain 16 kHz mono PCM WAV):
 
 ```bash
-sovyx doctor voice --capture-fixture tests/fixtures/voice/mixer/<your_profile_id>_capture.wav
+arecord -D default -f S16_LE -r 16000 -c 1 -d 3 \
+    tests/fixtures/voice/mixer/<your_profile_id>_capture.wav
 ```
+
+(or, cross-platform, `python -c` with the `sounddevice` + `soundfile`
+packages: `sd.rec(3 * 16000, samplerate=16000, channels=1)` then
+`sf.write(...)`). Then run `sovyx doctor voice` to confirm the
+capture gates pass on the same device.
 
 The captured WAV must:
 - RMS in [-38, -12] dBFS (or whatever range your tests pin)

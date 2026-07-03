@@ -1,8 +1,12 @@
 # API Reference
 
 Sovyx exposes an HTTP + WebSocket API served by the embedded FastAPI dashboard.
-The default bind address is `127.0.0.1:7777`. All endpoints except `/metrics`
-require a Bearer token.
+The default bind address is `127.0.0.1:7777`. All `/api/*` endpoints require a
+Bearer token, with these exceptions: `/metrics` (Prometheus exposition), the
+OpenAPI schema (`/openapi.json`) and interactive docs (`/api/docs`), and the
+SPA static assets / fallback routes that serve the dashboard itself. The
+WebSocket endpoint (`/ws`) authenticates via a `?token=` query parameter
+instead of the `Authorization` header.
 
 ## Authentication
 
@@ -149,16 +153,13 @@ remediation.
 | Method | Path                                              | Description                                                           |
 | ------ | ------------------------------------------------- | --------------------------------------------------------------------- |
 | POST   | `/api/voice/calibration/start`                    | Start a calibration run. Mind id required (`feedback_no_speculation` Pattern A — no sentinel default per anti-pattern #35). |
-| GET    | `/api/voice/calibration/status/{job_id}`          | Poll calibration progress.                                            |
-| POST   | `/api/voice/calibration/cancel/{job_id}`          | Cancel an in-flight run.                                              |
-| GET    | `/api/voice/calibration/profile`                  | Read the active calibration profile (schema v1; signature verdict).   |
-| GET    | `/api/voice/calibration/profile/inspect`          | Detailed profile dump with rule-firing trace + measurement breakdown. |
-| POST   | `/api/voice/calibration/profile/regenerate`       | Regenerate profile from current measurements (no fresh capture).      |
+| GET    | `/api/voice/calibration/jobs/{job_id}`            | Poll calibration progress.                                            |
+| POST   | `/api/voice/calibration/jobs/{job_id}/cancel`     | Cancel an in-flight run.                                              |
 | GET    | `/api/voice/calibration/backups`                  | List timestamped profile backups for the resolved mind.               |
-| POST   | `/api/voice/calibration/backup/restore`           | Restore a backup by timestamp.                                        |
+| POST   | `/api/voice/calibration/rollback`                 | Roll back to the most recent prior calibration generation.            |
 | WS     | `/api/voice/calibration/jobs/{job_id}/stream`     | Live calibration progress stream (per-rule firing + decision events). |
-| POST   | `/api/voice/calibration/signing-key/generate`     | Server-side Ed25519 key-gen flow (alternative to the CLI command).    |
-| GET    | `/api/voice/calibration/signing-key/status`       | Key presence + fingerprint without exposing the private half.         |
+| POST   | `/api/voice/calibration/generate-signing-key`     | Server-side Ed25519 key-gen flow (alternative to the CLI command).    |
+| GET    | `/api/voice/calibration/signing-key`              | Key presence + fingerprint without exposing the private half.         |
 
 #### Voice — wizard (onboarding flow)
 
@@ -185,9 +186,9 @@ remediation.
 
 | Method | Path                                              | Description                                                           |
 | ------ | ------------------------------------------------- | --------------------------------------------------------------------- |
-| GET    | `/api/voice/kb/profiles`                          | List installed KB profiles for the active mind.                       |
-| GET    | `/api/voice/kb/profiles/{name}`                   | Inspect a KB profile (signature verdict, content, provenance).        |
-| POST   | `/api/voice/kb/profiles/{name}/install`           | Install / pin a profile from the local store.                         |
+| GET    | `/api/voice/health/kb/profiles`                   | List installed KB profiles for the active mind.                       |
+| GET    | `/api/voice/health/kb/profiles/{profile_id}`      | Inspect a KB profile (signature verdict, content, provenance).        |
+| POST   | `/api/voice/health/kb/validate`                   | Validate a candidate profile YAML against the shipping schema.        |
 | POST   | `/api/voice/kb/contribute`                        | Submit a calibration profile back to the community KB queue (post-anonymisation). |
 
 #### Voice — device-test (legacy URL — superseded by wizard endpoints)
@@ -271,15 +272,15 @@ event: phase
 data: {"phase": "thinking"}
 
 event: token
-data: {"delta": "Hello"}
+data: {"text": "Hello"}
 
 event: done
 data: {"conversation_id": "...", "tokens_in": 512, "tokens_out": 40, "latency_ms": 812}
 ```
 
-Any failure mid-stream is delivered as a terminal `error` event with `code`
-and `message`, then the connection is closed. Dashboards should fall back
-to `POST /api/chat` if the stream cannot be opened.
+Any failure mid-stream is delivered as a terminal `error` event whose data
+is `{"error": "<message>"}`, then the connection is closed. Dashboards
+should fall back to `POST /api/chat` if the stream cannot be opened.
 
 ### Data portability
 
@@ -289,6 +290,22 @@ to `POST /api/chat` if the stream cannot be opened.
 | POST   | `/api/import`                         | Import an SMF archive (replace or merge, declared in body). |
 | POST   | `/api/import/conversations`           | Multipart upload (`platform=chatgpt\|claude\|gemini` + `file`). Returns `202` with `{job_id, conversations_total}`; encoding runs in a background `asyncio.Task`. |
 | GET    | `/api/import/{job_id}/progress`       | Live snapshot for an import job: `{state, conversations_processed/skipped, episodes_created, concepts_learned, warnings, error, elapsed_ms}`. |
+
+### Mind management
+
+Per-mind data-lifecycle operations (prefix `/api/mind`, Bearer auth).
+
+| Method | Path                                    | Description                                                                 |
+| ------ | --------------------------------------- | --------------------------------------------------------------------------- |
+| POST   | `/api/mind/{mind_id}/forget`            | Purge every per-mind row (right-to-erasure). Body requires `confirm` (the exact mind id, even for `dry_run=true`); returns per-table purge counts. |
+| POST   | `/api/mind/{mind_id}/retention/prune`   | Apply the time-based retention policy — removes only records older than the configured horizons. Supports `dry_run`; no `confirm` required. |
+| POST   | `/api/mind/{mind_id}/wake-word/toggle`  | Toggle `wake_word_enabled` for a mind. Pre-validates the wake-word ONNX before writing `mind.yaml`; 422 with remediation when the model can't resolve. |
+
+### Observability
+
+| Method | Path                        | Description                                                                 |
+| ------ | --------------------------- | --------------------------------------------------------------------------- |
+| GET    | `/api/observability/health` | Meta-monitoring snapshot of the observability stack itself (queue depth, dropped/handler-error counters, FTS5 lag, tamper-chain, tracing exporter state, `self_check_passed`). Best-effort: broken sub-components degrade to `null` instead of 500-ing. |
 
 ### Safety
 
@@ -517,7 +534,9 @@ asyncio.run(main())
 ## Example — WebSocket (JavaScript)
 
 ```javascript
-const token = await (await fetch("/api/token")).text();
+// There is no HTTP endpoint that returns the token — obtain it out of band
+// (`sovyx token` reads it from ~/.sovyx/token) and inject it into the client.
+const token = "your-token";
 const ws = new WebSocket(`ws://127.0.0.1:7777/ws?token=${token}`);
 
 ws.onmessage = (ev) => {

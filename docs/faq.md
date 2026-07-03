@@ -98,10 +98,10 @@ See `security.md` for the full posture.
 
 Two supported ways:
 
-1. **Manual export** via the dashboard's `GET /api/export` endpoint or the
-   CLI `sovyx export`. Produces a Sovyx Mind Format (SMF) archive that
+1. **Manual export** via the dashboard's `GET /api/export` endpoint (there
+   is no CLI export command). Produces a `.sovyx-mind` ZIP archive that
    contains every concept, episode, relation, and configuration. You can
-   restore it into a new mind with `sovyx import`.
+   restore it into a new mind with `POST /api/import`.
 2. **Encrypted cloud backups** on the cloud tier. Scheduled GFS retention
    (7 daily, 4 weekly, 12 monthly) with zero-knowledge encryption.
 
@@ -131,8 +131,8 @@ Each conversation is summary-encoded into one `Episode` plus extracted
 `Concept` rows; re-importing the same archive is deduplicated via a SHA-256
 key on the `conversation_imports` table. Obsidian vault import reads
 Markdown files with YAML frontmatter, wiki links, and nested tags. For
-anything else, you can still wrap raw text into the SMF schema and use
-`sovyx mind import`.
+anything else, you can still wrap raw text into the SMF schema and upload
+the archive via `POST /api/import`.
 
 ## Can I export everything?
 
@@ -145,7 +145,7 @@ same format.
 ## Is Sovyx production-ready?
 
 It depends on the definition of production. The cognitive core, brain,
-persistence, observability, and dashboard are at version **0.16** and have
+persistence, observability, and dashboard are at version **0.49.60** and have
 ~8,780 tests behind them (~7,960 backend, ~820 frontend). We run Sovyx
 ourselves every day. The public API surface is stable and SemVer'd. Features
 explicitly labelled "planned" in the changelog or release notes are not yet
@@ -195,7 +195,8 @@ Or disable "Voice isolation" / "Voice Clarity" in Windows Sound
 settings → Device properties → Advanced. See
 `docs/modules/voice.md` for the full detection and bypass flow.
 
-Run `sovyx doctor` — the `voice_capture_apo` check reports which
+Run `sovyx doctor voice_capture_integrity` (legacy alias:
+`voice_capture_apo`) — the dedicated subcommand reports which
 endpoints are affected and names the fix.
 
 ## Where do I report bugs?

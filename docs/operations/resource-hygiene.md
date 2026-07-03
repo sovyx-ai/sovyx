@@ -8,25 +8,31 @@ operator-facing tools that consume that data.
 
 Each `self.health.snapshot` record (emitted every
 `observability.sampling.perf_hotpath_interval_seconds`, default 60 s)
-now carries 34 canonical fields across these cohorts (post-v0.49.31
-F2-list closure; the 22 H4 new fields are the spec §3 F2 canonical
-acceptance set):
+now carries 37 canonical `FieldSpec` fields across these cohorts —
+28 canonical-only plus 9 that dual-emit a legacy alias during the
+LENIENT window (SSoT:
+`observability/_resource_registry.py::_HEALTH_SNAPSHOT_FIELDS`):
 
-- **process** (10 fields, 3 added by v0.49.31) — `process.rss_bytes`,
+- **process** (12 fields) — `process.rss_bytes`,
   `process.vms_bytes`, `process.cpu_percent`, `process.num_threads`,
   `process.num_handles_or_fds`, `process.open_files_count`,
-  `process.connections_count`, `process.memory_percent`,
+  `process.open_files_status`, `process.connections_count`,
+  `process.connections_status`, `process.memory_percent`,
   `process.cpu_times_user_s`, `process.cpu_times_system_s`.
-- **asyncio** (5 fields, 2 added by v0.49.31) — `asyncio.task_count`,
-  `asyncio.running_count`, `asyncio.pending_count`,
-  `asyncio.current_running_task_name`,
+- **asyncio** (5 fields) — `asyncio.task_count`,
+  `asyncio.not_done_count` (legacy alias `asyncio.running_count`),
+  `asyncio.awaiting_count` (legacy alias `asyncio.pending_count`),
+  `asyncio.all_task_names` (legacy alias
+  `asyncio.current_running_task_name`),
   `asyncio.default_executor_state` (dict with `pool_size` +
   `queue_depth` + `max_workers`).
-- **to_thread** (6 fields, 1 added by v0.49.31 as F2 canonical alias) —
-  `to_thread.pool_size`, `to_thread.active_workers` (alias of
-  `pool_size` — Python's ThreadPoolExecutor exposes only
-  `len(_threads)`), `to_thread.queue_depth`, `to_thread.max_workers`,
-  `to_thread.dispatch_count_total`,
+- **to_thread** (5 fields) —
+  `to_thread.pool_size_at_last_dispatch`,
+  `to_thread.max_workers_at_last_dispatch`,
+  `to_thread.queue_depth_at_last_dispatch` (legacy aliases drop the
+  `_at_last_dispatch` suffix; the retired `to_thread.active_workers`
+  shim is still dual-emitted from `pool_size_at_last_dispatch` until
+  v0.55.0), `to_thread.dispatch_count_total`,
   `to_thread.dispatch_count_per_label`.
 - **lock_dict** — `lock_dict.total_cardinality`,
   `lock_dict.per_owner`, `lock_dict.instance_count`.
@@ -35,8 +41,13 @@ acceptance set):
 - **tracemalloc** — `tracemalloc.is_tracing`,
   `tracemalloc.current_kb`, `tracemalloc.peak_kb` (only meaningful
   when `observability.features.tracemalloc=True`).
-- **exception_cohort** — `exception_cohort.retained_bytes_estimate`,
-  `exception_cohort.distinct_group_id_count`,
+- **exception_cohort** (5 fields) —
+  `exception_cohort.cumulative_retained_bytes_since_start` (legacy
+  alias `exception_cohort.retained_bytes_estimate`),
+  `exception_cohort.cumulative_distinct_group_id_count` (legacy alias
+  `exception_cohort.distinct_group_id_count`),
+  `exception_cohort.window_retained_bytes`,
+  `exception_cohort.window_distinct_group_id_count`,
   `exception_cohort.last_observation_monotonic`.
 
 ### Legacy alias during the LENIENT window
@@ -54,7 +65,7 @@ Returns a structured JSON envelope of the live snapshot:
 {
   "observed_at_unix": 1716143280.42,
   "cohorts": {
-    "to_thread.pool_size": 4,
+    "to_thread.pool_size_at_last_dispatch": 4,
     "to_thread.dispatch_count_total": 142,
     "to_thread.dispatch_count_per_label": {
       "voice.vad.silero": 80,
@@ -76,7 +87,7 @@ Returns a structured JSON envelope of the live snapshot:
     "tracemalloc.is_tracing": false
   },
   "canonical_field_count": 28,
-  "legacy_alias_count": 1
+  "legacy_alias_count": 9
 }
 ```
 
@@ -135,11 +146,12 @@ v0.54.0.
 
 ## See also
 
-- **Phase 1.D (v0.49.17 — pending):** `ResourceCohortGovernor` adds
-  5 cohort budget verdicts (rss_growth_spike, thread_count_spike,
-  lock_dict_cardinality_saturated, onnx_session_unexpected_count,
-  exception_cohort_retention_high), heap-snapshot file capture with
-  rotation, and a circuit-breaker for runaway cohorts.
+- **Phase 1.D (shipped):** `ResourceCohortGovernor` evaluates
+  5 cohort budget verdicts on every snapshot tick (rss_growth_spike,
+  thread_count_spike, lock_dict_cardinality_saturated,
+  onnx_session_unexpected_count, exception_cohort_retention_high),
+  plus heap-snapshot file capture with rotation and a circuit-breaker
+  for runaway cohorts.
 - **Mission spec:**
   `docs-internal/missions/MISSION-h4-resource-hygiene-instrumentation-2026-05-19.md`
   (gitignored internal planning doc).

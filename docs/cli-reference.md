@@ -156,10 +156,14 @@ Brain memory inspection. Subcommands:
 |---|---|
 | `sovyx brain search "<query>" [--mind <id>] [--limit N]` | Search concepts in the brain. |
 | `sovyx brain stats [--mind <id>]` | Show brain statistics (concept / episode / relation counts). |
-| `sovyx brain analyze scores` | Importance + confidence score distribution report. |
+| `sovyx brain analyze scores <mind_id> [--json] [--db <path>]` | Importance + confidence score distribution report. |
 
-All brain subcommands require a running daemon. To bootstrap a new
-mind, use `sovyx init <name>` (there is no `mind create` subcommand).
+`brain search` and `brain stats` require a running daemon (they call
+its RPC endpoint). `brain analyze scores` reads the mind's SQLite
+database directly (default `~/.sovyx/data/<mind_id>/brain.db`,
+overridable with `--db`) and works without a daemon. To bootstrap a
+new mind, use `sovyx init <name>` (there is no `mind create`
+subcommand).
 
 ---
 
@@ -270,6 +274,30 @@ sovyx doctor --json           # machine-readable output
 | `sovyx doctor resources [--json] [--cohort <name>] [--explain <field>] [--watch] [--tracemalloc-snapshot]` | Render the engine resource-cohort snapshot (Mission H4) — live daemon RPC when reachable, in-process registry otherwise. |
 | `sovyx doctor gates [--json]` | Print the Quality Gates registry — STRICT/LENIENT state + sunset target per gate. |
 
+### `sovyx doctor voice` flags
+
+| Flag | Description |
+|---|---|
+| `--json` | Machine-readable JSON output. |
+| `--fix` | Apply safe remediations — resets saturated ALSA mixer controls (Capture + Internal Mic Boost) to a known-safe fraction. **Linux-only.** |
+| `--yes`, `-y` | Skip the interactive confirmation on `--fix`. Required when stdin is not a TTY (systemd, cron, CI). |
+| `--dry-run` | With `--fix`: print the planned mixer changes without mutating anything. |
+| `--card-index <N>` | With `--fix`: restrict the reset to one ALSA card index (default: every saturated card). |
+| `--full-diag` | Run the platform-native forensic diagnostic + triage in-process. Linux: bundled bash toolkit (8-12 min, interactive). Windows: native WASAPI/APO/mic-consent probes (non-interactive). macOS: not yet supported. Mutually exclusive with `--fix`. |
+| `--non-interactive` | With `--full-diag`: skip every operator-prompt window (reduces forensic coverage). Required when stdin is not a TTY. |
+| `--calibrate` | Automatic 8-12 min hardware tune-up; saves a per-mind calibration profile so future runs replay it in seconds. **Linux-only.** Mutually exclusive with `--fix` / `--full-diag`. Prereq gate is STRICT since v0.40.0 (exit 6 when no mic is configured). |
+| `--mind-id <id>` | The mind whose calibration to compute (auto-detected when exactly one mind exists). Also scopes the LLM provider-health surface in default preflight mode. |
+| `--input-device <spec>` | Escape hatch with `--calibrate --non-interactive`: inline-configures the named device (substring or index match), persists to `mind.yaml`, then continues. |
+| `--explain` | With `--calibrate`: also show WHICH detection rules fired and why. |
+| `--show` | With `--calibrate`: read-only display of the last saved calibration profile. |
+| `--rollback` | With `--calibrate`: restore the most-recent prior calibration (up to 3 generations retained). |
+| `--surgical` | With `--calibrate` / `--full-diag`: fast ~30 s re-run mode — skips speech-capture windows. Use only when hardware hasn't changed. |
+| `--evaluate-rules` | With `--calibrate`: preview which detection rules WOULD fire without running the full tune-up. **Linux-only.** |
+| `--inspect-migration` | With `--calibrate`: read-only print of the profile dict after walking the schema-migration chain. |
+| `--reason-filter <value>` | Filter the quarantined-endpoints section by SSoT reason class (e.g. `apo_degraded`, `driver_silent`, `capture_dead`, `unclassified`). |
+| `--device <spec>` | Restrict checks to one endpoint by GUID or friendly name (currently informational). |
+| `--signing-key <path>` | ADVANCED (developers): sign the persisted calibration profile with an Ed25519 private key. |
+
 ### Composite surfaces rendered by `sovyx doctor voice`
 
 `sovyx doctor voice` (in its default preflight mode, i.e. without
@@ -320,6 +348,11 @@ sovyx llm setup --non-interactive --provider anthropic --api-key sk-...
 Runs the live discovery scan + per-provider liveness matrix. Returns
 exit 0 on `FULLY_AVAILABLE` / `PARTIAL_HEALTH` verdicts and exit 1 on
 any other verdict — scriptable for CI / monitoring loops.
+
+`--mind-id <id>` scopes the verdict to that mind's
+`llm.default_provider` / `default_model` (auto-detected when exactly
+one mind exists on disk). Also accepted by the `sovyx llm health`
+alias.
 
 Output sections:
 
@@ -398,9 +431,9 @@ configuration heuristics shipped with the voice health subsystem):
 | Subcommand | Description |
 |---|---|
 | `sovyx kb list [--user-dir <dir>] [--shipped-only]` | List every profile with identity + match-scope + provenance (shipped + user pools). |
-| `sovyx kb inspect <profile_id>` | Print a single profile's fields in human-readable form. |
+| `sovyx kb inspect <profile_id> [--user-dir <dir>]` | Print a single profile's fields in human-readable form (searches shipped + user pools). |
 | `sovyx kb validate <path>` | Validate a candidate profile YAML against the KB schema — non-zero exit on failure. |
-| `sovyx kb fixtures <profile_id\|all>` | Verify HIL fixture files exist for a profile (CI-friendly with `all`). |
+| `sovyx kb fixtures <profile_id\|all> [--fixtures-root <dir>]` | Verify HIL fixture files exist for a profile (CI-friendly with `all`). |
 
 ---
 

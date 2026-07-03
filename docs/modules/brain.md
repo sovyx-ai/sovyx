@@ -190,25 +190,36 @@ Per run:
 
 ## Configuration
 
+`BrainConfig` (`src/sovyx/mind/config.py`) is flat — defaults shown:
+
 ```yaml
 brain:
-  consolidation:
-    interval_hours: 6
-    prune_threshold: 0.1
-  retrieval:
-    rrf_k: 60
-  spreading:
-    max_iterations: 3
-    decay_factor: 0.7
-    min_activation: 0.01
+  consolidation_interval_hours: 6
+  dream_time: "02:00"
+  dream_lookback_hours: 24
+  dream_max_patterns: 5          # 0 = dream cycle disabled
+  max_concepts: 50000
+  forgetting_enabled: true
+  decay_rate: 0.1
+  min_strength: 0.01
   scoring:
-    importance:
-      category_base: 0.15
-      llm_assessment: 0.35
-      emotional: 0.10
-      novelty: 0.15
-      explicit_signal: 0.25
+    importance_category: 0.15
+    importance_llm: 0.35
+    importance_emotional: 0.10
+    importance_novelty: 0.15
+    importance_explicit: 0.25
+    confidence_source: 0.35
+    confidence_llm: 0.30
+    confidence_explicitness: 0.20
+    confidence_richness: 0.15
+  emotional_baseline:
+    valence: 0.0
+    arousal: 0.0
+    dominance: 0.0
+    homeostasis_rate: 0.05
 ```
+
+The RRF constant (`k = 60`), the spreading-activation parameters (`max_iterations = 3`, `decay_factor = 0.7`, `min_activation = 0.01`), and the consolidation prune threshold are hardcoded, not configurable.
 
 ## Roadmap
 

@@ -10,8 +10,8 @@
 |---|---|
 | `ContextAssembler` | Orchestrator — retrieval, slot allocation, trimming, formatting. |
 | `AssembledContext` | Output dataclass — messages, tokens_used, budget_breakdown, sources. |
-| `TokenBudgetManager` | Adaptive per-slot allocation (6 rules). |
-| `TokenCounter` | Token estimation — tiktoken when available, chars/4 heuristic fallback. |
+| `TokenBudgetManager` | Adaptive per-slot allocation (5 rules). |
+| `TokenCounter` | Token counting via tiktoken (hard dependency; encoding lazy-loaded, pre-cached by `sovyx init`). |
 | `ContextFormatter` | Renders concepts/episodes/temporal into LLM-ready text. Lost-in-Middle ordering. |
 
 ## Six slots
@@ -29,7 +29,7 @@ Assembled in this order (never reordered — LLM attention is strongest at start
 
 ## Adaptive budget
 
-`TokenBudgetManager` adjusts slot allocations based on 6 runtime signals:
+`TokenBudgetManager` adjusts slot allocations based on 5 runtime signals:
 
 | Signal | Effect |
 |---|---|
@@ -37,10 +37,9 @@ Assembled in this order (never reordered — LLM attention is strongest at start
 | Short conversation (<3 turns) | Memory slots get more budget |
 | High complexity (>0.7) | Response reserve increases |
 | Many brain results (>20) | Memory concept slot grows |
-| High mean confidence (>0.7) | Memory slots shrink (fewer, better results) |
-| Small context window (<8K) | System prompt and temporal get minimum floors |
+| Mean confidence | High (>0.7): concept slot grows (reliable knowledge deserves space); low (<0.3): concept slot shrinks in favor of conversation |
 
-Minimum floors prevent any slot from disappearing: system prompt ≥200 tokens, conversation ≥500 tokens, response reserve ≥256 tokens, temporal ≥50 tokens, context window ≥2048 tokens.
+Minimum floors are applied unconditionally on every allocation: system prompt ≥200 tokens, conversation ≥500 tokens, response reserve ≥256 tokens, temporal ≥50 tokens. A `context_window` below 2048 tokens is rejected with `TokenBudgetError`.
 
 ## Lost-in-Middle ordering
 

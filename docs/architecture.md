@@ -12,7 +12,7 @@ network.
 
 | Layer | Technology |
 |---|---|
-| Runtime | Python 3.12, asyncio |
+| Runtime | Python 3.11/3.12, asyncio |
 | Config | Pydantic v2 + pydantic-settings |
 | HTTP / WebSocket | FastAPI + Uvicorn |
 | Persistence | SQLite with WAL, `aiosqlite`, `sqlite-vec`, FTS5 |
@@ -189,7 +189,7 @@ subscribes over WebSocket and re-renders live.
 
 ## Dependency Injection
 
-Services are wired through a small `ServiceRegistry` (around 150 lines). It
+Services are wired through a small `ServiceRegistry`. It
 supports singletons, transients, and eager instances, and resolves
 dependencies lazily. No heavy DI framework — the registry is Python-only so
 it works on ARM64 without a C toolchain.
@@ -214,8 +214,9 @@ SQLite is the source of truth. Every feature has to work without internet;
 the only exception is LLM inference when a local model isn't available.
 
 - **Single writer, N readers** — one connection for writes, a pool for reads.
-- **Nine non-negotiable pragmas** — WAL mode, synchronous=NORMAL, mmap,
-  foreign keys, temp_store=memory, ~64 MB cache.
+- **Seven non-negotiable pragmas** — WAL mode, synchronous=NORMAL,
+  temp_store=MEMORY, foreign keys, busy_timeout, wal_autocheckpoint,
+  incremental auto_vacuum. Cache and mmap sizes are caller-injected on top.
 - **Database per Mind** — each Mind gets its own SQLite file, fully
   isolated.
 - **Runs anywhere** — a Raspberry Pi 5, an N100 mini-PC, or a GPU
@@ -268,6 +269,10 @@ src/sovyx/
 ├── dashboard/       # FastAPI server + WebSocket bridge
 ├── plugins/         # Plugin SDK + sandbox
 ├── voice/           # TTS/STT/VAD/wake word
+├── upgrade/         # Doctor checks, importers, blue-green, backups
+├── benchmarks/      # Budget baselines
+├── tiers.py         # ServiceTier enum
+├── license.py       # Ed25519 offline license validator
 └── cli/             # Typer commands
 
 dashboard/           # React 19 SPA (Vite + Tailwind + Zustand)

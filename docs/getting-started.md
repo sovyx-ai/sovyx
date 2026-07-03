@@ -57,9 +57,9 @@ This creates:
     └── mind.yaml         # mind config — personality, LLM, brain, channels
 ```
 
-The name is required (1–64 chars, letters/digits/`_`/`-`, starts with a
-letter) and is lowercased for the filesystem path. `sovyx init MyMind`
-creates `~/.sovyx/mymind/mind.yaml`.
+The name is optional and defaults to `Sovyx` (1–64 chars,
+letters/digits/`_`/`-`, starts with a letter). It is lowercased for the
+filesystem path: `sovyx init MyMind` creates `~/.sovyx/mymind/mind.yaml`.
 
 #### Voice setup runs inline (new in v0.39.0)
 
@@ -327,7 +327,7 @@ By default Sovyx listens for "Sovyx". If you want each mind to respond to its ow
 
 | Command | Does |
 |---|---|
-| `sovyx init <name>` | Create a new mind (name required) |
+| `sovyx init [name]` | Create a new mind (name optional, defaults to `Sovyx`) |
 | `sovyx start` | Start the daemon and dashboard |
 | `sovyx stop` | Stop the daemon |
 | `sovyx status` | Show daemon status |

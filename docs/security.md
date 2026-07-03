@@ -30,22 +30,30 @@ three registries.
 `BLOCKED_IMPORTS` (root module names):
 
 ```
-os, subprocess, shutil, sys, importlib, ctypes, pickle, marshal,
-code, codeop, compileall, multiprocessing, threading, signal,
-resource, socket, http.server, xmlrpc, webbrowser, turtle, tkinter
+os, subprocess, shutil, sys, resource, signal, multiprocessing,
+threading, pty, importlib, builtins, code, codeop, compileall,
+inspect, gc, ctypes, mmap, pickle, marshal, shelve, dill, tempfile,
+socket, http.server, xmlrpc, webbrowser, turtle, tkinter
 ```
 
 `BLOCKED_CALLS`:
 
 ```
-eval, exec, compile, __import__
+eval, exec, compile, __import__, breakpoint, open
 ```
+
+(`open` is blocked because plugins must go through `SandboxedFsAccess`.)
 
 `BLOCKED_ATTRIBUTES`:
 
 ```
-__import__, __subclasses__, __bases__, __globals__, __code__, __builtins__
+__import__, __class__, __subclasses__, __bases__, __base__, __mro__,
+__globals__, __code__, __closure__, __defaults__, __builtins__,
+f_back, f_locals, f_globals, f_builtins, gi_frame, cr_frame, __dict__
 ```
+
+The class-hierarchy names block the classic
+`().__class__.__base__.__subclasses__()` escape chain.
 
 A curated `ALLOWED_IMPORTS` set covers the safe stdlib and `pydantic`/`aiohttp`
 explicitly, so submodules like `os.path` still work. Any `critical` finding

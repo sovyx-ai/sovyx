@@ -161,10 +161,13 @@ post-v0.23.0):
 
 1. Check `voice.cascade.boot_decision` log for the matched profile_id
    and the validation outcome
-2. Set `voice_kb_disabled=true` env to skip KB cascade entirely; the
-   legacy fractions take over (but emit deprecation WARN)
-3. Open a GitHub issue with the profile_id + the operator's amixer
+2. Open a GitHub issue with the profile_id + the operator's amixer
    dump triplet (before / after / capture wav)
+
+There is no global KB kill-switch config knob: L2.5 runs only when the
+cascade caller opts in (`run_cascade(mixer_sanity=MixerSanitySetup(...))`,
+default `None` = off) and it rolls back automatically whenever post-apply
+validation fails, so a misclassified preset never persists.
 
 ## Removal status
 
@@ -197,5 +200,5 @@ minor cycle of pilot soak.
 - Original refactor: `MISSION-voice-mixer-enterprise-refactor-2026-04-25.md` §3.12
 - L2.5 KB cascade: `docs/contributing/voice-mixer-kb-profiles.md`
 - Signing key rotation: `docs/contributing/voice-kb-rotation.md`
-- Deprecated functions: `src/sovyx/voice/health/_linux_mixer_apply.py:94, 200`
+- Deprecated functions: `apply_mixer_reset` / `apply_mixer_boost_up` in `src/sovyx/voice/health/_linux_mixer_apply.py`
 - Replacement function: `src/sovyx/voice/health/_linux_mixer_apply.py:apply_mixer_preset`

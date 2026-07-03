@@ -84,7 +84,7 @@ the common case where Voice Clarity sits in MFX.
 
 * On legacy Realtek HD drivers pre-2020 that lie about
   `RawProcessingSupported` (telemetry counter
-  `voice.bypass.tier1_raw_outcome{verdict=raw_property_rejected_by_driver}`
+  `sovyx.voice.health.bypass.tier1_raw.outcome{verdict=property_rejected_by_driver}`
   fires); use Tier 2 instead.
 
 ### `bypass_tier2_host_api_rotate_enabled`
@@ -214,6 +214,26 @@ Renders a Rich table with one row per check:
 Exit code: 0 when all OK; non-zero == count of anomalous rows
 (matches the existing `sovyx doctor voice` contract).
 
+### `sovyx doctor voice --full-diag` (Windows-native since v0.49.58)
+
+Produces a forensic diagnostic tarball plus an in-process triage
+verdict. On Windows the command dispatches to a native producer
+(`_run_windows_full_diag` in `cli/commands/doctor.py`) that composes
+the WASAPI / APO / mic-consent registry + COM probes into the
+Windows-v2 tarball — no bash toolkit required, and the run is
+non-interactive (no speech-capture windows, unlike the 8-12 min
+interactive Linux bash toolkit; macOS remains unsupported).
+
+* The tarball lands under `~/.sovyx/diagnostics` (parity with the
+  Linux toolkit) so it can be re-triaged later.
+* The tarball is triaged in-process and the **Triage hypotheses**
+  table is rendered, surfacing the operator-facing fix command for
+  the highest-confidence hypothesis.
+* Exit code: 0 on a clean run with verdict rendered; generic failure
+  if the producer or the triage step fails. (`--surgical` shortens
+  the Linux toolkit run; the Windows producer is already fast and
+  prompt-free.)
+
 ### `GET /api/voice/capture-diagnostics`
 
 The dashboard endpoint extends with the same fields the doctor
@@ -234,12 +254,20 @@ compatibility); v0.25.0 wire-up populates the real payload.
 | `voice.probe.cold_silence_rejected{mode=strict_reject}` | Cold probe rejected silent combo — cascade advanced | (none — this is the post-fix success event) |
 | `voice_pipeline_deaf_warning` | Per-heartbeat deaf-signal warning (capture alive but no speech energy) | Watch for `voice.deaf.detected` if the streak continues |
 | `voice.deaf.detected` | Consecutive deaf warnings reached the auto-bypass threshold | Bypass strategies fire next |
-| `voice.bypass.tier1_raw_outcome{verdict=raw_engaged}` | Tier 1 succeeded | (none — success) |
-| `voice.bypass.tier1_raw_outcome{verdict=raw_property_rejected_by_driver}` | Driver lied about `RawProcessingSupported` | Try Tier 2 |
-| `voice.bypass.tier2_host_api_rotate_outcome{verdict=rotated_then_exclusive_engaged}` | Tier 2 succeeded | (none — success) |
+| `sovyx.voice.health.bypass.tier1_raw.outcome{verdict=raw_engaged}` | Tier 1 succeeded | (none — success) |
+| `sovyx.voice.health.bypass.tier1_raw.outcome{verdict=property_rejected_by_driver}` | Driver lied about `RawProcessingSupported` | Try Tier 2 |
+| `sovyx.voice.health.bypass.tier2_host_api_rotate.outcome{phase_a_verdict=rotated_success, phase_b_verdict=<ExclusiveRestartVerdict>}` | Tier 2 rotate + exclusive completed (`phase_b_verdict="skipped"` means Phase A failed) | (none — success when both phases engaged) |
 | `voice.opener.host_api_alignment{aligned=false}` | Opener drifted off cascade winner's host_api (Furo W-4 trigger) | `cascade_host_api_alignment_enabled=true` |
 | `voice.hotplug.listener.registered` | IMMNotificationClient registration succeeded | (none — success) |
 | `voice_apo_bypass_ineffective` (legacy) / `voice.capture_integrity.bypass_ineffective` (Mission H2 v0.49.7 neutral sibling — same payload + `voice.platform` + `voice.bypass_family` metadata) | All tiers exhausted; pipeline degraded | Hot-plug the device or change the mic |
+
+> **Tier 1 / Tier 2 series are inert at HEAD.** The three
+> `sovyx.voice.health.bypass.tier*` rows above are OTel counters
+> (registered in `observability/metrics.py`) whose recording helpers
+> (`voice/health/_metrics_bypass_tier.py`) have no production caller —
+> the Tier 1/2 strategy classes are not registered in the production
+> bypass ladder (see the flag sections above). The series stay at zero
+> until the strategies are wired.
 
 ## Rolling back
 

@@ -60,9 +60,17 @@ The Obsidian importer reads YAML frontmatter, resolves `[[wiki links]]` via two-
 
 The Sovyx Mind Format (SMF) is a directory of Markdown concept files with YAML frontmatter, JSON relation metadata, and conversation episode files. The `.sovyx-mind` archive is a ZIP containing `brain.db` + `mind.yaml` + `manifest.json`.
 
+Export/import runs through the dashboard API (or the dashboard UI), not a CLI command:
+
 ```bash
-sovyx mind export my-mind --format smf --output ./export/
-sovyx mind import ./export/smf/
+# Export the active mind as a .sovyx-mind ZIP
+curl -H "Authorization: Bearer $(sovyx token)" -o my-mind.sovyx-mind \
+     http://localhost:7777/api/export
+
+# Import a .sovyx-mind ZIP (100 MiB hard cap; optional ?overwrite=true)
+curl -X POST -H "Authorization: Bearer $(sovyx token)" \
+     -F file=@my-mind.sovyx-mind \
+     http://localhost:7777/api/import
 ```
 
 ## Configuration

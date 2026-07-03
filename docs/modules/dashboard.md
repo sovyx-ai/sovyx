@@ -10,22 +10,23 @@ The Sovyx dashboard is a React SPA served by the daemon, backed by a FastAPI app
 
 | Name | Responsibility |
 |---|---|
-| `create_app(token=..., registry=...)` | FastAPI app factory. Mounts routers, middleware, and SPA fallback. |
+| `create_app(config=None, *, token=None)` | FastAPI app factory. Mounts routers, middleware, and SPA fallback. |
+| `DashboardServer(config, registry)` | Uvicorn lifecycle wrapper — calls `create_app` and wires the `ServiceRegistry` onto `app.state`. |
 | `ConnectionManager` | Tracks WebSocket clients and broadcasts JSON messages. |
 | `DashboardEventBridge` | Subscribes to the internal `EventBus` and forwards events as WS payloads. |
 | `StatusCollector` | Aggregates health, cost, latency, and counters into a single snapshot. |
 | `DailyStatsRecorder` | Persists daily aggregates (cost, tokens, messages). |
-| `RateLimitMiddleware` | Sliding-window rate limit per IP/route for `/api/chat` and `/api/import`. |
+| `RateLimitMiddleware` | Sliding-window rate limit per IP/route on every `/api/*` path. |
 | `RequestIdMiddleware` / `SecurityHeadersMiddleware` | `X-Request-Id` correlation and CSP-style response headers. |
 
-REST routers live in one file per domain under `src/sovyx/dashboard/routes/` — 21 `APIRouter` modules: `activity`, `brain`, `channels`, `chat`, `config`, `conversation_import`, `conversations`, `data`, `emotions`, `logs`, `onboarding`, `plugins`, `providers`, `safety`, `settings`, `setup`, `status`, `telemetry`, `voice`, `voice_test`, `websocket`, plus a shared `_deps.py` for the `verify_token` dependency. `server.py` wires the routers and middleware; it does not define endpoints.
+REST routers live in one file per domain under `src/sovyx/dashboard/routes/` — 33 `APIRouter` modules, grouped roughly as: core (`status`, `chat`, `conversations`, `conversation_import`, `data`, `logs`, `activity`, `emotions`, `brain`, `mind`, `settings`, `config`, `setup`, `onboarding`, `safety`, `channels`, `plugins`, `telemetry`, `websocket`), LLM (`providers`, `llm_health`), engine/observability (`engine_degraded`, `engine_resources`, `observability`), and voice (`voice`, `voice_test`, `voice_health`, `voice_calibration`, `voice_kb`, `voice_kb_contribute`, `voice_platform_diagnostics`, `voice_training`, `voice_wizard`), plus a shared `_deps.py` for the `verify_token` dependency. `server.py` wires the routers and middleware, and also defines the `/assets` static mount and the `/{path:path}` SPA-fallback endpoint itself (integrity-gated — see [dashboard-distribution-integrity](./dashboard-distribution-integrity.md)).
 
 ### Frontend (`dashboard/src/`)
 
 | Area | Contents |
 |---|---|
 | `main.tsx` / `App.tsx` / `router.tsx` | Entry point (imports `./lib/i18n` before the app), providers, React Router v7. |
-| `pages/` | 12 route pages. |
+| `pages/` | 18 route pages. |
 | `components/` | Layout, chat, settings, and shadcn/ui v4 primitives. |
 | `stores/dashboard.ts` + `stores/slices/` | Zustand root store composed from slices. |
 | `hooks/` | `useAuth`, `useWebSocket` (300 ms debounce, exponential reconnect), `useMobile`, `useOnboarding`. |
@@ -35,28 +36,17 @@ REST routers live in one file per domain under `src/sovyx/dashboard/routes/` —
 
 ## Creating the app
 
+`create_app(config=None, *, token=None)` builds the FastAPI app; when `token` is `None` it reads or generates `TOKEN_FILE` (`~/.sovyx/token`, a module constant in `server.py`). In production the app is created by `DashboardServer`, which wires the `ServiceRegistry` onto `app.state` — there is no module-level `app`:
+
 ```python
-# src/sovyx/dashboard/server.py
-TOKEN_FILE = Path.home() / ".sovyx" / "token"
-
-
-def _ensure_token() -> str:
-    """Read or generate the dashboard auth token."""
-    if TOKEN_FILE.exists():
-        token = TOKEN_FILE.read_text().strip()
-        if token:
-            return token
-    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    token = secrets.token_urlsafe(32)
-    TOKEN_FILE.write_text(token)
-    TOKEN_FILE.chmod(0o600)
-    return token
-
-
-app = create_app(
-    token=_ensure_token(),
-    registry=service_registry,   # resolves EngineConfig, EventBus, BrainService, etc.
-)
+# src/sovyx/dashboard/server.py (DashboardServer.start, simplified)
+server = DashboardServer(config=api_config, registry=service_registry)
+await server.start()
+# start() does:
+#   self._app = create_app(self._config)
+#   self._app.state.registry = self._registry          # resolves EngineConfig, EventBus, ...
+#   self._app.state.status_collector = StatusCollector(self._registry)
+#   self._app.state.health_registry = ...              # shared engine HealthRegistry
 ```
 
 Tests should pass a fixed token to `create_app` instead of patching globals:
@@ -78,12 +68,16 @@ The canonical list lives in [`api-reference.md`](../api-reference.md). Grouped h
 |---|---|
 | `status` | `/api/status`, `/api/health`, `/api/stats/history` |
 | `conversations` / `conversation_import` | `/api/conversations`, `/api/conversations/{id}`, `/api/import/conversations`, `/api/import/{job_id}/progress` |
-| `brain` | `/api/brain/graph`, `/api/brain/search`, `/api/brain/concepts/{id}` |
+| `brain` | `/api/brain/graph`, `/api/brain/search`, `/api/brain/search/vector` |
 | `logs` | `/api/logs`, `/api/logs/stream` |
 | `activity` | `/api/activity/timeline` |
 | `emotions` | `/api/emotions/*` |
 | `settings` / `config` | `/api/settings`, `/api/config` |
-| `voice` / `voice_test` | `/api/voice/*`, `/api/voice/test/*`, `WS /api/voice/test/input` |
+| `voice` + `voice_*` submodules | `/api/voice/*` (incl. `/api/voice/test/*`, `/api/voice/health/*`, `/api/voice/calibration/*`, `/api/voice/kb/*`, `/api/voice/wizard/*`, `/api/voice/training/*`, `/api/voice/platform-diagnostics/*`, `WS /api/voice/test/input`) |
+| `mind` | `/api/mind/*` (forget, retention, wake-word toggle, …) |
+| `engine_degraded` / `engine_resources` | `/api/engine/*` (degraded store + ack, resource cohorts, snapshots) |
+| `llm_health` | `/api/llm/health`, `/api/llm/test-connection` |
+| `observability` | `/api/observability/*` |
 | `plugins` | `/api/plugins`, `/api/plugins/{name}`, `/api/plugins/tools`, `/api/plugins/{name}/{enable|disable|reload}` |
 | `channels` | `/api/channels`, `/api/channels/telegram/setup` |
 | `chat` | `POST /api/chat`, `POST /api/chat/stream` |
@@ -110,25 +104,33 @@ Connect to `/ws?token=<token>`. The `DashboardEventBridge` subscribes to the int
 | `ConceptCreated` | New concept stored in the Brain. |
 | `EpisodeEncoded` | Episode encoded into memory. |
 | `ConsolidationCompleted` | Consolidation pass finished (merged, pruned, strengthened). |
+| `DreamCompleted` | Nightly dream cycle finished (patterns, concepts, relations). |
 | `ChannelConnected` / `ChannelDisconnected` | Channel state change. |
-| `PluginStateChanged` | Plugin enabled/disabled/reloaded or auto-disabled. |
 
 ## Pages
+
+18 route pages under `dashboard/src/pages/`:
 
 | Page | Route |
 |---|---|
 | Overview | `/` |
+| Onboarding | `/onboarding` |
+| Chat | `/chat` |
 | Conversations | `/conversations` |
 | Brain | `/brain` |
-| Logs | `/logs` |
-| Settings | `/settings` (10 tabs) |
-| Plugins | `/plugins` |
-| Chat | `/chat` |
-| About | `/about` |
-| NotFound | `/not-found` |
-| Voice | `/voice` |
 | Emotions | `/emotions` |
 | Productivity | `/productivity` |
+| Logs | `/logs` |
+| Settings | `/settings` (also `/settings/providers`, `/settings/voice`) |
+| Plugins | `/plugins` |
+| About | `/about` |
+| Voice | `/voice` |
+| Voice Health | `/voice/health` |
+| Voice Platform Diagnostics | `/voice/platform-diagnostics` |
+| Engine Resources | `/engine/resources` |
+| Heap Snapshot | `/engine/resources/heap-snapshot/:ts` |
+| Thread Snapshot | `/engine/resources/thread-snapshot/:ts` |
+| NotFound | `*` (catch-all) |
 
 Logs uses `@tanstack/react-virtual` for the log viewer, Brain uses `react-force-graph-2d` for the knowledge graph, and charts are drawn with `recharts`. A Cmd+K command palette is provided via `cmdk`.
 
@@ -160,14 +162,13 @@ The backend normalizes structlog output before sending: `ts → timestamp`, `sev
 
 ```yaml
 api:
+  enabled: true
   host: 127.0.0.1
-  port: 4242
-  token_file: ~/.sovyx/token
-  cors_origins: ["http://localhost:5173"]
-  rate_limit:
-    chat: "60/minute"
-    import: "5/minute"
+  port: 7777
+  cors_origins: ["http://localhost:7777"]
 ```
+
+The token file path is not configurable — it is the module constant `TOKEN_FILE = ~/.sovyx/token` in `server.py`. Rate limits are also hardcoded in `rate_limit.py` (60 s sliding window): per-endpoint `/api/chat` 20, `/api/import` 10, `/api/export` 5 requests/window; every other `/api/*` path defaults to 120 (GET) or 30 (POST/PUT/PATCH/DELETE).
 
 ## Roadmap
 

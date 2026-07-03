@@ -33,13 +33,14 @@ fail fast on drift.
 daemon's lifetime. A log forwarder that retries a batch is expected to
 deduplicate on this tuple.
 
-Three additional **contextual ids** travel alongside the envelope when
-the emit happens inside a saga or span:
+Four additional **contextual ids** travel alongside the envelope when
+the emit happens inside a saga, span, or EventBus dispatch:
 
 | Field      | Meaning                                                              |
 |------------|----------------------------------------------------------------------|
 | `saga_id`  | Top-level operation id (a single user turn, a single bridge inbound). |
 | `span_id`  | Sub-operation inside a saga (e.g. one LLM call inside a turn).        |
+| `event_id` | Id of the EventBus dispatch currently in flight.                      |
 | `cause_id` | Parent event id within an EventBus dispatch chain.                    |
 
 Forward-compatibility is part of the contract: every event schema sets
@@ -234,16 +235,25 @@ the current saga through it; the same engine powers the
 
 ## PII modes
 
-`observability/pii.py` ships three redaction modes (`OFF`, `MASK`,
-`HASH`) controlled via `EngineConfig.observability.pii_mode`. The
-default is `MASK` — emails, phone numbers, IPv4/IPv6 addresses, JWTs,
-and secrets matched by `SecretMasker` are replaced with a typed token
-(`<email>`, `<phone>`, `<ip>`).
+`observability/pii.py` redacts personally identifiable data with a
+**per-field-class** verbosity model. Each field class
+(`user_messages`, `transcripts`, `prompts`, `responses`, `emails`,
+`phones`) independently selects one of four modes via
+`EngineConfig.observability.pii`
+(`SOVYX_OBSERVABILITY__PII__<FIELD_CLASS>`):
 
-`HASH` mode swaps the token for a stable per-process SHA-256 prefix so
-operators can correlate hits across entries without learning the
-underlying value. `OFF` is for offline debugging only — never enable
-it on a daemon that ships logs off-host.
+* `minimal` — drop the value entirely (replaced with `"[redacted]"`).
+* `redacted` — pattern-mask known PII (emails, phone numbers, IP
+  addresses, JWTs, API keys, card numbers) while preserving the rest
+  of the string. Default for free-form text.
+* `hashed` — replace with a deterministic `sha256:<prefix>` so
+  operators can correlate hits across entries without learning the
+  underlying value. Default for `emails` / `phones`.
+* `full` — pass-through. Dev-only; never enable it on a daemon that
+  ships logs off-host.
+
+Every other string value additionally passes through a global regex
+sweep with the same patterns.
 
 The PII processor runs *after* the secret masker and *before* the
 field clamp + renderer, so even a rogue caller that smuggles a
@@ -251,17 +261,17 @@ secret-shaped string into a payload field gets redacted.
 
 ## Rotation and retention
 
-The daemon writes JSONL to `data/logs/sovyx.log` via a
-`RotatingFileHandler` (default: 50 MB × 5 files). Rotation is wrapped
-in `AsyncQueueHandler` + `BackgroundLogWriter` so emit sites are never
-blocked on disk IO.
+The daemon writes JSONL to `<data_dir>/logs/sovyx.log` (default
+`~/.sovyx/logs/sovyx.log`) via a `RotatingFileHandler` (default:
+50 MB × 5 files). Rotation is wrapped in `AsyncQueueHandler` +
+`BackgroundLogWriter` so emit sites are never blocked on disk IO.
 
 Critical and security-tagged records bypass the queue via
 `FastPathHandler`, which `fsync`s synchronously to a separate
-`fast_path.log` so a crash can't lose them.
+`<data_dir>/logs/sovyx.crit.jsonl` so a crash can't lose them.
 
 The `RingBufferHandler` keeps the most recent N records in memory and
-dumps them to `data/logs/crash.log` on `sys.excepthook` /
+dumps them to `<data_dir>/logs/sovyx.crash.jsonl` on `sys.excepthook` /
 `asyncio` unhandled-exception hook firing, so a hard crash leaves a
 forensic trail even when the rotating file handler couldn't flush.
 
@@ -281,8 +291,9 @@ equivalent.
 | `GET /api/logs/anomalies`            | Currently-active anomaly findings.                  |
 | `WS /api/logs/stream`                | Live tail with the same filter contract as `/logs`. |
 
-All endpoints require the dashboard auth token. The WebSocket also
-forwards the token via the `Sec-WebSocket-Protocol` header.
+All endpoints require the dashboard auth token. The WebSocket
+authenticates via a `?token=` query parameter instead of the
+`Authorization` header.
 
 ## Prometheus metrics
 
@@ -295,20 +306,20 @@ so a runaway label can't blow up scrape size.
 
 Headline series:
 
-* `sovyx_voice_vad_state` — current VAD state per mind.
-* `sovyx_voice_deaf_total` — count of deaf events (capture stream wedged).
-* `sovyx_llm_request_seconds` — histogram per provider × model.
-* `sovyx_llm_cost_usd_total` — cumulative cost per provider × model.
-* `sovyx_brain_query_seconds` — retrieval latency histogram.
-* `sovyx_plugin_invoke_seconds` — sandbox dispatch latency per plugin.
+* `sovyx_llm_latency_milliseconds` — LLM call latency histogram per provider.
+* `sovyx_llm_cost_usd_total` — cumulative cost per provider.
+* `sovyx_brain_search_latency_milliseconds` — retrieval latency histogram.
+* `sovyx_plugins_tool_latency_ms_milliseconds` — sandbox dispatch latency per plugin × tool.
 * `sovyx_log_dropped_total{reason="…"}` — async-queue overflow / clamp.
 
-The Prometheus exporter is on by default. Disable via
-`SOVYX_OBSERVABILITY__PROMETHEUS__ENABLED=false`.
+The dedicated Prometheus scrape port is **off by default**
+(`metrics_exporter=False`) — enable via
+`SOVYX_OBSERVABILITY__FEATURES__METRICS_EXPORTER=true`. The dashboard
+also serves `/metrics` on its own port regardless.
 
 ## OpenTelemetry exporter (opt-in)
 
-`observability/_otel.py` wires an OTLP exporter when
+`observability/otel.py` wires an OTLP exporter when
 `SOVYX_OBSERVABILITY__OTEL__ENABLED=true`. Default endpoint:
 `localhost:4317` (OTLP/gRPC).
 
@@ -354,10 +365,11 @@ Active findings: `GET /api/logs/anomalies` and the dashboard's
 detection runs on the live ring buffer.
 
 **Can I disable PII redaction temporarily for a session?**
-`SOVYX_OBSERVABILITY__PII_MODE=OFF` works, but it's a footgun for
-production. Prefer `MASK` (default) or `HASH` if you need correlation.
-Logs that ship off-host (forwarders, OTel exporter) should *never* run
-with `OFF`.
+Set the field class you need to `full`, e.g.
+`SOVYX_OBSERVABILITY__PII__USER_MESSAGES=full` — but it's a footgun
+for production. Prefer `redacted` (default) or `hashed` if you need
+correlation. Logs that ship off-host (forwarders, OTel exporter)
+should *never* run with `full`.
 
 **How do I deduplicate at-least-once log delivery on my forwarder?**
 Use `(timestamp, process_id, sequence_no)` — a globally-unique key

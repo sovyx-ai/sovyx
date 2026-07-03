@@ -75,14 +75,19 @@ DRIVER_ERROR          → PortAudio refused the combo
 DEVICE_BUSY           → exclusive contention with another process (wait + retry meaningful)
 EXCLUSIVE_MODE_NOT_AVAILABLE → endpoint fundamentally lacks exclusive support (T6.3); cascade advances past every exclusive combo for this endpoint
 INSUFFICIENT_BUFFER_SIZE → AUDCLNT_E_BUFFER_SIZE_* — driver rejects requested ``frames_per_buffer``; format itself is fine, retry with different buffer (T6.4)
-PERMISSION_DENIED     → OS blocked microphone access
+FORMAT_MISMATCH       → device rejected the requested rate / channels / sample format (catch-all for auto_convert=True paths and channel/format-specific rejections)
+INVALID_SAMPLE_RATE_NO_AUTO_CONVERT → sample_rate not natively supported AND combo has auto_convert=False so PortAudio cannot resample; retry with auto_convert=True or a different rate (T6.5)
+PERMISSION_DENIED     → OS blocked microphone access at open time ("you never had permission")
+PERMISSION_REVOKED_RUNTIME → open succeeded (permission existed) but start failed with a permission error — grant was revoked mid-session, e.g. Windows Privacy toggle / macOS deauthorize / Flatpak portal revoke (T6.8)
 KERNEL_INVALIDATED    → kernel-side IAudioClient stuck (USB resource timeout, driver hot-swap, mid-stream PnP churn). No user-mode cure — replug or reboot. §4.4.7 quarantines the endpoint.
 STREAM_OPEN_TIMEOUT   → driver accepted open + start but ZERO callbacks fired in ≥ 5 s (T6.2). Same physical-cure class as KERNEL_INVALIDATED but observed via callback-not-fired surface instead of an open-time error.
+HEARTBEAT_TIMEOUT     → callbacks fired briefly at probe start then went silent for ≥ 500 ms before probe end — driver delivered audio then wedged mid-probe; cascade retries a different combo (T6.6)
 MIXER_ZEROED          → L2.5: attenuation regime (Capture attenuated + boost at zero)
 MIXER_SATURATED       → L2.5: saturation regime (boost chain clipping internally)
 MIXER_UNKNOWN_PATTERN → L2.5: out-of-range mixer state with no KB match
 MIXER_CUSTOMIZED      → L2.5: intentional user tuning detected; no action taken
 MUTED                 → microphone muted at OS / hardware level
+UNKNOWN               → unclassified probe failure (catch-all)
 ```
 
 The diagnosis drives `RemediationHint` text shown in `sovyx doctor voice`
@@ -196,8 +201,11 @@ Three branches (tunable via
 ### KB profile matching
 
 Profiles live under
-`src/sovyx/voice/health/_mixer_kb/profiles/*.yaml`
-(F1 ships empty; F1.H populates). Each profile declares:
+`src/sovyx/voice/health/_mixer_kb/profiles/*.yaml`. One first-party
+profile ships today (`conexant_sn6180_vaio_vjfe69.yaml`); community
+contributions grow the pool (see
+[contributing/voice-mixer-kb-profiles.md](../contributing/voice-mixer-kb-profiles.md)).
+Each profile declares:
 
 * Match criteria — `codec_id_glob` (required), driver_family,
   system_vendor_glob, system_product_glob, audio_stack,

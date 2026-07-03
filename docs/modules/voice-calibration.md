@@ -31,6 +31,7 @@ sovyx doctor voice --calibrate --evaluate-rules      # Preview which rules WOULD
 sovyx doctor voice --calibrate --inspect-migration   # Print the migrated profile dict (post-schema-walk)
 sovyx doctor voice --calibrate --mind-id <id>        # Calibrate a specific mind (auto-detected when one mind exists)
 sovyx doctor voice --calibrate --non-interactive     # Skip the interactive speech-prompt windows
+sovyx doctor voice --calibrate --surgical            # Fast re-run (~30s vs 8-12 min) — skips speech-capture windows
 ```
 
 The `--calibrate` flow runs the Linux bash diag toolkit internally, so it is Linux-only and requires `bash >= 4`. (`--full-diag` on its own is cross-platform since W3.2: Linux runs the bash toolkit; Windows dispatches to a native WASAPI/APO/mic-consent producer; macOS is not yet supported.) Use `sovyx doctor voice --full-diag` first to audit the forensic verdict, then `--calibrate` once you trust the input.
@@ -286,7 +287,7 @@ result = run_full_diag(
 )
 ```
 
-Cuts the run to ~30s (vs ~10min default). The CLI `--calibrate` path stays on the full diag for thoroughness; surgical mode is reserved for cache-hit revalidation in the wizard's fast path.
+Cuts the run to ~30s (vs ~10min default). Two consumers drive this mode: the calibration wizard's fast-path cache-hit revalidation (shown above), and the CLI's `--surgical` flag — `sovyx doctor voice --calibrate --surgical` (or `--full-diag --surgical`) runs the same `--only A,C,D,E,J` whitelist, skipping the speech-capture windows + interactive prompts. Use `--surgical` only for re-runs when the hardware hasn't changed since a prior full calibration; the full diag remains the default and is recommended for first calibration.
 
 ## Reference map
 

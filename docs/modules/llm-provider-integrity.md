@@ -28,14 +28,14 @@ top-to-bottom).
 
 | Verdict | Severity | Triggered when | Banner chips |
 |---|---|---|---|
-| `FULLY_AVAILABLE` | (none) | At least one provider configured AND available; no degraded axes | — |
-| `PARTIAL_HEALTH` | warn | One or more providers available + one or more configured but unhealthy | View provider health |
-| `NO_PROVIDER_CONFIGURED` | critical | No cloud keys AND Ollama not reachable AND no `default_provider="ollama"` regression signal | Run sovyx llm setup, Install Ollama |
-| `OLLAMA_UNREACHABLE` | error | `mind.yaml` declares `default_provider: ollama` AND Ollama ping fails (regression from known-good state) | Start Ollama, Run sovyx llm doctor |
-| `OLLAMA_NO_MODELS` | warn | Ollama running + reachable + `list_models()` returns empty AND no cloud providers configured | Browse model library, Run sovyx llm doctor |
-| `CLOUD_KEY_INVALID` | error | Every configured cloud key has been validated as invalid AND Ollama is not the fallback | Open provider settings, Test connection |
+| `OLLAMA_UNREACHABLE` | error | `mind.yaml` declares `default_provider: ollama` AND Ollama ping fails (regression from known-good state) — checked FIRST, before `NO_PROVIDER_CONFIGURED`, so the "Start Ollama" chip surfaces | Start Ollama, Run sovyx llm doctor |
+| `NO_PROVIDER_CONFIGURED` | critical | No provider configured at all (no cloud keys AND Ollama not reachable) | Run sovyx llm setup, Install Ollama |
+| `OLLAMA_NO_MODELS` | warn | No cloud providers configured AND Ollama running + reachable + `list_models()` returns empty | Browse model library, Run sovyx llm doctor |
+| `CLOUD_KEY_INVALID` | error | Every configured cloud key has been validated as invalid AND Ollama is not reachable | Open provider settings, Test connection |
 | `ALL_PROVIDERS_UNHEALTHY` | error | At least one provider configured but none currently available | View provider health, Run sovyx llm doctor |
-| `DEFAULT_MODEL_UNAVAILABLE` | error | A provider is available but `mind_config.llm.default_model` cannot be served by it | Open provider settings |
+| `DEFAULT_MODEL_UNAVAILABLE` | error | A provider is available but `mind_config.llm.default_model` cannot be served by any available provider | Open provider settings |
+| `PARTIAL_HEALTH` | warn | One or more providers available + one or more configured but unhealthy | View provider health |
+| `FULLY_AVAILABLE` | (none) | Every configured provider available (fallthrough — no higher rule matched) | — |
 
 ## CLI surface
 

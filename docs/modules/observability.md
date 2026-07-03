@@ -37,12 +37,13 @@ Never `print()` or `logging.getLogger()` directly.
 
 ## Health checks
 
-10 probes run on demand (`GET /api/status`) or periodically:
+10 probes run on demand (`GET /api/health`) or periodically:
 
 | Check | GREEN | YELLOW | RED |
 |---|---|---|---|
-| Disk space | > 500 MB free | 100–500 MB | < 100 MB |
-| RAM | RSS < 80% available | 80–90% | > 90% |
+| Disk space | ≥ 1 GB free | 500 MB–1 GB | < 500 MB |
+| RAM | ≥ 512 MB available | 256–512 MB | < 256 MB |
+| CPU | < 80% | 80–95% | ≥ 95% |
 | Database | writable + readers ok | slow (>100 ms) | unreachable |
 | Brain indexed | concepts in FTS5 | stale index | no index |
 | LLM reachable | ≥1 provider responds | all slow | none respond |
@@ -50,19 +51,22 @@ Never `print()` or `logging.getLogger()` directly.
 | Channels | ≥1 channel connected | degraded | none |
 | Consolidation | ran within interval | overdue | never ran |
 | Cost budget | < 80% daily budget | 80–95% | > 95% exhausted |
-| Event loop lag | < 100 ms | 100–500 ms | > 500 ms |
 
 ## SLOs
 
 5 core Service-Level Objectives with Google SRE multi-window burn-rate alerting:
 
-| SLO | Target | Window |
-|---|---|---|
-| Brain search latency | p95 < 100 ms | 5 min / 1 h |
-| Response time | p95 < 3 s | 5 min / 1 h |
-| Uptime | > 99.5% | 1 h / 24 h |
-| Error rate | < 1% | 5 min / 1 h |
-| Cost per message | < $0.01 | 1 h / 24 h |
+| SLO | Target |
+|---|---|
+| Brain search latency | p95 < 100 ms |
+| Response time | p95 < 3 s |
+| Uptime | > 99.5% |
+| Error rate | < 1% |
+| Cost per message | < $0.01 |
+
+All 5 SLOs share the same standard multi-window burn-rate alert rules
+(Google SRE Workbook): fast burn 1 h / 5 m (PAGE), medium burn
+6 h / 30 m (PAGE), slow burn 3 d / 6 h (TICKET).
 
 ## Metrics
 
@@ -73,8 +77,8 @@ Prometheus-compatible metrics exported at `/metrics`:
 | `sovyx_llm_calls_total` | Counter | `provider`, `model` |
 | `sovyx_llm_tokens_total` | Counter | `direction`, `provider` |
 | `sovyx_llm_cost_usd_total` | Counter | `provider` |
-| `sovyx_llm_response_latency` | Histogram | `provider` |
-| `sovyx_cognitive_loop_latency` | Histogram | — |
+| `sovyx_llm_latency_milliseconds` | Histogram | `provider` |
+| `sovyx_cognitive_latency_milliseconds` | Histogram | — |
 | `sovyx_messages_processed_total` | Counter | `mind_id` |
 | `sovyx_errors_total` | Counter | `error_type`, `module` |
 
@@ -101,22 +105,28 @@ budget governor that closes the v0.43.1 forensic-audit §H4 gap (silent
 
 ### `self.health.snapshot` field taxonomy
 
-Every snapshot record carries 34 canonical fields organized into 8
-cohort sections (post-v0.49.31 the F2 canonical 22-H4-field list per
-Mission H4 §3 F2 is fully shipped):
+Every snapshot record carries 37 canonical `FieldSpec` fields
+organized into 8 cohort sections (SSoT:
+`_resource_registry.py::_HEALTH_SNAPSHOT_FIELDS`; 9 of the 37
+dual-emit a legacy alias during the LENIENT window):
 
-- **process** (10 fields) — `process.rss_bytes`, `process.vms_bytes`,
+- **process** (12 fields) — `process.rss_bytes`, `process.vms_bytes`,
   `process.cpu_percent`, `process.num_threads`,
   `process.num_handles_or_fds`, `process.open_files_count`,
-  `process.connections_count`, `process.memory_percent`,
+  `process.open_files_status`, `process.connections_count`,
+  `process.connections_status`, `process.memory_percent`,
   `process.cpu_times_user_s`, `process.cpu_times_system_s`.
 - **asyncio** (5 fields) — `asyncio.task_count`,
-  `asyncio.running_count`, `asyncio.pending_count`,
-  `asyncio.current_running_task_name`,
+  `asyncio.not_done_count` (legacy alias `asyncio.running_count`),
+  `asyncio.awaiting_count` (legacy alias `asyncio.pending_count`),
+  `asyncio.all_task_names` (legacy alias
+  `asyncio.current_running_task_name`),
   `asyncio.default_executor_state` (dict).
-- **to_thread** (6 fields) — `to_thread.pool_size`,
-  `to_thread.active_workers` (alias of `pool_size` per F2 canonical
-  naming), `to_thread.queue_depth`, `to_thread.max_workers`,
+- **to_thread** (5 fields) — `to_thread.pool_size_at_last_dispatch`,
+  `to_thread.max_workers_at_last_dispatch`,
+  `to_thread.queue_depth_at_last_dispatch` (legacy aliases drop the
+  `_at_last_dispatch` suffix; the retired `to_thread.active_workers`
+  shim stays dual-emitted until v0.55.0),
   `to_thread.dispatch_count_total`,
   `to_thread.dispatch_count_per_label`.
 - **lock_dict** — `lock_dict.total_cardinality`,
@@ -125,8 +135,13 @@ Mission H4 §3 F2 is fully shipped):
 - **gc** — `gc.collections_by_gen`, `gc.objects_count`.
 - **tracemalloc** — `tracemalloc.is_tracing`,
   `tracemalloc.current_kb`, `tracemalloc.peak_kb`.
-- **exception_cohort** — `exception_cohort.retained_bytes_estimate`,
-  `exception_cohort.distinct_group_id_count`,
+- **exception_cohort** (5 fields) —
+  `exception_cohort.cumulative_retained_bytes_since_start` (legacy
+  alias `exception_cohort.retained_bytes_estimate`),
+  `exception_cohort.cumulative_distinct_group_id_count` (legacy alias
+  `exception_cohort.distinct_group_id_count`),
+  `exception_cohort.window_retained_bytes`,
+  `exception_cohort.window_distinct_group_id_count`,
   `exception_cohort.last_observation_monotonic`.
 
 The legacy `system.rss_bytes` alias is dual-emitted alongside

@@ -35,7 +35,7 @@ Throughput metrics (ops/sec, tokens/sec) are inverted: a *decrease* is a regress
 ```python
 manager = BaselineManager(baselines_dir)
 report = manager.compare(current_results)
-if not report.all_passed:
+if report.has_regressions:
     raise RegressionDetected(report)
 ```
 

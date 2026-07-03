@@ -9,12 +9,12 @@ The `sovyx.engine` package is the kernel of Sovyx: it orchestrates the daemon li
 | Name | Responsibility |
 |---|---|
 | `EngineConfig` | Pydantic-settings config (prefix `SOVYX_`, `__` for nesting). Resolves `data_dir` and `log_file`. |
-| `ServiceRegistry` | Lightweight DI container (~150 LOC). Singletons, instances, reverse-order shutdown. |
+| `ServiceRegistry` | Lightweight DI container. Singletons, instances, reverse-order shutdown. |
 | `EventBus` | Async in-process event bus with error isolation and correlation-id propagation. |
 | `LifecycleManager` | Startup/shutdown orchestration. Owns the `PidLock` to prevent double-start. |
 | `HealthChecker` | 10 checks consumed by `sovyx doctor` (SQLite, sqlite-vec, embedding, LLM, disk, RSS, loop lag). |
 | `DegradationManager` | Per-component HEALTHY/DEGRADED/CRITICAL states with documented fallbacks. |
-| `DaemonRPCServer` | Local JSON-RPC 2.0 over Unix socket / named pipe. Used by CLI and dashboard. |
+| `DaemonRPCServer` | Local JSON-RPC 2.0 over Unix socket (Windows: TCP `127.0.0.1` + `.port` file). Used by CLI and dashboard. |
 
 ## Bootstrap layers
 
@@ -128,17 +128,17 @@ The dashboard `/api/health` endpoint uses a separate `HealthRegistry` in `sovyx.
 # Env equivalent: SOVYX_LOG__LEVEL=DEBUG
 log:
   level: INFO
-  console_format: pretty     # file handler always writes JSON
+  console_format: text       # or json; file handler always writes JSON
 
 database:
-  pool_size: 5
-  wal: true
+  read_pool_size: 3
+  wal_mode: true
 
 telemetry:
   enabled: false
 
 socket:
-  path: ~/.sovyx/sovyx.sock              # Windows: named pipe
+  path: ~/.sovyx/sovyx.sock              # Windows: TCP 127.0.0.1, port in sibling .port file
 ```
 
 `EngineConfig` resolves `LoggingConfig.log_file` to `data_dir/logs/sovyx.log` when unset — never hardcode log paths.

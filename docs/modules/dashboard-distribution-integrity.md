@@ -15,7 +15,7 @@ gates:
 | Gate | When | Where | Failure mode it catches |
 |---|---|---|---|
 | Build-time AST scan (Quality Gate 11) | Every `git push`, every `publish.yml` run | `scripts/dev/check_dashboard_bundle_integrity.py` (local LENIENT v0.47.x → STRICT v0.48.0) + `publish.yml` post-build (STRICT from v0.47.0) | The wheel that publishes to PyPI references a chunk not packed in the wheel |
-| Install-time boot probe | Every `create_app()` boot (every `sovyx start`) | `dashboard/server.py::create_app()` — four-state classifier | The wheel was clean at publish but the pipx unpack on this machine produced a partial install |
+| Install-time boot probe | Every `create_app()` boot (every `sovyx start`) | `dashboard/server.py::create_app()` — five-state classifier | The wheel was clean at publish but the pipx unpack on this machine produced a partial install |
 | Runtime reactive arm | Every `/assets/*` 404 | `_IntegrityAwareStaticFiles.get_response()` — debounced re-scan | The bundle was clean at boot but a file was deleted / quarantined mid-daemon |
 
 All three gates feed into the **C4 composite-banner store** as a new

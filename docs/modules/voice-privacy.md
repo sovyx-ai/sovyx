@@ -148,7 +148,7 @@ The audit trail distinguishes the two:
 
 | Surface             | Default | Rationale                                           |
 | ------------------- | ------- | --------------------------------------------------- |
-| Episodes            | 30 d    | Aligns with `LoggingConfig.retention_days` baseline  |
+| Episodes            | 30 d    | Aligns with the log FTS index's 30-day retention baseline (`observability/fts_index.py`) |
 | Conversations + turns | 30 d  | Same surface class as episodes                      |
 | Daily stats         | 365 d   | No PII; longer historical horizon for cost / usage  |
 | Consolidation log   | 90 d    | Quarterly diagnostic window                         |

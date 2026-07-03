@@ -17,7 +17,7 @@ The `sovyx.cognitive` package turns an incoming message (a perception) into an e
 | `ThinkPhase` | Selects a model by complexity, assembles context, calls `LLMRouter`. |
 | `ActPhase` | Formats the response, executes tool calls via `ToolExecutor`. |
 | `ReflectPhase` | Encodes the episode, extracts concepts, updates the brain. Split into `reflect/phase.py` orchestration + `_categories.py`, `_scoring.py`, `_prompts.py`, `_fallback.py`, `_models.py` sub-modules. |
-| `cognitive_bridge.py` | Bridges voice-pipeline transcripts into the cognitive loop. Owns the `Perception` → `CogLoopGate.submit()` hand-off for the microphone path. |
+| `voice/cognitive_bridge.py` | Bridges voice-pipeline transcripts into the cognitive loop (lives in the `sovyx.voice` package). Owns the `Perception` → `CogLoopGate.submit()` hand-off for the microphone path. |
 
 ## State machine
 
@@ -105,9 +105,9 @@ The safety stack is independent of the loop — each guard is invoked in the rel
 - `PIIGuard` — detects and redacts PII in input and output.
 - `FinancialGate` — intercepts financial tool calls and requires user confirmation.
 - `OutputGuard` — post-LLM filter on generated responses.
-- `SafetyClassifier` — multi-tier content classifier with cache and hourly LLM budget.
+- `classify_content()` — multi-tier content classification function with cache and hourly LLM budget.
 - `SafetyEscalationTracker` — per-source escalation state.
-- `ShadowMode` — dry-runs new rules without blocking.
+- `evaluate_shadow()` — dry-runs new rules without blocking.
 - `SafetyAuditTrail` — records safety events without storing original content.
 
 ## Events
@@ -130,16 +130,9 @@ and concepts are updated consistently with the non-streaming path.
 
 ## Configuration
 
-```yaml
-cognitive:
-  gate:
-    queue_max: 10
-    submit_timeout_s: 30.0
-  perceive:
-    max_input_chars: 10000
-```
+The loop's operational constants are hardcoded, not configurable: the gate queue is `PriorityQueue(maxsize=10)` (`gate.py`), the default submit timeout is `30.0` s (`CogLoopGate.submit` signature), and input is truncated at `PerceivePhase.MAX_INPUT_CHARS = 10_000` (`perceive.py`).
 
-Safety rules and thresholds live under `cognitive.safety` in the mind config.
+Safety rules and thresholds live under the top-level `safety:` section of `MindConfig` (mind.yaml).
 
 ## Testing notes
 

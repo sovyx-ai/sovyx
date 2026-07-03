@@ -41,6 +41,7 @@ Typer; auto-completion is available via
 | `sovyx doctor voice_capture_apo` | Detect Windows capture-side APOs (Voice Clarity etc.) per anti-pattern #21. |
 | `sovyx doctor voice_capture_integrity` | Platform-neutral alias of `voice_capture_apo` (Mission H2). |
 | `sovyx doctor piper_locale_match` | Flag drift between the operator's spoken language and the auto-selected Piper voice (F2-M03). |
+| `sovyx doctor stt_language_match [--language <tag>] [--json]` | Check whether a language has a Moonshine STT model (ENGINES-9 — the STT sibling of `piper_locale_match`). Exit 0 = PASS; exit 1 = WARN (no model — STT coerces to English at pipeline start). |
 | `sovyx doctor platform` | Cross-platform parity summary (Linux / Windows / macOS detection + delta to baseline). |
 | `sovyx doctor resources [--json] [--cohort <name>] [--explain <field>] [--watch]` | Engine resource-cohort snapshot (Mission H4) — live daemon RPC when reachable. |
 | `sovyx doctor gates [--json]` | Quality Gates registry: STRICT/LENIENT state + sunset target per gate. |
@@ -66,7 +67,7 @@ WASAPI/APO/mic-consent producer (W3.2); macOS is not yet supported.
 |---|---|
 | `sovyx brain search <query>` | Hybrid (KNN + FTS5 + RRF) search across the brain graph. |
 | `sovyx brain stats` | Concept / episode / relation counts. |
-| `sovyx brain analyze scores` | Importance + confidence score distribution. |
+| `sovyx brain analyze scores <mind_id> [--json] [--db <path>]` | Importance + confidence score distribution (reads the mind's SQLite directly — no daemon required). |
 
 ### `sovyx mind` — mind management (sub-app)
 
@@ -75,8 +76,8 @@ WASAPI/APO/mic-consent producer (W3.2); macOS is not yet supported.
 | `sovyx mind list` | List configured minds. |
 | `sovyx mind status` | Active mind details. |
 | `sovyx mind forget <id>` | Delete a mind (concepts + episodes + relations + voice data). |
-| `sovyx mind retention prune [--mind-id <id>] [--dry-run]` | Apply the retention policy now (delete records older than the configured TTL). |
-| `sovyx mind retention status [--mind-id <id>]` | Show retention-policy state + next-prune ETA. |
+| `sovyx mind retention prune <mind_id> [--dry-run] [--yes]` | Apply the retention policy now (delete records older than the configured horizons). `mind_id` is a positional argument. |
+| `sovyx mind retention status <mind_id>` | Read-only preview of retention horizons + prune-eligible counts (equivalent to `prune <mind_id> --dry-run`). |
 
 ### `sovyx plugin` — plugin management (sub-app)
 
@@ -84,28 +85,32 @@ WASAPI/APO/mic-consent producer (W3.2); macOS is not yet supported.
 |---|---|
 | `sovyx plugin list` | Installed plugins with state. |
 | `sovyx plugin info <name>` | Manifest, permissions, tools, risk levels. |
-| `sovyx plugin install <path> [--allow-unsafe]` | AST-scan + copy to `data_dir/plugins`. |
+| `sovyx plugin install <path> [--yes]` | AST-scan + copy to `data_dir/plugins`. `--yes` skips the permission-consent prompt. |
 | `sovyx plugin enable <name>` / `disable <name>` | Toggle. |
 | `sovyx plugin remove <name>` | Uninstall. |
 | `sovyx plugin validate <path>` | Run quality gates (manifest, AST, permissions) without installing. |
-| `sovyx plugin create <name>` | Scaffold a new plugin skeleton. |
+| `sovyx plugin create <name> [--output <dir>, -o]` | Scaffold a new plugin skeleton (default output: current directory). |
 
-### `sovyx kb` — KB profile inspection (sub-app)
+### `sovyx kb` — mixer-profile Knowledge Base inspection (sub-app)
 
-Used for the voice mixer KB profile signing flow (anti-pattern #26).
+Read-only inspection + validation of the voice mixer-profile KB
+(shipped pool + user pool at `~/.sovyx/mixer_kb/user/`). No
+PortAudio / ALSA dependency — contributors on any OS can validate a
+Linux-targeted profile. Exit codes: `0` success, `1`
+validation/lookup failure, `2` filesystem/argument error.
 
 | Command | What it does |
 |---|---|
-| `sovyx kb list` | List trusted-key profiles on disk. |
-| `sovyx kb inspect <profile>` | Show profile content + signature + verification verdict. |
-| `sovyx kb validate <profile>` | Strict-mode signature validation; non-zero exit on failure. |
-| `sovyx kb fixtures` | Generate dev / test fixtures for the trusted-key store. |
+| `sovyx kb list [--user-dir <dir>] [--shipped-only]` | List every profile (shipped + user pools) with identity, match scope, and provenance. |
+| `sovyx kb inspect <profile_id> [--user-dir <dir>]` | Print a single profile's fields (driver family, codec glob, match threshold, attestations) in human-readable form. |
+| `sovyx kb validate <path>` | Validate a candidate profile YAML with the same loader the daemon uses at boot — the authoritative "will this parse?" check before opening a PR. |
+| `sovyx kb fixtures <profile_id\|all> [--fixtures-root <dir>]` | Verify the three HIL attestation fixtures (before/after `amixer` dumps + validation capture WAV) exist for a profile; `all` checks every shipped profile (CI-friendly). |
 
 ### `sovyx audit` — tamper-evident audit log (sub-app)
 
 | Command | What it does |
 |---|---|
-| `sovyx audit verify-chain [--mind-id <id>]` | Walk the audit chain and verify hashes from genesis to head. Non-zero exit if any entry tampered. |
+| `sovyx audit verify-chain [--since <ISO date>] [--path <file>] [--audit-dir <dir>]` | Walk the audit chain and verify hashes from genesis to head. Non-zero exit if any entry tampered. |
 
 ### `sovyx llm` — LLM provider health + setup (sub-app)
 
@@ -136,7 +141,7 @@ Features:
 
 The daemon listens on a Unix domain socket (`~/.sovyx/sovyx.sock`) on POSIX platforms; on Windows it binds TCP `127.0.0.1` on an ephemeral port persisted to a `.port` file. `DaemonClient` sends JSON-RPC 2.0 requests and reads responses. Stale socket detection via probe (connect + immediate close).
 
-Methods currently wired: `status` and `shutdown` (registered in `main.py`), plus the `register_cli_handlers` set in `engine/_rpc_handlers.py` — `chat`, `mind.list`, `mind.forget`, `mind.retention.prune`, `config.get`, `wake_word.register_mind`, `wake_word.unregister_mind`, `engine.resources.snapshot`, `engine.resources.tracemalloc_snapshot`.
+Methods currently wired: `status` and `shutdown` (registered in `main.py`), plus the 14-method `register_cli_handlers` set in `engine/_rpc_handlers.py` — `chat`, `brain.search`, `brain.stats`, `mind.list`, `mind.status`, `mind.forget`, `mind.retention.prune`, `config.get`, `wake_word.register_mind`, `wake_word.unregister_mind`, `engine.resources.snapshot`, `engine.resources.tracemalloc_snapshot`, `voice.health.snapshot`, `doctor`. A registration-parity test (`tests/unit/cli/test_rpc_method_parity.py`) pins every `DaemonClient.call` literal to a registered method (anti-pattern #74).
 
 ## Configuration
 
