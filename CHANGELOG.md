@@ -24,6 +24,15 @@ documentation-hygiene sweep.**
   previously vacuous branch tests around it — are genuinely exercised
   on every CI platform. An unjustified non-win32 skip on the LPWSTR
   round-trip test was removed (semantics verified on real Linux).
+- **Release flow (root cause of the failed-publish pattern):** the
+  pre-push hook now REJECTS any `vX.Y.Z` tag push whose commit lacks
+  a completed, green `ci.yml` run — local gates prove one platform,
+  the release gate is the Linux-hard CI matrix; tagging before the
+  matrix proved the SHA is how v0.49.55 and v0.49.60 shipped failed
+  publishes. Tag-only pushes no longer need the local marker (a
+  green matrix run is strictly stronger proof). New anti-pattern
+  #75: tests around platform-conditional imports must fake the
+  module or skip the platform, never inherit the ambient env.
 - **Docs-site root 404:** a clean `mkdocs build` produced no
   `site/index.html` (nav had no `index.md`); smoke tests asserted
   fossil pages in the gitignored local `site/`. Real landing page

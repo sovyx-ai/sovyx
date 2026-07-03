@@ -39,6 +39,8 @@ git push                      # the hook REJECTS the push unless the marker is f
 
 Gates 1-7 are the stock toolchain below (ruff check / ruff format / mypy strict / bandit / pytest / tsc / vitest). Gates 8-19 are custom AST/contract discipline checkers in `scripts/dev/check_*.py` (boundary round-trips, failover-ladder iteration, degraded-signal surfacing, dashboard bundle integrity, platform-neutral event names, quarantine-reason discipline, resource hygiene, zod-twin completeness, name-lock integrity, and more) — `verify_gates.sh` runs all of them and prints a per-gate verdict. Some are LENIENT (warn-only) during a staged-adoption window and flip STRICT at a documented version.
 
+The same hook also gates **release tags**: pushing a `vX.Y.Z` tag is rejected unless the tagged commit already has a completed, successful `ci.yml` run on GitHub — local gates prove one platform, while the release-blocking CI legs run Linux. Push to `main` first, wait for the CI run to go green, then push the tag.
+
 The same commands CI runs. If one fails locally, it fails in the pull request.
 
 ```bash

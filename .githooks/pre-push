@@ -1,27 +1,43 @@
 #!/usr/bin/env bash
-# .githooks/pre-push — forcing function for verify_gates.sh discipline.
+# .githooks/pre-push — forcing function for verify_gates.sh discipline
+# AND for the release-tag flow.
 #
-# Triggered by every `git push`. Rejects the push if there is no recent
-# clean `verify_gates.sh` proof for the current HEAD.
+# Triggered by every `git push`. Two independent gates:
+#
+#   BRANCH pushes — require a recent clean `verify_gates.sh` proof
+#   for the current HEAD (the .git/.last-gates-pass marker):
+#     1. .git/.last-gates-pass file exists
+#     2. The HEAD SHA recorded in the marker matches the current HEAD
+#     3. The marker's epoch is within $MAX_AGE_SEC seconds of now
+#
+#   RELEASE-TAG pushes (refs/tags/v*) — require the ci.yml run for
+#   the TAGGED COMMIT to be completed + successful on GitHub. Local
+#   gates prove ONE platform; the release gate is the 4-cell CI
+#   matrix whose HARD legs are Linux. Tagging before the matrix has
+#   proven the exact SHA is how v0.49.55 and v0.49.60 shipped failed
+#   publishes (green-on-dev-box, red-on-Linux classes). A tag-only
+#   push that passes the CI check does NOT also need the local
+#   marker — a green matrix run on the same SHA is strictly stronger
+#   proof, and the CI wait (~15-25 min) outlives the 30-min marker
+#   anyway.
 #
 # Activation:
 #   git config core.hooksPath .githooks
 #   (or run ./scripts/install_hooks.sh once per clone)
 #
-# Acceptance criteria (all must hold for the push to proceed):
-#   1. .git/.last-gates-pass file exists
-#   2. The HEAD SHA recorded in the marker matches the current HEAD
-#   3. The marker's epoch is within $MAX_AGE_SEC seconds of now
-#
-# Escape hatch:
+# Escape hatches:
 #   `git push --no-verify` bypasses ALL pre-push hooks. CLAUDE.md
 #   `## Quality Gates` proibits this except for emergencies with
 #   explicit operator approval + commit-body rationale.
+#   `SOVYX_TAG_NO_CI_CHECK=1` skips only the tag CI check (same
+#   approval bar; for offline emergencies where `gh` cannot reach
+#   the API).
 #
 # Codified by:
 #   MISSION-post-v0_42_2-quality-discipline-2026-05-14.md Phase 2.T2.3
 #   feedback_ci_preflight.md Addendum 2026-05-14
 #   feedback_no_speculation.md Addendum 2026-05-14
+#   v0.49.61 release-flow hardening 2026-07-03 (tag CI gate)
 
 set -euo pipefail
 
@@ -64,42 +80,122 @@ reject() {
     exit 1
 }
 
-# 1. Marker existence
-if [[ ! -f "$MARKER" ]]; then
-    reject "no .last-gates-pass marker found at $MARKER (gates never ran or last run was red)"
+reject_tag() {
+    {
+        printf '%s%s🚫 pre-push hook BLOCKED the release-tag push.%s\n' "$RED" "$BOLD" "$RESET"
+        printf '\n'
+        printf 'Tag: %s  Commit: %s\n' "$1" "${2:0:8}"
+        printf 'Reason: %s\n' "$3"
+        printf '\n'
+        printf '%sRelease flow (CLAUDE.md ## Deploy Flow):%s\n' "$YELLOW" "$RESET"
+        printf '  1. Push the release commit to main FIRST.\n'
+        printf '  2. WAIT for the main ci.yml run on that commit to complete\n'
+        printf '     green (~15-25 min): gh run list --commit <sha> --workflow=ci.yml\n'
+        printf '  3. Only then push the tag. Local gates prove ONE platform;\n'
+        printf '     the Linux HARD legs are the real release gate.\n'
+        printf '\n'
+        printf 'Emergency escape (operator approval + rationale required):\n'
+        printf '  SOVYX_TAG_NO_CI_CHECK=1 git push origin <tag>\n'
+    } >&2
+    exit 1
+}
+
+# ── Read the refs being pushed (git feeds them on stdin) ─────────────
+# Format per line: <local ref> <local sha> <remote ref> <remote sha>
+BRANCH_PUSH=0
+TAG_REFS=()
+TAG_SHAS=()
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+    case "$remote_ref" in
+        refs/tags/v*)
+            TAG_REFS+=("$remote_ref")
+            TAG_SHAS+=("$local_sha")
+            ;;
+        *)
+            # Branch push (or tag deletion — local_sha all zeros; the
+            # marker gate is the right bar for those too).
+            BRANCH_PUSH=1
+            ;;
+    esac
+done
+
+# ── Gate A: release tags require a green ci.yml run on the SHA ──────
+if [[ "${#TAG_REFS[@]}" -gt 0 && "${SOVYX_TAG_NO_CI_CHECK:-0}" != "1" ]]; then
+    if ! command -v gh >/dev/null 2>&1; then
+        reject_tag "${TAG_REFS[0]}" "unknown" "gh CLI not available — cannot verify main CI is green for the tagged commit (fail-closed; SOVYX_TAG_NO_CI_CHECK=1 to override)"
+    fi
+    for i in "${!TAG_REFS[@]}"; do
+        tag_ref="${TAG_REFS[$i]}"
+        # Peel annotated tags to the commit they point at.
+        tag_sha=$(git rev-parse "${TAG_SHAS[$i]}^{commit}" 2>/dev/null || echo "${TAG_SHAS[$i]}")
+        # Any completed+successful run for this SHA passes — the
+        # newest run can be a 'cancelled' duplicate (concurrency
+        # group) that would otherwise mask an earlier green run.
+        run_state=$(gh run list --commit "$tag_sha" --workflow=ci.yml --limit 10 \
+            --json status,conclusion \
+            --jq 'if length == 0 then "none:"
+                  elif any(.[]; .conclusion == "success") then "completed:success"
+                  elif any(.[]; .status != "completed") then (map(select(.status != "completed"))[0].status) + ":"
+                  else "completed:" + .[0].conclusion
+                  end' 2>/dev/null || echo "gh-error:")
+        case "$run_state" in
+            completed:success)
+                printf '%s✓%s pre-push: main CI green for %s (%s)\n' \
+                    "$GREEN" "$RESET" "${tag_ref#refs/tags/}" "${tag_sha:0:8}" >&2
+                ;;
+            none:*|"")
+                reject_tag "$tag_ref" "$tag_sha" "no ci.yml run found for this commit — push it to main first, then wait for the run"
+                ;;
+            completed:*)
+                reject_tag "$tag_ref" "$tag_sha" "ci.yml run concluded '${run_state#completed:}' — fix main until green before tagging (never tag on red main)"
+                ;;
+            gh-error:*)
+                reject_tag "$tag_ref" "$tag_sha" "gh API call failed — cannot verify CI state (fail-closed; check network/auth or use the documented escape)"
+                ;;
+            *)
+                reject_tag "$tag_ref" "$tag_sha" "ci.yml run still '${run_state%%:*}' — wait for it to complete green"
+                ;;
+        esac
+    done
 fi
 
-# 2. HEAD SHA match
-MARKER_SHA=$(head -n1 "$MARKER" 2>/dev/null || echo "")
-HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
+# ── Gate B: branch pushes require the fresh HEAD-matched marker ─────
+# A tag-only push that passed Gate A is exempt: a green 4-cell matrix
+# run on the same SHA is strictly stronger proof than the local
+# single-platform marker, and the CI wait outlives the marker window.
+if [[ "$BRANCH_PUSH" -eq 1 ]]; then
+    # 1. Marker existence
+    if [[ ! -f "$MARKER" ]]; then
+        reject "no .last-gates-pass marker found at $MARKER (gates never ran or last run was red)"
+    fi
 
-if [[ -z "$MARKER_SHA" || -z "$HEAD_SHA" ]]; then
-    reject "marker file is malformed or HEAD not resolvable"
-fi
+    # 2. HEAD SHA match
+    MARKER_SHA=$(head -n1 "$MARKER" 2>/dev/null || echo "")
+    HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-if [[ "$MARKER_SHA" != "$HEAD_SHA" ]]; then
-    reject "marker recorded against HEAD=${MARKER_SHA:0:8} but current HEAD=${HEAD_SHA:0:8} (commit happened after gates ran — re-run)"
-fi
+    if [[ -z "$MARKER_SHA" || -z "$HEAD_SHA" ]]; then
+        reject "marker file is malformed or HEAD not resolvable"
+    fi
 
-# 3. Age
-MARKER_EPOCH=$(tail -n1 "$MARKER" 2>/dev/null || echo "0")
-if ! [[ "$MARKER_EPOCH" =~ ^[0-9]+$ ]]; then
-    reject "marker epoch malformed: '$MARKER_EPOCH'"
-fi
+    if [[ "$MARKER_SHA" != "$HEAD_SHA" ]]; then
+        reject "marker recorded against HEAD=${MARKER_SHA:0:8} but current HEAD=${HEAD_SHA:0:8} (commit happened after gates ran — re-run)"
+    fi
 
-AGE=$((NOW - MARKER_EPOCH))
-if [[ "$AGE" -gt "$MAX_AGE_SEC" ]]; then
+    # 3. Age
+    MARKER_EPOCH=$(tail -n1 "$MARKER" 2>/dev/null || echo "0")
+    if ! [[ "$MARKER_EPOCH" =~ ^[0-9]+$ ]]; then
+        reject "marker epoch malformed: '$MARKER_EPOCH'"
+    fi
+
+    AGE=$((NOW - MARKER_EPOCH))
+    if [[ "$AGE" -gt "$MAX_AGE_SEC" ]]; then
+        AGE_MIN=$((AGE / 60))
+        MAX_MIN=$((MAX_AGE_SEC / 60))
+        reject "marker is stale: ${AGE_MIN} min old (max ${MAX_MIN} min). Re-run gates."
+    fi
+
     AGE_MIN=$((AGE / 60))
-    MAX_MIN=$((MAX_AGE_SEC / 60))
-    reject "marker is stale: ${AGE_MIN} min old (max ${MAX_MIN} min). Re-run gates."
+    printf '%s✓%s pre-push: gates verified %d min ago against HEAD=%s\n' "$GREEN" "$RESET" "$AGE_MIN" "${HEAD_SHA:0:8}" >&2
 fi
-
-# All checks passed — emit a one-line trail and allow the push.
-AGE_MIN=$((AGE / 60))
-printf '%s✓%s pre-push: gates verified %d min ago against HEAD=%s\n' "$GREEN" "$RESET" "$AGE_MIN" "${HEAD_SHA:0:8}" >&2
-
-# Drain stdin (git pushes ref info via stdin) so git doesn't get
-# upset about an unread pipe.
-cat >/dev/null
 
 exit 0
